@@ -1,0 +1,537 @@
+JIRA WORKFLOW STATE FILE
+Generated: 2025-12-02 13:41:21
+================================================================================
+
+=== ISSUE_KEY ===
+TSESSD-14270
+
+=== JIRA_ISSUE_DATA ===
+Issue: TSESSD-14270
+Summary: [7500] Stop phase 0 PFOM sampling for 7500
+
+Description:
+Expected Impact and Justification for Request
+Based on the phase0 PFOM BB comparison so far, both 7500 and 9550 collected sufficient sample for DOE - (all failing mode included erase, program and read failures).
+~60 FIDs with mismatched BIBB out of > 1.6M FIDs tested with PFOM phase0 comparison
+
+Request Details
+since we have enough sample to work on,and to avoid rejecting good drives (compareBB failure are good drives), we would like to stop Phase0 comparison
+Current newer reject will be on hold (requested site to update the dispo) for next TP (phase0 stop BB comparison)
+
+=== JIRA_ANALYSIS ===
+Here is the analysis of the JIRA Change Request:
+
+### 1. Change Objective
+The primary goal of this change request is to **stop the "Phase 0" PFOM (Predictive Failure of Media) Bad Block (BB) comparison data collection** for the 7500 and 9550 products.
+
+This is being done because sufficient failing samples (erase, program, and read failures) have already been collected for the Design of Experiments (DOE), and continuing the comparison is causing false rejects of "good drives" (drives failing only the BB comparison).
+
+### 2. Request Details
+*   **Action:** Disable Phase 0 comparison logic.
+*   **Current State:** Drives failing `compareBB` are being rejected.
+*   **Interim Action:** Disposition rule for `ComparePredictiveBB` failures is changing from `REJECT` to `HOLD` until the new test program is released.
+*   **New Logic (Phase 1):**
+    *   Implement a new "Phase 1" state in `SendGearmanRequest.py` (or similar control script).
+    *   If `self.phase` is set to `1`, the test should skip execution, add test result `CODE_PRIME`, and return immediately.
+    *   Default phase logic needs to be adjusted (Comments suggest setting default to 1 to prevent accidental execution, though there is conflicting text about default 0 vs 1 in the comments).
+*   **Affected Components:** Specifically mentioned 7500 and 9550 (though Component field only lists 7500).
+
+### 3. Missing Information Check
+The following critical details are **NOT clearly specified** in the provided text. Please provide these details:
+
+*   **Test Step:** The description mentions `SendGearmanRequest.py` and "PFOM Phase evaluation," but does not specify the exact manufacturing test step name (e.g., ABIT, SFN2, CNFG, UBER, etc.) where this script is called.
+*   **Product Scope:** The Description text mentions both "7500 and 9550," but the Component field only lists "7500." Please confirm if **9550** is definitely included in this code change.
+*   **Density / Form Factor / MPN:** No specific capacities (e.g., 3.84TB, 7.68TB) or form factors are listed. Is this a global change for *all* 7500/9550 drives, or specific ones?
+*   **Customer / Firmware:** Are there specific Customer IDs or Firmware Waves this applies to, or is it generic for the product line?
+*   **Drive Condition:** Does this apply to specific drive states (e.g., FIPS enabled vs disabled)?
+
+### 4. Impact Analysis
+*   **Products Affected:**
+    *   **7500:** Confirmed impact.
+    *   **9550:** Likely impacted based on description text, needs confirmation.
+*   **Potential Impacts:**
+    *   **Yield Improvement:** Stops false rejects caused by `compareBB` mismatches on good drives.
+    *   **Data Collection:** Stops gathering specific Bad Block comparison data. If the DOE sample size calculation was wrong, future analysis might be hindered.
+    *   **Process Flow:** Drives currently on HOLD (due to the interim PE rule) may need to be re-tested or manually released once this TP is active.
+*   **Breaking Changes:**
+    *   **Default Phase Setting:** The comment mentions "Default phase set to 1 instead." If this script is shared with *other* products not listed here, setting the default to 1 (Skip) could inadvertently turn off data collection for other products that still need Phase 0. This is a **High Risk** area.
+
+### 5. Detailed Code Implementation Plan
+Based on the comments regarding `SendGearmanRequest.py`:
+
+*   **Files to Modify:**
+    *   `SendGearmanRequest.py` (or the specific test script handling PFOM logic).
+    *   Configuration files (YAML/JSON/XML) that define `self.phase` or the input arguments for the test instance.
+
+*   **Specific Code Changes:**
+    1.  **In `SendGearmanRequest.py` (or similar):**
+        *   Locate the `run()` or main execution method.
+        *   Add logic to check the phase variable.
+        *   *Pseudo-code:*
+            ```python
+            if self.phase == 1:
+                self.result.value = 'CODE_PRIME' # Or appropriate passing code
+                self.log("Skipping PFOM Data Collection: Phase 1 activated.")
+                return
+            elif self.phase == 0:
+                # Execute existing Data Collection logic
+                pass
+            elif self.phase == 2:
+                # Execute existing Phase 2 logic
+                pass
+            ```
+    2.  **Configuration Change:**
+        *   Update the Test Flow / Config file for 7500 (and 9550) to pass `phase=1` into this test step.
+
+### 6. Validation Plan for Impacted Products
+*   **Scenario 1: Phase 1 (Target State - 7500/9550)**
+    *   **Setup:** Configure test program with `phase=1`.
+    *   **Expected Result:** Test starts, logs "Skipping...", returns `CODE_PRIME` (Pass), and finishes almost instantly. No Gearman request is sent.
+*   **Scenario 2: Phase 0 (Legacy/Other Products)**
+    *   **Setup:** Configure test program with `phase=0`.
+    *   **Expected Result:** Test executes data collection normally (sends Gearman request, performs comparison).
+*   **Scenario 3: Phase 2 (Future State)**
+    *   **Setup:** Configure test program with `phase=2`.
+    *   **Expected Result:** Test executes Phase 2 logic (whatever that is defined as currently) to ensure no regression.
+*   **Cross Dependency / Regression:**
+    *   **Crucial:** If `SendGearmanRequest.py` is a shared library used by other products (e.g., 7450, 6500), you must validate that their default behavior remains `Phase 0` (Active) and they do not accidentally start skipping the test.
+
+### 7. Dependencies
+*   **Disposition Update:** The interim PE change (REJECT -> HOLD) mentioned in the comments is a process dependency but not a code dependency.
+*   **Linked Issues:** None listed in the input.
+
+=== REPOSITORY_PATH ===
+TSESSD-14270_adv_ibir_master
+
+=== REPOSITORY_INFO ===
+Feature branch created successfully!
+
+Local path: TSESSD-14270_adv_ibir_master
+Feature branch: feature/TSESSD-14270
+Repository: adv_ibir_master
+Base branch: develop
+
+=== IMPACT_ANALYSIS ===
+Based on the provided JIRA analysis and the repository statistics, here is the breakdown of the potential code changes and impacts.
+
+### 1. Affected Components
+*   **Test Algorithm Logic (Python):** The core logic resides in the specific test script mentioned, `SendGearmanRequest.py`. This file likely resides in a shared directory such as `test_algorithms\tests\common` or `CESI_external_comm` given the generic nature of the name.
+*   **Product Configuration (Flows/Params):** The definitions that control how the test runs for the 7500 and 9550 products. Based on the repo structure, these are likely located in:
+    *   `test_flows\parameter_files\` (Look for codenames associated with 7500/9550, e.g., `falcon`, `merlin`, `hawk`, `ravenhe`, or `frampton2`).
+    *   `test_flows\` (General flow control).
+
+### 2. File Patterns
+*   **`*.py` (Python Scripts):**
+    *   Primary target: `SendGearmanRequest.py`.
+    *   Secondary targets: Any wrapper scripts that call this module, potentially `complete_flow.py` or `dispatch.prop` if arguments are passed dynamically.
+*   **`*.json` or `*.xml` (Configuration Files):**
+    *   These files will store the arguments passed to the python script. You will need to find the configuration file specific to the 7500/9550 and add or modify the key for `phase`.
+*   **`*.rul` (Rule Files):**
+    *   While the JIRA mentions an interim disposition change (REJECT to HOLD), if there are automated rule files (`rules_local_ibir`), you might need to verify that skipping the test (returning `CODE_PRIME`) doesn't inadvertently trigger a "Did Not Execute" error rule.
+
+### 3. Cross-Product Dependencies
+*   **Shared Library Risk (High):** The script `SendGearmanRequest.py` appears to be a utility used to communicate with an external service (Gearman). It is highly likely that other products (beyond 7500/9550) use this same script for their own data collection.
+*   **Default Value Danger:** The JIRA comments suggest "setting default to 1." **Do not do this in the Python file** if this script is shared. If you set the default `phase=1` in the code, you will silently disable data collection for *all* other products using this script.
+    *   *Mitigation:* Keep the default in Python as `phase=0` (or whatever the current active state is) and explicitly override it to `phase=1` only in the 7500/9550 configuration files.
+
+### 4. Integration Points
+*   **Gearman Job Server:** This change effectively cuts off the request flow to the Gearman server for these specific products.
+*   **PFOM Database/Analysis Tools:** Downstream systems expecting data for 7500/9550 from this test step will stop receiving new records. This is the intended behavior, but data analysts should be aware that the "gap" in data is intentional.
+
+### 5. Recommended Changes
+
+#### A. Modify `SendGearmanRequest.py`
+Locate this file (likely via `find . -name SendGearmanRequest.py`). Add the logic to handle the new phase argument.
+
+```python
+def run(self):
+    # ... existing setup code ...
+    
+    # NEW LOGIC START
+    # Ensure 'phase' is read from args, default to 0 to protect legacy products
+    current_phase = getattr(self, 'phase', 0) 
+    
+    if int(current_phase) == 1:
+        self.log_info("Phase 1 Detected: Skipping PFOM BB Comparison for DOE closure.")
+        # Set the result to the passing code defined in JIRA
+        self.result.value = "CODE_PRIME" 
+        return
+    # NEW LOGIC END
+
+    # ... existing logic for Phase 0 (Gearman request) ...
+```
+
+#### B. Update Product Configuration
+Identify the specific parameter file for the 7500 and 9550. Since the repo uses codenames (e.g., `test_flows\parameter_files\falcon`), you must determine which folder corresponds to 7500/9550.
+*   *Action:* Search for files containing "7500" or the string "SendGearmanRequest" inside `test_flows\parameter_files`.
+
+**Example Config Change (JSON):**
+```json
+{
+    "test_step": "PFOM_Data_Collection",
+    "script": "SendGearmanRequest.py",
+    "arguments": {
+        "url": "...",
+        "phase": 1  <-- ADD THIS LINE
+    }
+}
+```
+
+#### C. Verification
+Run a grep search across the repository to ensure no other products have hardcoded dependencies on the specific return codes of this script that might break if `CODE_PRIME` is returned immediately.
+
+=== IMPLEMENTATION_PLAN ===
+# Implementation Plan
+
+**JIRA Issue:** TSESSD-14270
+**Generated:** 2025-12-02 13:41:21
+
+Based on the JIRA analysis and code impact assessment, here are the specific code changes needed to implement Phase 1 PFOM data collection skip for 7500/9550 products:
+
+- test_algorithms/tests/common/SendGearmanRequest.py: Add phase-based execution logic to skip PFOM BB comparison when phase=1
+- test_flows/parameter_files/7500/pfom_config.json: Add phase parameter set to 1 to disable data collection
+- test_flows/parameter_files/9550/pfom_config.json: Add phase parameter set to 1 to disable data collection
+
+
+```python
+
+from resultsManagerAPI import resultsManagerObject as CESI
+from all_bins import CODE_PRIME, CODE_INIT
+import startup
+import TestRunner
+import json
+import traceback
+
+class CSendGearmanRequest(TestRunner.TestRunner):
+
+    ############################################################################
+    def __init__(self):
+        self.verbosity = None
+        self.debug = None
+        self.mid = None
+        self.phase = 0  # Default to Phase 0 (active) to protect legacy products
+        self.gearman_server = None
+        self.job_name = None
+        self.timeout = 300
+
+    ############################################################################
+    def run_test(self, params):
+        """
+        Main test execution method
+        
+        Phase behavior:
+        - Phase 0: Execute PFOM BB comparison data collection (legacy/active)
+        - Phase 1: Skip execution, return CODE_PRIME (7500/9550 DOE complete)
+        - Phase 2: Reserved for future logic
+        """
+        (self.verbosity, self.debug, self.mid) = startup.startup_params_check(params)
+        
+        # Read phase parameter from test configuration
+        # Default to 0 to ensure other products continue normal operation
+        self.phase = int(params.get('phase', 0))
+        
+        # Log phase information
+        CESI.logWrite(self.mid, "INFO", 
+                     f"PFOM Data Collection Phase: {self.phase}")
+        
+        # Phase 1: Skip execution per JIRA requirement
+        # This stops PFOM BB comparison for products where DOE is complete
+        if self.phase == 1:
+            CESI.logWrite(self.mid, "INFO", 
+                         "Phase 1 Detected: Skipping PFOM BB Comparison data collection.")
+            CESI.logWrite(self.mid, "INFO", 
+                         "Reason: DOE sample collection complete for this product.")
+            
+            # Set passing result code
+            self.result.value = CODE_PRIME
+            
+            # Add test attributes for tracking
+            CESI.setTestAttr(self.mid, "PFOM_PHASE", str(self.phase))
+            CESI.setTestAttr(self.mid, "PFOM_SKIPPED", "TRUE")
+            CESI.setTestAttr(self.mid, "PFOM_SKIP_REASON", "Phase 1 - DOE Complete")
+            
+            return CODE_PRIME
+        
+        # Phase 0: Execute normal PFOM data collection
+        elif self.phase == 0:
+            CESI.logWrite(self.mid, "INFO", 
+                         "Phase 0: Executing PFOM BB Comparison data collection.")
+            return self._execute_pfom_collection(params)
+        
+        # Phase 2: Reserved for future implementation
+        elif self.phase == 2:
+            CESI.logWrite(self.mid, "INFO", 
+                         "Phase 2: Executing future PFOM logic (if defined).")
+            return self._execute_phase2_logic(params)
+        
+        # Unknown phase - log error and fail safe to Phase 0
+        else:
+            CESI.logWrite(self.mid, "WARNING", 
+                         f"Unknown phase value: {self.phase}. Defaulting to Phase 0.")
+            self.phase = 0
+            return self._execute_pfom_collection(params)
+
+    ############################################################################
+    def _execute_pfom_collection(self, params):
+        """
+        Execute Phase 0 PFOM Bad Block comparison data collection
+        Original legacy logic for active data collection
+        """
+        try:
+            # Read parameters
+            self.gearman_server = params.get('gearman_server', '')
+            self.job_name = params.get('job_name', 'pfom_bb_compare')
+            self.timeout = int(params.get('timeout', 300))
+            
+            # Collect drive data for Gearman request
+            drive_data = self._collect_drive_data()
+            
+            # Send Gearman request
+            result = self._send_gearman_request(drive_data)
+            
+            # Process response
+            if result and result.get('status') == 'success':
+                CESI.logWrite(self.mid, "INFO", 
+                             "PFOM data collection completed successfully.")
+                
+                # Store comparison results
+                compare_result = result.get('compare_bb_result', 'UNKNOWN')
+                CESI.setTestAttr(self.mid, "PFOM_BB_COMPARE", compare_result)
+                CESI.setTestAttr(self.mid, "PFOM_PHASE", str(self.phase))
+                
+                # Check if comparison passed
+                if compare_result == 'PASS':
+                    self.result.value = CODE_PRIME
+                    return CODE_PRIME
+                else:
+                    # Comparison failed - this would have been REJECT
+                    # but interim disposition may be HOLD
+                    CESI.logWrite(self.mid, "WARNING", 
+                                 f"PFOM BB Comparison failed: {compare_result}")
+                    self.result.value = result.get('bin_code', 'PFOM_BB_FAIL')
+                    return self.result.value
+            else:
+                error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                CESI.logWrite(self.mid, "ERROR", 
+                             f"PFOM data collection failed: {error_msg}")
+                self.result.value = 'PFOM_COMM_FAIL'
+                return self.result.value
+                
+        except Exception as e:
+            CESI.logWrite(self.mid, "ERROR", 
+                         f"Exception in PFOM collection: {str(e)}")
+            CESI.logWrite(self.mid, "ERROR", traceback.format_exc())
+            self.result.value = 'PFOM_EXCEPTION'
+            return self.result.value
+
+    ############################################################################
+    def _execute_phase2_logic(self, params):
+        """
+        Placeholder for Phase 2 logic (future implementation)
+        """
+        CESI.logWrite(self.mid, "WARNING", 
+                     "Phase 2 logic not yet implemented. Treating as Phase 0.")
+        return self._execute_pfom_collection(params)
+
+    ############################################################################
+    def _collect_drive_data(self):
+        """
+        Collect drive attributes needed for PFOM analysis
+        """
+        drive_data = {}
+        
+        # Collect standard drive identifiers
+        attrs_to_collect = [
+            'MID', 'FID', 'PRODUCT', 'DENSITY', 'FORM_FACTOR',
+            'FIRMWARE', 'CUSTOMER_ID', 'TEST_STEP', 'TESTER_ID'
+        ]
+        
+        for attr in attrs_to_collect:
+            value = CESI.getSessionAttrs(self.mid, attr).get(attr, '')
+            drive_data[attr] = value
+        
+        # Collect bad block information
+        bb_data = self._get_bad_block_data()
+        drive_data['bad_blocks'] = bb_data
+        
+        return drive_data
+
+    ############################################################################
+    def _get_bad_block_data(self):
+        """
+        Extract bad block data from drive or test results
+        """
+        # Placeholder - implementation depends on how BB data is stored
+        # This would typically read from test attributes or drive SMART data
+        bb_data = {
+            'erase_failures': [],
+            'program_failures': [],
+            'read_failures': []
+        }
+        return bb_data
+
+    ############################################################################
+    def _send_gearman_request(self, drive_data):
+        """
+        Send request to Gearman job server
+        """
+        # Placeholder for actual Gearman communication
+        # Implementation would use Gearman client library
+        try:
+            import gearman
+            
+            gm_client = gearman.GearmanClient([self.gearman_server])
+            
+            # Convert data to JSON
+            payload = json.dumps(drive_data)
+            
+            # Submit job
+            job_request = gm_client.submit_job(
+                self.job_name, 
+                payload,
+                wait_until_complete=True,
+                max_retries=3
+            )
+            
+            if job_request.complete:
+                result = json.loads(job_request.result)
+                return result
+            else:
+                return {'status': 'failed', 'error': 'Job did not complete'}
+                
+        except Exception as e:
+            CESI.logWrite(self.mid, "ERROR", 
+                         f"Gearman communication error: {str(e)}")
+            return {'status': 'failed', 'error': str(e)}
+
+```
+
+```json
+{
+  "test_name": "PFOM_Data_Collection",
+  "description": "PFOM Bad Block Comparison - Phase 1 (Disabled per JIRA)",
+  "script": "SendGearmanRequest.py",
+  "enabled": true,
+  "parameters": {
+    "phase": 1,
+    "gearman_server": "pfom-gearman-server.micron.com:4730",
+    "job_name": "pfom_bb_compare",
+    "timeout": 300,
+    "comment": "Phase 1: Skip PFOM BB comparison - DOE complete for 7500"
+  },
+  "binning": {
+    "CODE_PRIME": "PASS",
+    "PFOM_BB_FAIL": "HOLD",
+    "PFOM_COMM_FAIL": "RETEST",
+    "PFOM_EXCEPTION": "ERROR"
+  },
+  "test_attributes": {
+    "PFOM_PHASE": "1",
+    "PFOM_ENABLED": "NO"
+  }
+}
+```
+
+```json
+{
+  "test_name": "PFOM_Data_Collection",
+  "description": "PFOM Bad Block Comparison - Phase 1 (Disabled per JIRA)",
+  "script": "SendGearmanRequest.py",
+  "enabled": true,
+  "parameters": {
+    "phase": 1,
+    "gearman_server": "pfom-gearman-server.micron.com:4730",
+    "job_name": "pfom_bb_compare",
+    "timeout": 300,
+    "comment": "Phase 1: Skip PFOM BB comparison - DOE complete for 9550"
+  },
+  "binning": {
+    "CODE_PRIME": "PASS",
+    "PFOM_BB_FAIL": "HOLD",
+    "PFOM_COMM_FAIL": "RETEST",
+    "PFOM_EXCEPTION": "ERROR"
+  },
+  "test_attributes": {
+    "PFOM_PHASE": "1",
+    "PFOM_ENABLED": "NO"
+  }
+}
+```
+
+None required - all changes are modifications to existing files.
+
+
+1. **Locate the actual SendGearmanRequest.py file**
+   ```bash
+   find . -name "SendGearmanRequest.py" -o -name "*gearman*.py"
+   ```
+2. **Identify 7500/9550 configuration directories**
+   ```bash
+   grep -r "7500\|9550" test_flows/parameter_files/
+   ```
+3. **Check for product codenames** (falcon, merlin, hawk, ravenhe, frampton2)
+   ```bash
+   ls test_flows/parameter_files/
+   ```
+
+1. **Backup original SendGearmanRequest.py**
+   ```bash
+   cp SendGearmanRequest.py SendGearmanRequest.py.backup_JIRA_XXXX
+   ```
+
+2. **Apply Python changes to SendGearmanRequest.py**
+   - Add phase parameter with default value of 0 (critical for backward compatibility)
+   - Implement Phase 1 skip logic at the beginning of run_test()
+   - Ensure CODE_PRIME is returned immediately for phase=1
+   - Add logging for audit trail
+
+3. **Update configuration files**
+   - Create or modify pfom_config.json for 7500 product
+   - Create or modify pfom_config.json for 9550 product
+   - Set `"phase": 1` in both configurations
+   - Verify no other products accidentally inherit this value
+
+1. **Verify default behavior for other products**
+   ```bash
+   grep -r "SendGearmanRequest" test_flows/parameter_files/ | grep -v "7500\|9550"
+   ```
+2. **Ensure no shared configuration** that would apply phase=1 globally
+3. **Check for hardcoded dependencies** on specific return codes
+   ```bash
+   grep -r "PFOM_BB" test_algorithms/
+   ```
+
+
+- Setup: Load 7500 test program with phase=1 configuration
+- Expected: Test completes instantly with CODE_PRIME
+- Verify: Check test log for "Phase 1 Detected" message
+- Verify: Attribute PFOM_SKIPPED = "TRUE"
+- Verify: No Gearman request sent (check network logs)
+
+- Same as Test Case 1 for 9550 product
+
+- Setup: Load a non-7500/9550 product (e.g., 7450)
+- Expected: Test executes normal PFOM collection
+- Verify: Gearman request is sent and processed
+- Verify: No regression in existing behavior
+
+- Setup: Manually set phase=99 in config
+- Expected: Warning logged, defaults to Phase 0
+- Verify: Test executes normally with warning
+
+- [ ] Code review completed
+- [ ] Unit tests pass for all phase values (0, 1, 2)
+- [ ] Integration test on 7500 hardware confirms skip behavior
+- [ ] Integration test on 9550 hardware confirms skip behavior
+- [ ] Regression test on other products (7450, 6500) confirms no impact
+- [ ] Disposition rules updated (PFOM_BB_FAIL: REJECT → HOLD) in PE system
+- [ ] Data analytics team notified of data collection stop date
+- [ ] Release notes document Phase 1 activation for 7500/9550
+- [ ] Rollback plan prepared (revert phase to 0 in configs)
+
+1. **Monitor yield metrics** for 7500/9550
+   - Expect reduction in false rejects due to BB comparison
+   - Track HOLD drives from interim period
+
+2
+
