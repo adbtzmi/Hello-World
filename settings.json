@@ -1,0 +1,16 @@
+{
+  "jira": {
+    "base_url": "https://micron.atlassian.net",
+    "project_key": "TSESSD"
+  },
+  "bitbucket": {
+    "base_url": "https://bitbucket.micron.com",
+    "project_key": "TESTSSD"
+  },
+  "model_gateway": {
+    "base_url": "https://model-gateway.gcldgenaigw.gc.micron.com/api/v1"
+  },
+  "settings": {
+    "timeout": 300
+  }
+}

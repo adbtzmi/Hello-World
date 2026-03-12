@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sensitive Data - NEVER COMMIT THESE!
+!example_config.json
+*.token
+*.key
+credentials.txt
+secrets.txt
+login
+credential
+
+# Generated Reports
+JIRA_Analysis_*.md
+
+# Cloned Repositories
+*_20[0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]/
+
+# Logs
+*.log
+logs/
+
+# Temporary Files
+*.tmp
+temp/
+tmp/

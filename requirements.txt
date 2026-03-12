@@ -1,0 +1,18 @@
+# Python dependencies for JIRA Analyzer
+# Core encryption library
+cryptography>=41.0.0
+
+# Document processing
+python-docx>=0.8.11
+
+# Note: The following are typically included in Python standard library
+# but listed here for completeness and version compatibility
+
+# If tkinter is not available (rare), install python3-tk via system package manager:
+# Ubuntu/Debian: sudo apt-get install python3-tk
+# macOS: brew install python-tk
+# Windows: Usually included with Python installation
+
+# All other imports are from Python standard library:
+# - os, sys, json, subprocess, ssl, urllib, getpass, datetime, typing, threading, hashlib, base64
+# These are built-in and don't need installation
