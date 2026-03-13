@@ -749,63 +749,128 @@ class SimpleGUI:
         compile_frame = ttk.LabelFrame(tab, text="Compile TP Package", padding="10")
         compile_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
 
-        # Row 0: Tester selection label
-        ttk.Label(compile_frame, text="Select Tester:", font=('Arial', 9, 'bold')).grid(
-            row=0, column=0, sticky=tk.W, pady=4)
-
-        # Row 0: Tester dropdown  (hostname + env shown together)
-        TESTER_OPTIONS = [
-            "IBIR-0383 (ABIT)",
-            "MPT3HVM-0156 (SFN2)",
-            "CTOWTST-0031 (CNFG)",
-        ]
-        self.tester_combo_var = tk.StringVar(value=TESTER_OPTIONS[0])
-        tester_combo = ttk.Combobox(
-            compile_frame,
-            textvariable=self.tester_combo_var,
-            values=TESTER_OPTIONS,
-            state="readonly",
-            width=28,
+        # ── TESTER REGISTRY ──
+        # Persisted to bento_testers.json next to main.py.
+        # In-memory dict: "HOSTNAME (ENV)" -> (hostname, env)
+        self._TESTER_REGISTRY = {}
+        self._tester_registry_file = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "bento_testers.json"
         )
-        tester_combo.grid(row=0, column=1, sticky=tk.W, pady=4, padx=5)
-        ttk.Label(compile_frame, text="(hostname + environment)", font=('Arial', 8),
-                  foreground='gray').grid(row=0, column=2, sticky=tk.W, padx=5)
+        self._load_tester_registry()   # populate from JSON or defaults
 
-        # Row 1: Custom tester name override
-        ttk.Label(compile_frame, text="Tester Name Override:").grid(
-            row=1, column=0, sticky=tk.W, pady=4)
-        self.tester_name_var = tk.StringVar(value="")
-        ttk.Entry(compile_frame, textvariable=self.tester_name_var, width=30).grid(
-            row=1, column=1, sticky=tk.W, pady=4, padx=5)
-        ttk.Label(compile_frame, text="(optional: type custom tester name)", font=('Arial', 8),
-                  foreground='gray').grid(row=1, column=2, sticky=tk.W, padx=5)
+        # ── Row 0: Tester selector label + mode badge ──
+        ttk.Label(compile_frame, text="Tester:", font=("Arial", 9, "bold")).grid(
+            row=0, column=0, sticky=tk.W, pady=(6, 2))
+        self._compile_mode_var = tk.StringVar(value="")
+        self._compile_mode_lbl = ttk.Label(
+            compile_frame, textvariable=self._compile_mode_var,
+            font=("Arial", 8, "italic"), foreground="#555555")
+        self._compile_mode_lbl.grid(
+            row=0, column=1, columnspan=2, sticky=tk.W, padx=5, pady=(6, 2))
 
-        # Row 2: RAW_ZIP path
+        # ── Row 1: Search + dropdown + Add button ──
+        ttk.Label(compile_frame, text="Select Tester:").grid(
+            row=1, column=0, sticky=tk.W, pady=3)
+
+        tester_row = ttk.Frame(compile_frame)
+        tester_row.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=3, padx=5)
+
+        self.tester_search_var = tk.StringVar()
+        self._tester_search_entry = ttk.Entry(
+            tester_row, textvariable=self.tester_search_var, width=18)
+        self._tester_search_entry.pack(side=tk.LEFT, padx=(0, 4))
+        self._tester_search_entry.insert(0, "Search...")
+        self._tester_search_entry.config(foreground="gray")
+
+        self.tester_combo_var = tk.StringVar()
+        self._tester_combo = ttk.Combobox(
+            tester_row, textvariable=self.tester_combo_var,
+            state="readonly", width=26)
+        self._tester_combo.pack(side=tk.LEFT, padx=(0, 4))
+
+        ttk.Button(
+            tester_row, text="+ Add Tester",
+            command=self._open_add_tester_dialog
+        ).pack(side=tk.LEFT)
+
+        ttk.Label(compile_frame, text="Type to search, then select",
+                  font=("Arial", 8), foreground="gray").grid(
+            row=1, column=2, sticky=tk.W, padx=5)
+
+        # ── Row 2: TGZ label ──
+        ttk.Label(compile_frame, text="TGZ Label:").grid(
+            row=2, column=0, sticky=tk.W, pady=3)
+        self.tgz_label_var = tk.StringVar(value="")
+        ttk.Entry(compile_frame, textvariable=self.tgz_label_var, width=30).grid(
+            row=2, column=1, sticky=tk.W, pady=3, padx=5)
+        ttk.Label(compile_frame,
+                  text="e.g. passing / force_fail_1  (blank = default)",
+                  font=("Arial", 8), foreground="gray").grid(
+            row=2, column=2, sticky=tk.W, padx=5)
+
+        # ── Row 3: Separator ──
+        ttk.Separator(compile_frame, orient="horizontal").grid(
+            row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=6)
+
+        # ── Row 4: RAW_ZIP path ──
         ttk.Label(compile_frame, text="RAW_ZIP Path:").grid(
-            row=2, column=0, sticky=tk.W, pady=4)
+            row=4, column=0, sticky=tk.W, pady=3)
         self.raw_zip_var = tk.StringVar(value=r"P:\temp\BENTO\RAW_ZIP")
         ttk.Entry(compile_frame, textvariable=self.raw_zip_var, width=40).grid(
-            row=2, column=1, sticky=(tk.W, tk.E), pady=4, padx=5)
+            row=4, column=1, sticky=(tk.W, tk.E), pady=3, padx=5)
 
-        # Row 3: RELEASE_TGZ path
+        # ── Row 5: RELEASE_TGZ path ──
         ttk.Label(compile_frame, text="RELEASE_TGZ Path:").grid(
-            row=3, column=0, sticky=tk.W, pady=4)
+            row=5, column=0, sticky=tk.W, pady=3)
         self.release_tgz_var = tk.StringVar(value=r"P:\temp\BENTO\RELEASE_TGZ")
         ttk.Entry(compile_frame, textvariable=self.release_tgz_var, width=40).grid(
-            row=3, column=1, sticky=(tk.W, tk.E), pady=4, padx=5)
+            row=5, column=1, sticky=(tk.W, tk.E), pady=3, padx=5)
 
-        # Row 4: Compile button + status label
+        # ── Row 6: Compile button + live status ──
         self.compile_btn = ttk.Button(
             compile_frame, text="Compile on Selected Tester",
-            command=self.trigger_compile_with_lock
-        )
-        self.compile_btn.grid(row=4, column=0, columnspan=2, pady=8)
+            command=self.trigger_compile_with_lock)
+        self.compile_btn.grid(row=6, column=0, columnspan=2, pady=(10, 6))
         self.compile_status_var = tk.StringVar(value="")
         ttk.Label(compile_frame, textvariable=self.compile_status_var,
-                  font=('Arial', 9), foreground='blue').grid(
-            row=4, column=2, sticky=tk.W, padx=5)
+                  font=("Arial", 9), foreground="blue").grid(
+            row=6, column=2, sticky=tk.W, padx=5)
 
         compile_frame.columnconfigure(1, weight=1)
+
+        # ── Wire up search + combo ──
+        def _search_changed(*_):
+            q = self.tester_search_var.get().strip().lower()
+            if q and q != "search...":
+                matches = [k for k in self._TESTER_REGISTRY if q in k.lower()]
+            else:
+                matches = list(self._TESTER_REGISTRY.keys())
+            self._tester_combo["values"] = matches
+            if matches:
+                if self.tester_combo_var.get() not in matches:
+                    self._tester_combo.current(0)
+            else:
+                self.tester_combo_var.set("")
+            self._refresh_tester_mode()
+
+        def _search_focus_in(event):
+            if self._tester_search_entry.get() == "Search...":
+                self._tester_search_entry.delete(0, tk.END)
+                self._tester_search_entry.config(foreground="black")
+
+        def _search_focus_out(event):
+            if not self._tester_search_entry.get():
+                self._tester_search_entry.insert(0, "Search...")
+                self._tester_search_entry.config(foreground="gray")
+
+        self.tester_search_var.trace_add("write", _search_changed)
+        self._tester_search_entry.bind("<FocusIn>",  _search_focus_in)
+        self._tester_search_entry.bind("<FocusOut>", _search_focus_out)
+        self._tester_combo.bind("<<ComboboxSelected>>",
+                                lambda e: self._refresh_tester_mode())
+
+        # Populate dropdown and set initial state
+        self._refresh_tester_dropdown()
 
         # ── Implementation Plan Result ──────────────────────────────
         result_frame = ttk.LabelFrame(tab, text="Implementation Plan", padding="10")
@@ -1505,36 +1570,196 @@ Populate the template, leaving validation result sections for user to fill after
     
 
     # ================================================================
-    # COMPILE TP PACKAGE METHODS
+    # COMPILE TP PACKAGE — TESTER REGISTRY + SELECTION
     # ================================================================
 
-    def _get_selected_tester_env(self):
-        """
-        Parse env token from the tester combo selection.
-        Dropdown format: 'IBIR-0383 (ABIT)'  -> returns 'ABIT'
-        If custom name typed, derive env from dropdown still.
-        """
-        selection = self.tester_combo_var.get()
-        # Extract env from parentheses e.g. 'IBIR-0383 (ABIT)' -> 'ABIT'
-        try:
-            env = selection.split("(")[1].rstrip(")")
-            return env.strip()
-        except Exception:
-            return "ABIT"
+    _DEFAULT_TESTERS = {
+        "IBIR-0383 (ABIT)":    ("IBIR-0383",    "ABIT"),
+        "MPT3HVM-0156 (SFN2)": ("MPT3HVM-0156", "SFN2"),
+        "CTOWTST-0031 (CNFG)": ("CTOWTST-0031", "CNFG"),
+    }
 
-    def _get_selected_tester_hostname(self):
-        """
-        Return hostname from combo or custom name field if typed.
-        Custom name field takes priority if non-empty.
-        """
-        custom = self.tester_name_var.get().strip()
-        if custom:
-            return custom
-        selection = self.tester_combo_var.get()
+    def _load_tester_registry(self):
+        """Load tester list from bento_testers.json, falling back to defaults."""
+        import json
+        self._TESTER_REGISTRY = dict(self._DEFAULT_TESTERS)
         try:
-            return selection.split("(")[0].strip()
-        except Exception:
-            return selection
+            if os.path.exists(self._tester_registry_file):
+                with open(self._tester_registry_file, "r") as f:
+                    saved = json.load(f)
+                for key, val in saved.items():
+                    if isinstance(val, list) and len(val) == 2:
+                        self._TESTER_REGISTRY[key] = tuple(val)
+        except Exception as e:
+            self.log("[WARN] Could not load tester registry: " + str(e))
+
+    def _save_tester_registry(self):
+        """Persist tester list to bento_testers.json."""
+        import json
+        try:
+            data = {k: list(v) for k, v in self._TESTER_REGISTRY.items()}
+            with open(self._tester_registry_file, "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            self.log("[WARN] Could not save tester registry: " + str(e))
+
+    def _refresh_tester_dropdown(self):
+        """Rebuild the combo values from the current registry."""
+        keys = list(self._TESTER_REGISTRY.keys())
+        self._tester_combo["values"] = keys
+        current = self.tester_combo_var.get()
+        if keys and current not in keys:
+            self._tester_combo.current(0)
+        self._refresh_tester_mode()
+
+    def _refresh_tester_mode(self):
+        """Update the mode badge whenever selection changes."""
+        selection = self.tester_combo_var.get()
+        if selection and selection in self._TESTER_REGISTRY:
+            hostname, env = self._TESTER_REGISTRY[selection]
+            self._compile_mode_var.set(
+                "Selected: " + hostname + "  |  Env: " + env
+            )
+            self._compile_mode_lbl.config(foreground="#1a6e1a")
+        else:
+            self._compile_mode_var.set("No tester selected")
+            self._compile_mode_lbl.config(foreground="#cc0000")
+
+    def _resolve_tester(self):
+        """
+        Returns (hostname, env) — single authoritative resolution point.
+        Raises ValueError with clear message if nothing is selected.
+        """
+        selection = self.tester_combo_var.get().strip()
+        if not selection:
+            raise ValueError(
+                "No tester selected.\n\n"
+                "Please select a tester from the dropdown, or click\n"
+                "'+ Add Tester' to register a new one."
+            )
+        if selection not in self._TESTER_REGISTRY:
+            raise ValueError(
+                "Tester not found in registry: '" + selection + "'\n"
+                "Please re-select from the dropdown."
+            )
+        return self._TESTER_REGISTRY[selection]
+
+    def _open_add_tester_dialog(self):
+        """
+        Modal dialog to register a new tester.
+        Collects: hostname, env.
+        On confirm: saves to registry + JSON + rebuilds dropdown.
+        Also shows a link to the setup guide PDF.
+        """
+        import subprocess as _sp
+        import webbrowser
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Add New Tester")
+        dialog.geometry("520x380")
+        dialog.resizable(False, False)
+        dialog.grab_set()   # modal
+
+        pad = {"padx": 12, "pady": 6}
+
+        ttk.Label(dialog, text="Register New Tester",
+                  font=("Arial", 12, "bold")).grid(
+            row=0, column=0, columnspan=2, pady=(14, 4), **{"padx": 12})
+
+        ttk.Separator(dialog, orient="horizontal").grid(
+            row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=12, pady=4)
+
+        # Hostname
+        ttk.Label(dialog, text="Tester Hostname:").grid(
+            row=2, column=0, sticky=tk.W, **pad)
+        hostname_var = tk.StringVar()
+        hostname_entry = ttk.Entry(dialog, textvariable=hostname_var, width=28)
+        hostname_entry.grid(row=2, column=1, sticky=tk.W, **pad)
+        ttk.Label(dialog, text="e.g.  IBIR-0999",
+                  font=("Arial", 8), foreground="gray").grid(
+            row=3, column=1, sticky=tk.W, padx=12, pady=0)
+
+        # Environment
+        ttk.Label(dialog, text="Environment:").grid(
+            row=4, column=0, sticky=tk.W, **pad)
+        env_var = tk.StringVar(value="ABIT")
+        env_combo = ttk.Combobox(
+            dialog, textvariable=env_var,
+            values=["ABIT", "SFN2", "CNFG"],
+            state="readonly", width=10)
+        env_combo.grid(row=4, column=1, sticky=tk.W, **pad)
+
+        ttk.Separator(dialog, orient="horizontal").grid(
+            row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=12, pady=8)
+
+        # Setup guide link
+        guide_frame = ttk.LabelFrame(dialog, text="Before adding: set up the watcher on the tester", padding=8)
+        guide_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=12, pady=4)
+
+        ttk.Label(guide_frame,
+                  text="The watcher script must be running on the tester before it\n"
+                       "can receive compile jobs. Follow the setup guide to:\n"
+                       "  1. Copy watcher files to the tester\n"
+                       "  2. Run setup and configure Windows Task Scheduler\n"
+                       "  3. Verify the watcher is watching the shared folder",
+                  justify=tk.LEFT, font=("Arial", 8)).pack(anchor=tk.W)
+
+        guide_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "BENTO_Watcher_Setup_Guide.pdf"
+        )
+        def open_guide():
+            if os.path.exists(guide_path):
+                try:
+                    os.startfile(guide_path)
+                except Exception:
+                    webbrowser.open("file:///" + guide_path.replace("\\", "/"))
+            else:
+                messagebox.showwarning(
+                    "Guide Not Found",
+                    "Setup guide PDF not found at:\n" + guide_path + "\n\n"
+                    "Ask your team lead for BENTO_Watcher_Setup_Guide.pdf"
+                )
+        ttk.Button(guide_frame, text="Open Setup Guide (PDF)",
+                   command=open_guide).pack(anchor=tk.W, pady=(6, 0))
+
+        ttk.Separator(dialog, orient="horizontal").grid(
+            row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=12, pady=4)
+
+        # Error label
+        err_var = tk.StringVar(value="")
+        ttk.Label(dialog, textvariable=err_var,
+                  foreground="red", font=("Arial", 8)).grid(
+            row=8, column=0, columnspan=2, padx=12)
+
+        def _confirm():
+            hostname = hostname_var.get().strip().upper()
+            env      = env_var.get().strip().upper()
+            if not hostname:
+                err_var.set("Hostname cannot be empty.")
+                return
+            if not env:
+                err_var.set("Please select an environment.")
+                return
+            key = hostname + " (" + env + ")"
+            if key in self._TESTER_REGISTRY:
+                err_var.set("Tester '" + key + "' is already registered.")
+                return
+            self._TESTER_REGISTRY[key] = (hostname, env)
+            self._save_tester_registry()
+            self._refresh_tester_dropdown()
+            # Select the new tester
+            self.tester_combo_var.set(key)
+            self._refresh_tester_mode()
+            self.log("[Tester Added] " + key + " registered and selected.")
+            dialog.destroy()
+
+        btn_row = ttk.Frame(dialog)
+        btn_row.grid(row=9, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_row, text="Add Tester", command=_confirm).pack(side=tk.LEFT, padx=6)
+        ttk.Button(btn_row, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=6)
+
+        hostname_entry.focus_set()
 
     def trigger_compile_with_lock(self):
         """Lock GUI and run compile in background thread."""
@@ -1558,72 +1783,153 @@ Populate the template, leaving validation result sections for user to fill after
 
     def _run_compile(self):
         """Main compile logic called from background thread."""
-        import importlib, os
+        import os
 
         issue_key = self.impl_issue_var.get().strip().upper()
         repo_path = self.impl_repo_var.get().strip()
-        env       = self._get_selected_tester_env()
-        hostname  = self._get_selected_tester_hostname()
         raw_zip   = self.raw_zip_var.get().strip()
         release   = self.release_tgz_var.get().strip()
+        label     = self.tgz_label_var.get().strip()
 
+        # ── Pre-flight checks ──
+        errors = []
         if not issue_key:
-            messagebox.showerror("Error", "JIRA Issue Key is required")
-            return
+            errors.append("JIRA Issue Key is required")
         if not repo_path:
-            messagebox.showerror("Error", "Local Repo Path is required")
-            return
-        if not os.path.isdir(repo_path):
-            messagebox.showerror("Error", f"Repo path not found:\n{repo_path}")
+            errors.append("Local Repo Path is required")
+        elif not os.path.isdir(repo_path):
+            errors.append("Repo path not found: " + repo_path)
+        if not raw_zip:
+            errors.append("RAW_ZIP Path is required")
+        if not release:
+            errors.append("RELEASE_TGZ Path is required")
+
+        try:
+            hostname, env = self._resolve_tester()
+        except ValueError as e:
+            errors.append(str(e))
+            hostname, env = "", ""
+
+        if errors:
+            msg = "Cannot compile. Fix the following:\n\n" + "\n".join(
+                "  " + chr(8226) + " " + e for e in errors)
+            messagebox.showerror("Configuration Error", msg)
+            self.compile_status_var.set("Config error - not compiled")
             return
 
-        # Load orchestrator dynamically
+        # ── Load orchestrator ──
         try:
             import compilation_orchestrator as orch
         except ImportError:
             messagebox.showerror(
                 "Missing File",
-                "compilation_orchestrator.py not found.\nPlace it next to main.py."
+                "compilation_orchestrator.py not found next to main.py."
             )
+            self.compile_status_var.set("Missing orchestrator")
             return
 
-        self.log(f"\n{'='*60}")
-        self.log(f"  COMPILE TP PACKAGE")
-        self.log(f"  JIRA Issue : {issue_key}")
-        self.log(f"  Tester     : {hostname} ({env})")
-        self.log(f"  Repo Path  : {repo_path}")
-        self.log(f"  RAW_ZIP    : {raw_zip}")
-        self.log(f"  RELEASE    : {release}")
-        self.log(f"{'='*60}")
+        sep = "=" * 60
+        self.log("\n" + sep)
+        self.log("  COMPILE TP PACKAGE")
+        self.log("  JIRA Issue : " + issue_key)
+        self.log("  Tester     : " + hostname + " (" + env + ")")
+        self.log("  Label      : " + (label if label else "(none)"))
+        self.log("  Repo Path  : " + repo_path)
+        self.log("  RAW_ZIP    : " + raw_zip)
+        self.log("  RELEASE    : " + release)
+        self.log(sep)
 
         result = orch.compile_tp_package(
             source_dir=repo_path,
             env=env,
             jira_key=issue_key,
+            hostname=hostname,
+            label=label,
             raw_zip_folder=raw_zip,
             release_tgz_folder=release,
             log_callback=self.log,
         )
 
-        if result.get("status") == "success":
-            tgz = result.get("tgz_file", "")
-            elapsed = result.get("elapsed", 0)
-            self.compile_status_var.set(f"Done: {tgz}")
-            self.log(f"\n[OK] COMPILE SUCCESS")
-            self.log(f"  TGZ file : {tgz}")
-            self.log(f"  Location : {result.get('tgz_path', '')}")
-            self.log(f"  Time     : {int(elapsed)}s")
+        status  = result.get("status", "failed")
+        detail  = result.get("detail", "Unknown error")
+        elapsed = result.get("elapsed", 0)
+        tgz     = result.get("tgz_file", "")
+        tgz_path = result.get("tgz_path", "")
+
+        if status == "success":
+            self.compile_status_var.set("Done: " + tgz)
+            self.log("\n[OK] COMPILE SUCCESS")
+            self.log("  TGZ file : " + tgz)
+            self.log("  Location : " + tgz_path)
+            self.log("  Time     : " + str(int(elapsed)) + "s")
             messagebox.showinfo(
                 "Compile Success",
-                f"TGZ ready:\n{result.get('tgz_path', tgz)}"
+                "TGZ ready:\n" + tgz_path
             )
-            # Save to workflow
-            self.save_workflow_step("COMPILED_TGZ", result.get("tgz_path", tgz))
+            self.save_workflow_step("COMPILED_TGZ", tgz_path)
+
+        elif status == "timeout":
+            self.compile_status_var.set("TIMEOUT")
+            self._show_compile_error_dialog("Compile Timeout", detail, status)
+
         else:
-            detail = result.get("detail", "Unknown error")
             self.compile_status_var.set("FAILED")
-            self.log(f"\n[FAIL] COMPILE FAILED: {detail}")
-            messagebox.showerror("Compile Failed", detail)
+            self._show_compile_error_dialog("Compile Failed", detail, status)
+
+    def _show_compile_error_dialog(self, title, detail, status):
+        """
+        Rich error dialog for compile failures.
+        Shows full error detail with scroll, and actionable hints.
+        """
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.geometry("600x420")
+        dialog.grab_set()
+
+        # Header
+        color = "#cc0000" if status == "failed" else "#b36200"
+        icon  = "[FAILED]" if status == "failed" else "[TIMEOUT]"
+        ttk.Label(dialog, text=icon + "  " + title,
+                  font=("Arial", 12, "bold"), foreground=color).pack(
+            anchor=tk.W, padx=16, pady=(14, 4))
+
+        ttk.Separator(dialog, orient="horizontal").pack(
+            fill=tk.X, padx=16, pady=4)
+
+        ttk.Label(dialog, text="Error detail from tester:",
+                  font=("Arial", 9, "bold")).pack(anchor=tk.W, padx=16, pady=(4, 2))
+
+        # Scrollable error text
+        err_frame = ttk.Frame(dialog)
+        err_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=4)
+        scrollbar = ttk.Scrollbar(err_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        err_text = tk.Text(err_frame, height=10, wrap=tk.WORD,
+                           yscrollcommand=scrollbar.set,
+                           font=("Courier", 9), foreground="#333333",
+                           background="#fff8f8")
+        err_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=err_text.yview)
+        err_text.insert("1.0", detail)
+        err_text.config(state="disabled")
+
+        ttk.Separator(dialog, orient="horizontal").pack(
+            fill=tk.X, padx=16, pady=4)
+
+        ttk.Label(dialog, text="Common causes:",
+                  font=("Arial", 9, "bold")).pack(anchor=tk.W, padx=16)
+        hints = (
+            "  - Watcher script not running on tester  (check Task Scheduler)\n"
+            "  - Wrong tester selected  (ZIP env token must match watcher --env)\n"
+            "  - RAW_ZIP or RELEASE_TGZ path not accessible from tester\n"
+            "  - make release compilation error  (check build log on tester)\n"
+            "  - Tester out of disk space or RAM"
+        )
+        ttk.Label(dialog, text=hints, justify=tk.LEFT,
+                  font=("Arial", 8), foreground="#555555").pack(
+            anchor=tk.W, padx=16, pady=(2, 8))
+
+        ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=(0, 12))
 
     def generate_implementation_only_with_lock(self):
         """Wrapper for generate_implementation_only with GUI locking"""
