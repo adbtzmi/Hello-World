@@ -79,7 +79,7 @@ def _log(logger, msg: str, log_callback=None, level: str = "info"):
 # STEP 1 – ZIP the TP source directory
 # ─────────────────────────────────────────────
 
-def create_tp_zip(source_dir, env, jira_key, logger, log_callback=None, raw_zip_folder=None):
+def create_tp_zip(source_dir, env, jira_key, hostname, logger, log_callback=None, raw_zip_folder=None, label=""):
     """
     Zip the TP repository at `source_dir` and write it to RAW_ZIP_FOLDER.
 
@@ -89,7 +89,7 @@ def create_tp_zip(source_dir, env, jira_key, logger, log_callback=None, raw_zip_
     Returns the full path to the created ZIP, or None on failure.
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    zip_name  = f"{jira_key}_{env}_{timestamp}.zip"
+    zip_name  = f"{jira_key}_{hostname}_{env}_{timestamp}" + ("_" + label if label else "") + ".zip"
     _raw_zip = raw_zip_folder if raw_zip_folder else RAW_ZIP_FOLDER
     zip_path  = os.path.join(_raw_zip, zip_name)
 
@@ -230,9 +230,11 @@ def compile_tp_package(
     source_dir,
     env,
     jira_key,
+    hostname="",
     log_callback=None,
     raw_zip_folder=None,
     release_tgz_folder=None,
+    label="",
 ):
     """
     High-level entry point called from main.py.
@@ -258,7 +260,7 @@ def compile_tp_package(
         _log(logger, "[FAIL] " + msg, log_callback, "error")
         return {"status": "failed", "tgz_file": None, "detail": msg, "elapsed": 0}
 
-    zip_path = create_tp_zip(source_dir, env, jira_key, logger, log_callback, _raw_zip)
+    zip_path = create_tp_zip(source_dir, env, jira_key, hostname, logger, log_callback, _raw_zip, label=label)
     if not zip_path:
         return {
             "status":   "failed",
@@ -323,3 +325,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
