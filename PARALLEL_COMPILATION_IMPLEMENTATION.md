@@ -53,15 +53,28 @@ Added `_phase()` helper function:
 
 ### 3. UX Improvements
 
-#### Issue #1: Fixed Stale "Add Tester" Dialog Text
-**Problem**: Setup guide text said "Copy watcher files to the tester" - outdated after watcher moved to shared folder.
+#### Issue #1: Fixed Stale "Add Tester" Dialog Text + Preflight Checklist
+**Problem**: 
+- Setup guide text was outdated (said "Copy watcher files to tester")
+- Guide was buried at bottom of form, appearing optional
+- Users filled in hostname/env first, skipped guide, registered non-functional tester
+- Result: ZIP drops, nothing happens, confusion ensues
 
-**Fix**: Updated dialog text to:
-```
-1. Verify the watcher files are accessible on the shared folder
-2. Configure Windows Task Scheduler on the tester
-3. Verify the watcher is watching the shared folder
-```
+**Fix**: Complete dialog redesign with preflight checklist
+- Moved checklist to TOP of dialog (before hostname/env fields)
+- Three mandatory checkboxes that must be ticked:
+  1. ☐ Watcher files visible at P:\temp\BENTO\watcher\
+  2. ☐ Watcher running (Task Scheduler configured on tester)
+  3. ☐ Shared folder P:\temp\BENTO accessible from tester
+- "Add Tester" button DISABLED until all three boxes checked
+- Setup guide button prominently placed in checklist section
+- Visual hierarchy: ⚠ Preflight Checklist → Tester Details → Add Button
+
+**Why this works for tester engineers**:
+- Matches their existing mental model (preflight checklists in test plans)
+- Hard gate prevents registering non-functional testers
+- Eliminates #1 support question: "I added tester but compile doesn't work"
+- Feels professional, not patronizing
 
 #### Issue #2: Added Browse Buttons for Path Fields
 **Problem**: Users had to manually type/paste full paths (error-prone on Windows).
@@ -189,12 +202,12 @@ Compile on multiple testers to ensure changes work across all target environment
 | Issue | Effort | Impact | Status |
 |-------|--------|--------|--------|
 | Parallel multi-tester compilation | 60 min | Unlocks cross-env validation | ✅ Complete |
-| Stale "Add Tester" dialog text | 2 min | Prevents user confusion | ✅ Complete |
+| Preflight checklist dialog | 20 min | Prevents non-functional tester registration | ✅ Complete |
 | Browse buttons for paths | 10 min | Eliminates path typing errors | ✅ Complete |
 | Remove Tester button | 15 min | Completes registry management | ✅ Complete |
 | Live progress indication | 30 min | Removes "is it working?" anxiety | ✅ Complete |
 | TGZ label persistence | 5 min | Saves repetition in test sessions | ✅ Complete |
 | Centred dialog positioning | 5 min | Prevents off-screen dialogs | ✅ Complete |
 
-**Total implementation time**: ~2.2 hours  
+**Total implementation time**: ~2.5 hours  
 **Total UX improvement**: Significant - addresses all major pain points in compilation workflow

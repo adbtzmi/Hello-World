@@ -1721,22 +1721,20 @@ Populate the template, leaving validation result sections for user to fill after
     def _open_add_tester_dialog(self):
         """
         Modal dialog to register a new tester.
-        Collects: hostname, env.
-        On confirm: saves to registry + JSON + rebuilds dropdown.
-        Also shows a link to the setup guide PDF.
+        Uses a preflight checklist to ensure watcher is set up before registration.
         """
-        import subprocess as _sp
         import webbrowser
 
         dialog = tk.Toplevel(self.root)
         dialog.title("Add New Tester")
-        dialog.geometry("520x380")
+        dialog.geometry("560x480")
         dialog.resizable(False, False)
         dialog.grab_set()   # modal
-        self._centre_dialog(dialog, 520, 380)
+        self._centre_dialog(dialog, 560, 480)
 
         pad = {"padx": 12, "pady": 6}
 
+        # ── Header ──
         ttk.Label(dialog, text="Register New Tester",
                   font=("Arial", 12, "bold")).grid(
             row=0, column=0, columnspan=2, pady=(14, 4), **{"padx": 12})
@@ -1744,41 +1742,33 @@ Populate the template, leaving validation result sections for user to fill after
         ttk.Separator(dialog, orient="horizontal").grid(
             row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=12, pady=4)
 
-        # Hostname
-        ttk.Label(dialog, text="Tester Hostname:").grid(
-            row=2, column=0, sticky=tk.W, **pad)
-        hostname_var = tk.StringVar()
-        hostname_entry = ttk.Entry(dialog, textvariable=hostname_var, width=28)
-        hostname_entry.grid(row=2, column=1, sticky=tk.W, **pad)
-        ttk.Label(dialog, text="e.g.  IBIR-0999",
-                  font=("Arial", 8), foreground="gray").grid(
-            row=3, column=1, sticky=tk.W, padx=12, pady=0)
+        # ── Preflight Checklist (FIRST, not last) ──
+        checklist_frame = ttk.LabelFrame(dialog, text="⚠ Preflight Checklist", padding=10)
+        checklist_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=12, pady=8)
 
-        # Environment
-        ttk.Label(dialog, text="Environment:").grid(
-            row=4, column=0, sticky=tk.W, **pad)
-        env_var = tk.StringVar(value="ABIT")
-        env_combo = ttk.Combobox(
-            dialog, textvariable=env_var,
-            values=["ABIT", "SFN2", "CNFG"],
-            state="readonly", width=10)
-        env_combo.grid(row=4, column=1, sticky=tk.W, **pad)
+        ttk.Label(checklist_frame,
+                  text="Before registering, confirm the tester is ready to receive compile jobs:",
+                  font=("Arial", 9, "bold"), foreground="#cc6600").pack(anchor=tk.W, pady=(0, 8))
 
-        ttk.Separator(dialog, orient="horizontal").grid(
-            row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=12, pady=8)
+        # Three checkboxes that must be ticked
+        check_vars = []
+        
+        check1 = tk.BooleanVar(value=False)
+        check_vars.append(check1)
+        ttk.Checkbutton(checklist_frame, text="Watcher files visible at P:\\temp\\BENTO\\watcher\\",
+                        variable=check1).pack(anchor=tk.W, pady=2)
+        
+        check2 = tk.BooleanVar(value=False)
+        check_vars.append(check2)
+        ttk.Checkbutton(checklist_frame, text="Watcher running (Task Scheduler configured on tester)",
+                        variable=check2).pack(anchor=tk.W, pady=2)
+        
+        check3 = tk.BooleanVar(value=False)
+        check_vars.append(check3)
+        ttk.Checkbutton(checklist_frame, text="Shared folder P:\\temp\\BENTO accessible from tester",
+                        variable=check3).pack(anchor=tk.W, pady=2)
 
-        # Setup guide link
-        guide_frame = ttk.LabelFrame(dialog, text="Before adding: set up the watcher on the tester", padding=8)
-        guide_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=12, pady=4)
-
-        ttk.Label(guide_frame,
-                  text="The watcher script must be running on the tester before it\n"
-                       "can receive compile jobs. Follow the setup guide to:\n"
-                       "  1. Verify the watcher files are accessible on the shared folder\n"
-                       "  2. Configure Windows Task Scheduler on the tester\n"
-                       "  3. Verify the watcher is watching the shared folder",
-                  justify=tk.LEFT, font=("Arial", 8)).pack(anchor=tk.W)
-
+        # Setup guide button
         guide_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "BENTO_Watcher_Setup_Guide.pdf"
@@ -1795,18 +1785,42 @@ Populate the template, leaving validation result sections for user to fill after
                     "Setup guide PDF not found at:\n" + guide_path + "\n\n"
                     "Ask your team lead for BENTO_Watcher_Setup_Guide.pdf"
                 )
-        ttk.Button(guide_frame, text="Open Setup Guide (PDF)",
-                   command=open_guide).pack(anchor=tk.W, pady=(6, 0))
+        
+        ttk.Button(checklist_frame, text="📄 Open Setup Guide (PDF)",
+                   command=open_guide).pack(anchor=tk.W, pady=(8, 0))
 
         ttk.Separator(dialog, orient="horizontal").grid(
-            row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=12, pady=4)
+            row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=12, pady=8)
 
-        # Error label
+        # ── Tester Details (SECOND, after checklist) ──
+        ttk.Label(dialog, text="Tester Hostname:").grid(
+            row=4, column=0, sticky=tk.W, **pad)
+        hostname_var = tk.StringVar()
+        hostname_entry = ttk.Entry(dialog, textvariable=hostname_var, width=28)
+        hostname_entry.grid(row=4, column=1, sticky=tk.W, **pad)
+        ttk.Label(dialog, text="e.g.  IBIR-0999",
+                  font=("Arial", 8), foreground="gray").grid(
+            row=5, column=1, sticky=tk.W, padx=12, pady=0)
+
+        ttk.Label(dialog, text="Environment:").grid(
+            row=6, column=0, sticky=tk.W, **pad)
+        env_var = tk.StringVar(value="ABIT")
+        env_combo = ttk.Combobox(
+            dialog, textvariable=env_var,
+            values=["ABIT", "SFN2", "CNFG"],
+            state="readonly", width=10)
+        env_combo.grid(row=6, column=1, sticky=tk.W, **pad)
+
+        ttk.Separator(dialog, orient="horizontal").grid(
+            row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=12, pady=8)
+
+        # ── Error label ──
         err_var = tk.StringVar(value="")
         ttk.Label(dialog, textvariable=err_var,
                   foreground="red", font=("Arial", 8)).grid(
             row=8, column=0, columnspan=2, padx=12)
 
+        # ── Buttons ──
         def _confirm():
             hostname = hostname_var.get().strip().upper()
             env      = env_var.get().strip().upper()
@@ -1836,8 +1850,20 @@ Populate the template, leaving validation result sections for user to fill after
 
         btn_row = ttk.Frame(dialog)
         btn_row.grid(row=9, column=0, columnspan=2, pady=10)
-        ttk.Button(btn_row, text="Add Tester", command=_confirm).pack(side=tk.LEFT, padx=6)
+        
+        add_btn = ttk.Button(btn_row, text="Add Tester", command=_confirm, state="disabled")
+        add_btn.pack(side=tk.LEFT, padx=6)
         ttk.Button(btn_row, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=6)
+
+        # ── Enable "Add Tester" only when all checkboxes are ticked ──
+        def _update_add_btn(*_):
+            all_checked = all(v.get() for v in check_vars)
+            add_btn.config(state="normal" if all_checked else "disabled")
+            if all_checked:
+                err_var.set("")  # Clear any previous errors when checklist complete
+        
+        for v in check_vars:
+            v.trace_add("write", _update_add_btn)
 
         hostname_entry.focus_set()
 

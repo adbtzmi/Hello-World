@@ -63,23 +63,49 @@ TGZ Label: [                    ]  ← User types "passing" every time
 TGZ Label: [passing             ]  ← Auto-filled from last session
 ```
 
-### 5. Add Tester Dialog
-**Before**: Outdated instructions
+### 5. Add Tester Dialog - Preflight Checklist
+**Before**: Form-first design with guide buried at bottom
 ```
-The watcher script must be running on the tester before it
-can receive compile jobs. Follow the setup guide to:
-  1. Copy watcher files to the tester  ← OUTDATED
-  2. Run setup and configure Windows Task Scheduler
-  3. Verify the watcher is watching the shared folder
+┌─ Add New Tester ──────────────────────────┐
+│ Register New Tester                        │
+│ ────────────────────────────────────────── │
+│ Tester Hostname: [____________]            │  ← User fills this first
+│ Environment:     [ABIT ▼]                  │
+│ ────────────────────────────────────────── │
+│ Before adding: set up the watcher...       │  ← Guide buried here
+│ [ Open Setup Guide ]                       │     (appears optional)
+│ ────────────────────────────────────────── │
+│         [ Add Tester ]  [ Cancel ]         │  ← Always enabled
+└────────────────────────────────────────────┘
+
+Result: User adds tester → compile fails → "Why doesn't it work?"
 ```
 
-**After**: Accurate instructions
+**After**: Checklist-first design with hard gate
 ```
-The watcher script must be running on the tester before it
-can receive compile jobs. Follow the setup guide to:
-  1. Verify the watcher files are accessible on the shared folder  ← CORRECT
-  2. Configure Windows Task Scheduler on the tester
-  3. Verify the watcher is watching the shared folder
+┌─ Add New Tester ──────────────────────────────────┐
+│ Register New Tester                                │
+│ ────────────────────────────────────────────────── │
+│ ⚠ Preflight Checklist                             │  ← FIRST, not last
+│                                                    │
+│ Before registering, confirm tester is ready:      │
+│                                                    │
+│ ☐ Watcher files visible at P:\temp\BENTO\watcher\ │  ← Must tick all 3
+│ ☐ Watcher running (Task Scheduler configured)     │
+│ ☐ Shared folder P:\temp\BENTO accessible          │
+│                                                    │
+│ [ 📄 Open Setup Guide (PDF) ]                     │  ← Prominent
+│ ────────────────────────────────────────────────── │
+│ Tester Hostname: [____________]                    │  ← SECOND
+│ Environment:     [ABIT ▼]                          │
+│ ────────────────────────────────────────────────── │
+│    [ Add Tester (disabled) ]  [ Cancel ]           │  ← Disabled until ✓✓✓
+└────────────────────────────────────────────────────┘
+
+After all boxes checked:
+│    [ Add Tester ]  [ Cancel ]                      │  ← Now enabled
+
+Result: User confirms setup → adds tester → compile works
 ```
 
 ### 6. Dialog Positioning
@@ -194,17 +220,27 @@ Summary: 2 success, 0 failed, 0 timeout
 - Tester already selected (from last run)
 - Compile
 
-### Scenario: Managing Testers
+### Scenario: Adding a New Tester
 
 **Before**:
-- Add tester: ✓ (via dialog)
-- Remove tester: ✗ (edit JSON manually)
-- Dialog position: Random (often off-screen)
+1. Open "Add Tester" dialog
+2. Fill in hostname and environment (looks easy!)
+3. Click "Add Tester" (always enabled)
+4. Try to compile → ZIP drops → nothing happens
+5. Go back, find guide, do setup
+6. Confused: do I wait or remove and re-add?
 
 **After**:
-- Add tester: ✓ (via dialog)
-- Remove tester: ✓ (select + click 🗑 Remove)
-- Dialog position: Centred on parent, stays on top
+1. Open "Add Tester" dialog
+2. See preflight checklist at top (can't miss it)
+3. Click "Open Setup Guide" → follow instructions
+4. Tick checkboxes as each step completes
+5. Fill in hostname and environment
+6. "Add Tester" button becomes enabled
+7. Add tester → compile works immediately
+
+**Time saved**: Eliminates entire troubleshooting cycle  
+**Support questions prevented**: "I added tester but compile doesn't work"
 
 ## Key Metrics
 
@@ -217,6 +253,8 @@ Summary: 2 success, 0 failed, 0 timeout
 | Label retyping | Every run | Once | Persistence |
 | Multi-tester support | No | Yes | New capability |
 | Dialog positioning | Random | Centred | Professional UX |
+| Non-functional tester registration | Common | Prevented | Preflight checklist |
+| "Compile doesn't work" support calls | Frequent | Eliminated | Hard gate |
 
 ## Technical Implementation
 

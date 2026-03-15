@@ -13,9 +13,13 @@
 - [x] Added `_handle_multi_compile_results()` method
 - [x] Updated compile button text to "Compile on Selected Tester(s)"
 
-### UX Improvement #1: Fixed Stale Dialog Text
-- [x] Updated "Add Tester" dialog instructions
-- [x] Changed "Copy watcher files to the tester" → "Verify watcher files are accessible on shared folder"
+### UX Improvement #1: Preflight Checklist Dialog
+- [x] Redesigned "Add Tester" dialog with checklist-first approach
+- [x] Added three mandatory checkboxes at top of dialog
+- [x] "Add Tester" button disabled until all checkboxes ticked
+- [x] Setup guide button prominently placed in checklist section
+- [x] Visual hierarchy: Checklist → Details → Button
+- [x] Updated dialog size to 560×480 to accommodate checklist
 
 ### UX Improvement #2: Browse Buttons for Paths
 - [x] Added `_browse_directory()` helper method
@@ -60,7 +64,16 @@
 - [ ] Test with one valid + one invalid tester → verify partial success handling
 - [ ] Search for tester → verify multi-selection preserved during filter
 
-### Browse Buttons
+### Preflight Checklist
+- [ ] Open "Add Tester" dialog → verify checklist appears at top
+- [ ] Verify "Add Tester" button is disabled initially
+- [ ] Try to click "Add Tester" → verify nothing happens (disabled)
+- [ ] Tick first checkbox → verify button still disabled
+- [ ] Tick second checkbox → verify button still disabled
+- [ ] Tick all three checkboxes → verify button becomes enabled
+- [ ] Untick one checkbox → verify button becomes disabled again
+- [ ] Tick all three → fill in hostname/env → add tester → verify success
+- [ ] Click "Open Setup Guide" → verify PDF opens (if exists)
 - [ ] Click 📁 for Local Repo Path → verify folder picker opens
 - [ ] Click 📁 for RAW_ZIP Path → verify folder picker opens
 - [ ] Click 📁 for RELEASE_TGZ Path → verify folder picker opens
