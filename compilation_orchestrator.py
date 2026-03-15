@@ -25,12 +25,10 @@ import os
 import sys
 import time
 import json
-import shutil
 import logging
 import argparse
 import zipfile
 from datetime import datetime
-from pathlib import Path
 from typing import Optional, Dict
 
 # ─────────────────────────────────────────────
@@ -50,9 +48,24 @@ BUILD_TIMEOUT_SECONDS = 2100   # 35 minutes (watcher has 30 min)
 
 # File extensions to exclude when zipping the repo
 ZIP_EXCLUDE_PATTERNS = {
-    ".git", "__pycache__", ".pyc", ".pyo",
+    # Version control
+    ".git",
+    # Python
+    "__pycache__", ".pyc", ".pyo",
+    # BENTO internals
     ".bento_lock", ".bento_status",
+    # Node
     "node_modules",
+    # Firmware build artifacts
+    "release",          # entire release/ folder
+    ".o",               # compiled object files
+    ".d",               # dependency files
+    ".a",               # static libraries
+    ".map",             # linker map files
+    ".elf",             # compiled binaries
+    ".tgz",             # previous release archives
+    ".bin",             # binary firmware images
+    ".hex",             # hex firmware images
 }
 
 # ─────────────────────────────────────────────
@@ -92,12 +105,12 @@ def create_tp_zip(source_dir, env, jira_key, hostname, logger, log_callback=None
     """
     Zip the TP repository at `source_dir` and write it to RAW_ZIP_FOLDER.
 
-    Filename convention:  <JIRA_KEY>_<ENV>_<YYYYMMDD_HHMM>.zip
-    Example:              TSESSD-123_ABIT_20260310_1435.zip
+    Filename convention:  <JIRA_KEY>_<ENV>_<YYYYMMDD_HHMMSS>.zip
+    Example:              TSESSD-123_ABIT_20260310_143502.zip
 
     Returns the full path to the created ZIP, or None on failure.
     """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # Include seconds to prevent collision
     zip_name  = f"{jira_key}_{hostname}_{env}_{timestamp}" + ("_" + label if label else "") + ".zip"
     _raw_zip = raw_zip_folder if raw_zip_folder else RAW_ZIP_FOLDER
     zip_path  = os.path.join(_raw_zip, zip_name)

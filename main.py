@@ -1949,8 +1949,14 @@ Populate the template, leaving validation result sections for user to fill after
             errors.append("Repo path not found: " + repo_path)
         if not raw_zip:
             errors.append("RAW_ZIP Path is required")
+        elif not os.path.isdir(raw_zip):
+            errors.append("RAW_ZIP folder not accessible: " + raw_zip +
+                         "\n    Check that the P: drive is mapped on this machine")
         if not release:
             errors.append("RELEASE_TGZ Path is required")
+        elif not os.path.isdir(release):
+            errors.append("RELEASE_TGZ folder not accessible: " + release +
+                         "\n    Check that the P: drive is mapped on this machine")
 
         try:
             targets = self._resolve_tester()  # Now returns list of (hostname, env) tuples
@@ -2054,7 +2060,6 @@ Populate the template, leaving validation result sections for user to fill after
                 "Compile Success",
                 "TGZ ready:\n" + tgz_path
             )
-            self.save_workflow_step("COMPILED_TGZ", tgz_path)
 
         elif status == "timeout":
             self.compile_status_var.set("TIMEOUT")
@@ -2110,8 +2115,6 @@ Populate the template, leaving validation result sections for user to fill after
                 f"All {len(results)} testers compiled successfully!\n\n" +
                 "\n".join(f"✓ {os.path.basename(p)}" for p in tgz_paths)
             )
-            # Save all TGZ paths
-            self.save_workflow_step("COMPILED_TGZ", "\n".join(tgz_paths))
         elif success_count > 0:
             self.compile_status_var.set(f"{success_count}/{len(results)} succeeded")
             messagebox.showwarning(
