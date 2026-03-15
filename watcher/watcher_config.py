@@ -23,33 +23,68 @@ RAW_ZIP_FOLDER      = r"P:\temp\BENTO\RAW_ZIP"
 RELEASE_TGZ_FOLDER  = r"P:\temp\BENTO\RELEASE_TGZ"
 
 # ================================================================
-# TESTER REGISTRY
-# Each entry maps ENV token -> tester details.
-# hostname   : shown in BENTO GUI dropdown and used for output folder naming
-# env        : token that must appear in ZIP filename for this tester to claim it
-# repo_dir   : full Windows path to the existing TP repo on this tester
-# build_cmd  : command run inside repo_dir via cmd.exe /c
+# TESTER REGISTRY - LOADED FROM SHARED JSON
+# Single source of truth: P:\temp\BENTO\bento_testers.json
+# Both GUI and watcher read from this file.
 # ================================================================
-TESTER_REGISTRY = {
-    "ABIT": {
-        "hostname":  "IBIR-0383",
-        "env":       "ABIT",
-        "repo_dir":  r"C:\xi\adv_ibir_master",
-        "build_cmd": "make release",
-    },
-    "SFN2": {
-        "hostname":  "MPT3HVM-0156",
-        "env":       "SFN2",
-        "repo_dir":  r"C:\xi\adv_ibir_master",   # update when known
-        "build_cmd": "make release",
-    },
-    "CNFG": {
-        "hostname":  "CTOWTST-0031",
-        "env":       "CNFG",
-        "repo_dir":  r"C:\xi\adv_ibir_master",   # update when known
-        "build_cmd": "make release",
-    },
-}
+
+_REGISTRY_PATH = r"P:\temp\BENTO\bento_testers.json"
+
+def _load_registry():
+    """
+    Load tester registry from shared JSON file.
+    Returns dict mapping ENV -> tester details.
+    
+    Fallback to hardcoded defaults if file doesn't exist yet.
+    """
+    import json
+    
+    # Fallback defaults (used only if JSON doesn't exist)
+    defaults = {
+        "ABIT": {
+            "hostname":  "IBIR-0383",
+            "env":       "ABIT",
+            "repo_dir":  r"C:\xi\adv_ibir_master",
+            "build_cmd": "make release",
+        },
+        "SFN2": {
+            "hostname":  "MPT3HVM-0156",
+            "env":       "SFN2",
+            "repo_dir":  r"C:\xi\adv_ibir_master",
+            "build_cmd": "make release",
+        },
+        "CNFG": {
+            "hostname":  "CTOWTST-0031",
+            "env":       "CNFG",
+            "repo_dir":  r"C:\xi\adv_ibir_master",
+            "build_cmd": "make release",
+        },
+    }
+    
+    try:
+        if os.path.exists(_REGISTRY_PATH):
+            with open(_REGISTRY_PATH, "r") as f:
+                data = json.load(f)
+            # Convert from GUI format (key = "HOSTNAME (ENV)") to watcher format (key = ENV)
+            registry = {}
+            for key, val in data.items():
+                env = val["env"]
+                registry[env] = {
+                    "hostname":  val["hostname"],
+                    "env":       val["env"],
+                    "repo_dir":  val["repo_dir"],
+                    "build_cmd": val["build_cmd"],
+                }
+            return registry
+        else:
+            # File doesn't exist yet - return defaults
+            return defaults
+    except Exception as e:
+        print(f"[WARN] Could not load tester registry from {_REGISTRY_PATH}: {e}")
+        print("[WARN] Falling back to hardcoded defaults")
+        return defaults
+
+TESTER_REGISTRY = _load_registry()
 
 # ================================================================
 # WATCHER BEHAVIOUR

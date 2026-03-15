@@ -69,6 +69,29 @@ ZIP_EXCLUDE_PATTERNS = {
 }
 
 # ─────────────────────────────────────────────
+# DYNAMIC VALID_ENVS - loaded from shared registry
+# ─────────────────────────────────────────────
+
+def get_valid_envs():
+    """
+    Load valid environments from the shared tester registry.
+    Returns set of ENV tokens that have registered testers.
+    """
+    registry_path = r"P:\temp\BENTO\bento_testers.json"
+    try:
+        if os.path.exists(registry_path):
+            with open(registry_path, "r") as f:
+                data = json.load(f)
+            # Extract ENV from each tester entry
+            return {val["env"].upper() for val in data.values()}
+        else:
+            # Fallback to defaults if registry doesn't exist yet
+            return {"ABIT", "SFN2", "CNFG"}
+    except Exception:
+        # Fallback on error
+        return {"ABIT", "SFN2", "CNFG"}
+
+# ─────────────────────────────────────────────
 # LOGGER  (uses same rotating style as main.py)
 # ─────────────────────────────────────────────
 
@@ -279,9 +302,11 @@ def compile_tp_package(
         source_dir         : Local path to the TP repository
         env                : Tester environment ABIT / SFN2 / CNFG
         jira_key           : JIRA issue key e.g. TSESSD-123
+        hostname           : Tester hostname (required)
         log_callback       : Optional callable(str) for GUI log panel
         raw_zip_folder     : Override RAW_ZIP path from GUI (optional)
         release_tgz_folder : Override RELEASE_TGZ path from GUI (optional)
+        label              : Optional label for TGZ filename
 
     Returns dict: status, tgz_file, tgz_path, detail, elapsed
     """
@@ -291,9 +316,16 @@ def compile_tp_package(
     logger = _get_logger(log_callback)
     env = env.upper()
     
-    # Validate env exists (no hardcoded list - any env is valid if hostname provided)
+    # Validate hostname is provided
     if not hostname:
         msg = "Hostname is required for compilation"
+        _log(logger, "[FAIL] " + msg, log_callback, "error")
+        return {"status": "failed", "tgz_file": None, "detail": msg, "elapsed": 0}
+    
+    # Validate env exists in registry (dynamic check)
+    valid_envs = get_valid_envs()
+    if env not in valid_envs:
+        msg = f"Unknown environment '{env}'. Valid: {', '.join(sorted(valid_envs))}"
         _log(logger, "[FAIL] " + msg, log_callback, "error")
         return {"status": "failed", "tgz_file": None, "detail": msg, "elapsed": 0}
 
@@ -370,23 +402,29 @@ def compile_tp_package_multi(
 # ─────────────────────────────────────────────
 
 def main():
+    # Load valid environments dynamically
+    valid_envs = get_valid_envs()
+    
     parser = argparse.ArgumentParser(description="BENTO Compilation Orchestrator (standalone test)")
     parser.add_argument("--zip-source", required=True, help="Path to TP repo to package")
-    parser.add_argument("--env",        required=True, choices=["ABIT", "SFN2", "CNFG"])
+    parser.add_argument("--env",        required=True, help=f"Environment ({', '.join(sorted(valid_envs))})")
+    parser.add_argument("--hostname",   required=True, help="Tester hostname (e.g. IBIR-0383)")
     parser.add_argument("--jira-key",   required=True, help="e.g. TSESSD-123")
     args = parser.parse_args()
 
     print(f"\n{'='*60}")
     print(f"  BENTO Compilation Orchestrator")
-    print(f"  JIRA:    {args.jira_key}")
-    print(f"  Env:     {args.env}")
-    print(f"  Source:  {args.zip_source}")
+    print(f"  JIRA:     {args.jira_key}")
+    print(f"  Hostname: {args.hostname}")
+    print(f"  Env:      {args.env}")
+    print(f"  Source:   {args.zip_source}")
     print(f"{'='*60}\n")
 
     result = compile_tp_package(
         source_dir=args.zip_source,
         env=args.env,
         jira_key=args.jira_key,
+        hostname=args.hostname,
     )
 
     print(f"\n{'='*60}")

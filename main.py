@@ -1612,9 +1612,9 @@ Populate the template, leaving validation result sections for user to fill after
     # ================================================================
 
     _DEFAULT_TESTERS = {
-        "IBIR-0383 (ABIT)":    ("IBIR-0383",    "ABIT"),
-        "MPT3HVM-0156 (SFN2)": ("MPT3HVM-0156", "SFN2"),
-        "CTOWTST-0031 (CNFG)": ("CTOWTST-0031", "CNFG"),
+        "IBIR-0383 (ABIT)":    ("IBIR-0383",    "ABIT", r"C:\xi\adv_ibir_master", "make release"),
+        "MPT3HVM-0156 (SFN2)": ("MPT3HVM-0156", "SFN2", r"C:\xi\adv_ibir_master", "make release"),
+        "CTOWTST-0031 (CNFG)": ("CTOWTST-0031", "CNFG", r"C:\xi\adv_ibir_master", "make release"),
     }
 
     def _load_tester_registry(self):
@@ -1626,18 +1626,45 @@ Populate the template, leaving validation result sections for user to fill after
                 with open(self._tester_registry_file, "r") as f:
                     saved = json.load(f)
                 for key, val in saved.items():
-                    if isinstance(val, list) and len(val) == 2:
-                        self._TESTER_REGISTRY[key] = tuple(val)
+                    # Support both old format (2-tuple) and new format (4-tuple)
+                    if isinstance(val, list):
+                        if len(val) == 4:
+                            self._TESTER_REGISTRY[key] = tuple(val)
+                        elif len(val) == 2:
+                            # Migrate old format: add default repo_dir and build_cmd
+                            self._TESTER_REGISTRY[key] = tuple(val) + (r"C:\xi\adv_ibir_master", "make release")
         except Exception as e:
             self.log("[WARN] Could not load tester registry: " + str(e))
 
     def _save_tester_registry(self):
-        """Persist tester list to bento_testers.json."""
+        """Persist tester list to bento_testers.json (both local and shared)."""
         import json
         try:
+            # Convert to new format for local file
             data = {k: list(v) for k, v in self._TESTER_REGISTRY.items()}
             with open(self._tester_registry_file, "w") as f:
                 json.dump(data, f, indent=2)
+            
+            # Also write to shared folder in watcher-compatible format
+            shared_path = r"P:\temp\BENTO\bento_testers.json"
+            try:
+                # Ensure directory exists
+                os.makedirs(os.path.dirname(shared_path), exist_ok=True)
+                
+                shared_data = {}
+                for key, val in self._TESTER_REGISTRY.items():
+                    hostname, env, repo_dir, build_cmd = val
+                    shared_data[key] = {
+                        "hostname":  hostname,
+                        "env":       env,
+                        "repo_dir":  repo_dir,
+                        "build_cmd": build_cmd,
+                    }
+                with open(shared_path, "w") as f:
+                    json.dump(shared_data, f, indent=2)
+                self.log(f"✓ Tester registry synced to {shared_path}")
+            except Exception as e:
+                self.log(f"[WARN] Could not sync to shared folder: {e}")
         except Exception as e:
             self.log("[WARN] Could not save tester registry: " + str(e))
 
@@ -1675,7 +1702,9 @@ Populate the template, leaving validation result sections for user to fill after
             idx = selections[0]
             key = self._tester_listbox.get(idx)
             if key in self._TESTER_REGISTRY:
-                hostname, env = self._TESTER_REGISTRY[key]
+                val = self._TESTER_REGISTRY[key]
+                hostname = val[0]
+                env = val[1]
                 self._compile_mode_var.set(
                     "Selected: " + hostname + "  |  Env: " + env
                 )
@@ -1686,7 +1715,9 @@ Populate the template, leaving validation result sections for user to fill after
             for idx in selections:
                 key = self._tester_listbox.get(idx)
                 if key in self._TESTER_REGISTRY:
-                    hostname, env = self._TESTER_REGISTRY[key]
+                    val = self._TESTER_REGISTRY[key]
+                    hostname = val[0]
+                    env = val[1]
                     tester_names.append(f"{hostname} ({env})")
             self._compile_mode_var.set(
                 f"Multi-compile: {len(selections)} testers - " + ", ".join(tester_names)
@@ -1714,7 +1745,9 @@ Populate the template, leaving validation result sections for user to fill after
                     "Tester not found in registry: '" + key + "'\n"
                     "Please re-select from the list."
                 )
-            targets.append(self._TESTER_REGISTRY[key])
+            val = self._TESTER_REGISTRY[key]
+            # Return (hostname, env) tuple for backward compatibility
+            targets.append((val[0], val[1]))
         
         return targets
 
@@ -1727,10 +1760,10 @@ Populate the template, leaving validation result sections for user to fill after
 
         dialog = tk.Toplevel(self.root)
         dialog.title("Add New Tester")
-        dialog.geometry("560x480")
+        dialog.geometry("560x580")
         dialog.resizable(False, False)
         dialog.grab_set()   # modal
-        self._centre_dialog(dialog, 560, 480)
+        self._centre_dialog(dialog, 560, 580)
 
         pad = {"padx": 12, "pady": 6}
 
@@ -1811,30 +1844,59 @@ Populate the template, leaving validation result sections for user to fill after
             state="readonly", width=10)
         env_combo.grid(row=6, column=1, sticky=tk.W, **pad)
 
+        ttk.Label(dialog, text="Repo Path:").grid(
+            row=7, column=0, sticky=tk.W, **pad)
+        repo_dir_var = tk.StringVar(value=r"C:\xi\adv_ibir_master")
+        repo_frame = ttk.Frame(dialog)
+        repo_frame.grid(row=7, column=1, sticky=tk.W, **pad)
+        ttk.Entry(repo_frame, textvariable=repo_dir_var, width=32).pack(side=tk.LEFT)
+        ttk.Button(repo_frame, text="📁", width=3,
+                   command=lambda: self._browse_directory(repo_dir_var, "Select TP Repository")).pack(side=tk.LEFT, padx=(2, 0))
+
+        ttk.Label(dialog, text="Build Command:").grid(
+            row=8, column=0, sticky=tk.W, **pad)
+        build_cmd_var = tk.StringVar(value="make release")
+        build_combo = ttk.Combobox(
+            dialog, textvariable=build_cmd_var,
+            values=["make release", "make release_supermicro"],
+            width=25)
+        build_combo.grid(row=8, column=1, sticky=tk.W, **pad)
+
         ttk.Separator(dialog, orient="horizontal").grid(
-            row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=12, pady=8)
+            row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=12, pady=8)
 
         # ── Error label ──
         err_var = tk.StringVar(value="")
         ttk.Label(dialog, textvariable=err_var,
                   foreground="red", font=("Arial", 8)).grid(
-            row=8, column=0, columnspan=2, padx=12)
+            row=10, column=0, columnspan=2, padx=12)
 
         # ── Buttons ──
         def _confirm():
             hostname = hostname_var.get().strip().upper()
             env      = env_var.get().strip().upper()
+            repo_dir = repo_dir_var.get().strip()
+            build_cmd = build_cmd_var.get().strip()
+            
             if not hostname:
                 err_var.set("Hostname cannot be empty.")
                 return
             if not env:
                 err_var.set("Please select an environment.")
                 return
+            if not repo_dir:
+                err_var.set("Repo path cannot be empty.")
+                return
+            if not build_cmd:
+                err_var.set("Build command cannot be empty.")
+                return
+            
             key = hostname + " (" + env + ")"
             if key in self._TESTER_REGISTRY:
                 err_var.set("Tester '" + key + "' is already registered.")
                 return
-            self._TESTER_REGISTRY[key] = (hostname, env)
+            
+            self._TESTER_REGISTRY[key] = (hostname, env, repo_dir, build_cmd)
             self._save_tester_registry()
             self._refresh_tester_dropdown()
             # Select the new tester in listbox
@@ -1849,7 +1911,7 @@ Populate the template, leaving validation result sections for user to fill after
             dialog.destroy()
 
         btn_row = ttk.Frame(dialog)
-        btn_row.grid(row=9, column=0, columnspan=2, pady=10)
+        btn_row.grid(row=11, column=0, columnspan=2, pady=10)
         
         add_btn = ttk.Button(btn_row, text="Add Tester", command=_confirm, state="disabled")
         add_btn.pack(side=tk.LEFT, padx=6)
