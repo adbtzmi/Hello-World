@@ -147,7 +147,10 @@ class SimpleGUI:
                 },
                 'settings': existing_config.get('settings', {
                     'timeout': 300
-                })
+                }),
+                'compile': {
+                    'last_tgz_label': self.tgz_label_var.get() if hasattr(self, 'tgz_label_var') else ""
+                }
             }
             with open('settings.json', 'w') as f:
                 json.dump(config, f, indent=2)
@@ -738,8 +741,12 @@ class SimpleGUI:
         
         # Repository path (local cloned repo)
         ttk.Label(tab, text="Local Repo Path:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        repo_path_frame = ttk.Frame(tab)
+        repo_path_frame.grid(row=2, column=1, pady=5, sticky=(tk.W, tk.E))
         self.impl_repo_var = tk.StringVar()
-        ttk.Entry(tab, textvariable=self.impl_repo_var, width=50).grid(row=2, column=1, pady=5, sticky=(tk.W, tk.E))
+        ttk.Entry(repo_path_frame, textvariable=self.impl_repo_var, width=47).pack(side=tk.LEFT)
+        ttk.Button(repo_path_frame, text="📁", width=3,
+                   command=lambda: self._browse_directory(self.impl_repo_var, "Select Repository Folder")).pack(side=tk.LEFT, padx=(2, 0))
         ttk.Label(tab, text="(Path to cloned repository for AI indexing)", font=('Arial', 8), foreground='gray').grid(row=2, column=2, sticky=tk.W, padx=5)
         
         # Generate button
@@ -803,6 +810,11 @@ class SimpleGUI:
             tester_row, text="+ Add Tester",
             command=self._open_add_tester_dialog
         ).pack(side=tk.LEFT)
+        
+        ttk.Button(
+            tester_row, text="🗑 Remove",
+            command=self._remove_selected_tester
+        ).pack(side=tk.LEFT, padx=(4, 0))
 
         ttk.Label(compile_frame, text="Shift+Click to select multiple testers",
                   font=("Arial", 8), foreground="gray").grid(
@@ -811,7 +823,8 @@ class SimpleGUI:
         # ── Row 2: TGZ label ──
         ttk.Label(compile_frame, text="TGZ Label:").grid(
             row=2, column=0, sticky=tk.W, pady=3)
-        self.tgz_label_var = tk.StringVar(value="")
+        last_label = self.config.get('compile', {}).get('last_tgz_label', '')
+        self.tgz_label_var = tk.StringVar(value=last_label)
         ttk.Entry(compile_frame, textvariable=self.tgz_label_var, width=30).grid(
             row=2, column=1, sticky=tk.W, pady=3, padx=5)
         ttk.Label(compile_frame,
@@ -826,16 +839,22 @@ class SimpleGUI:
         # ── Row 4: RAW_ZIP path ──
         ttk.Label(compile_frame, text="RAW_ZIP Path:").grid(
             row=4, column=0, sticky=tk.W, pady=3)
+        raw_zip_frame = ttk.Frame(compile_frame)
+        raw_zip_frame.grid(row=4, column=1, sticky=(tk.W, tk.E), pady=3, padx=5)
         self.raw_zip_var = tk.StringVar(value=r"P:\temp\BENTO\RAW_ZIP")
-        ttk.Entry(compile_frame, textvariable=self.raw_zip_var, width=40).grid(
-            row=4, column=1, sticky=(tk.W, tk.E), pady=3, padx=5)
+        ttk.Entry(raw_zip_frame, textvariable=self.raw_zip_var, width=37).pack(side=tk.LEFT)
+        ttk.Button(raw_zip_frame, text="📁", width=3,
+                   command=lambda: self._browse_directory(self.raw_zip_var, "Select RAW_ZIP Folder")).pack(side=tk.LEFT, padx=(2, 0))
 
         # ── Row 5: RELEASE_TGZ path ──
         ttk.Label(compile_frame, text="RELEASE_TGZ Path:").grid(
             row=5, column=0, sticky=tk.W, pady=3)
+        release_tgz_frame = ttk.Frame(compile_frame)
+        release_tgz_frame.grid(row=5, column=1, sticky=(tk.W, tk.E), pady=3, padx=5)
         self.release_tgz_var = tk.StringVar(value=r"P:\temp\BENTO\RELEASE_TGZ")
-        ttk.Entry(compile_frame, textvariable=self.release_tgz_var, width=40).grid(
-            row=5, column=1, sticky=(tk.W, tk.E), pady=3, padx=5)
+        ttk.Entry(release_tgz_frame, textvariable=self.release_tgz_var, width=37).pack(side=tk.LEFT)
+        ttk.Button(release_tgz_frame, text="📁", width=3,
+                   command=lambda: self._browse_directory(self.release_tgz_var, "Select RELEASE_TGZ Folder")).pack(side=tk.LEFT, padx=(2, 0))
 
         # ── Row 6: Compile button + live status ──
         self.compile_btn = ttk.Button(
@@ -1754,8 +1773,8 @@ Populate the template, leaving validation result sections for user to fill after
         ttk.Label(guide_frame,
                   text="The watcher script must be running on the tester before it\n"
                        "can receive compile jobs. Follow the setup guide to:\n"
-                       "  1. Copy watcher files to the tester\n"
-                       "  2. Run setup and configure Windows Task Scheduler\n"
+                       "  1. Verify the watcher files are accessible on the shared folder\n"
+                       "  2. Configure Windows Task Scheduler on the tester\n"
                        "  3. Verify the watcher is watching the shared folder",
                   justify=tk.LEFT, font=("Arial", 8)).pack(anchor=tk.W)
 
@@ -1821,6 +1840,37 @@ Populate the template, leaving validation result sections for user to fill after
 
         hostname_entry.focus_set()
 
+    def _remove_selected_tester(self):
+        """Remove selected tester(s) from registry"""
+        selections = self._tester_listbox.curselection()
+        if not selections:
+            messagebox.showwarning("No Selection", "Please select one or more testers to remove.")
+            return
+        
+        # Get all selected tester names
+        testers_to_remove = [self._tester_listbox.get(idx) for idx in selections]
+        
+        if len(testers_to_remove) == 1:
+            msg = f"Remove '{testers_to_remove[0]}' from the registry?"
+        else:
+            msg = f"Remove {len(testers_to_remove)} testers from the registry?\n\n" + "\n".join(f"  • {t}" for t in testers_to_remove)
+        
+        if messagebox.askyesno("Remove Tester(s)", msg):
+            for key in testers_to_remove:
+                if key in self._TESTER_REGISTRY:
+                    del self._TESTER_REGISTRY[key]
+                    self.log(f"[Tester Removed] {key}")
+            
+            self._save_tester_registry()
+            self._refresh_tester_dropdown()
+
+    def _browse_directory(self, var, title):
+        """Open directory browser and set the variable"""
+        from tkinter import filedialog
+        path = filedialog.askdirectory(title=title)
+        if path:
+            var.set(path)
+
     def trigger_compile_with_lock(self):
         """Lock GUI and run compile in background thread."""
         import threading
@@ -1850,6 +1900,9 @@ Populate the template, leaving validation result sections for user to fill after
         raw_zip   = self.raw_zip_var.get().strip()
         release   = self.release_tgz_var.get().strip()
         label     = self.tgz_label_var.get().strip()
+
+        # Save the label for next session
+        self.save_config()
 
         # ── Pre-flight checks ──
         errors = []
@@ -1888,6 +1941,18 @@ Populate the template, leaving validation result sections for user to fill after
             self.compile_status_var.set("Missing orchestrator")
             return
 
+        # ── Wrap log callback to detect phase updates ──
+        def _compile_log(msg):
+            if msg.startswith("__PHASE__:"):
+                phase_msg = msg[10:]
+                # Truncate to fit status label
+                if len(phase_msg) > 45:
+                    phase_msg = phase_msg[:42] + "..."
+                # Update status label from main thread
+                self.root.after(0, lambda: self.compile_status_var.set(phase_msg))
+            else:
+                self.log(msg)
+
         sep = "=" * 60
         self.log("\n" + sep)
         self.log("  COMPILE TP PACKAGE")
@@ -1920,7 +1985,7 @@ Populate the template, leaving validation result sections for user to fill after
                 label=label,
                 raw_zip_folder=raw_zip,
                 release_tgz_folder=release,
-                log_callback=self.log,
+                log_callback=_compile_log,
             )
             self._handle_single_compile_result(result)
         else:
@@ -1932,7 +1997,7 @@ Populate the template, leaving validation result sections for user to fill after
                 label=label,
                 raw_zip_folder=raw_zip,
                 release_tgz_folder=release,
-                log_callback=self.log,
+                log_callback=_compile_log,
             )
             self._handle_multi_compile_results(results)
 

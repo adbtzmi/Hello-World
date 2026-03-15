@@ -75,6 +75,13 @@ def _log(logger, msg: str, log_callback=None, level: str = "info"):
         log_callback(msg)   # pipe to BENTO GUI log panel
 
 
+def _phase(logger, msg: str, log_callback=None):
+    """Log a phase update that the GUI can detect and display in status"""
+    _log(logger, msg, log_callback)
+    if log_callback:
+        log_callback("__PHASE__:" + msg)
+
+
 # ─────────────────────────────────────────────
 # STEP 1 – ZIP the TP source directory
 # ─────────────────────────────────────────────
@@ -93,7 +100,7 @@ def create_tp_zip(source_dir, env, jira_key, hostname, logger, log_callback=None
     _raw_zip = raw_zip_folder if raw_zip_folder else RAW_ZIP_FOLDER
     zip_path  = os.path.join(_raw_zip, zip_name)
 
-    _log(logger, "[ZIP] Creating TP package: " + zip_name, log_callback)
+    _phase(logger, "Zipping repository...", log_callback)
 
     if not os.path.isdir(source_dir):
         _log(logger, "[FAIL] Source directory not found: " + source_dir, log_callback, "error")
@@ -159,9 +166,10 @@ def wait_for_build(zip_path, logger, log_callback=None, release_tgz_folder=None)
     start     = time.time()
     deadline  = start + BUILD_TIMEOUT_SECONDS
 
-    _log(logger, f"⏳ Waiting for tester to compile {zip_name} …", log_callback)
+    _phase(logger, "Waiting for tester to pick up ZIP...", log_callback)
     _log(logger, f"   (timeout = {BUILD_TIMEOUT_SECONDS // 60} min)", log_callback)
 
+    last_phase_update = start
     while time.time() < deadline:
         status_data = _read_status(zip_path)
 
@@ -207,7 +215,10 @@ def wait_for_build(zip_path, logger, log_callback=None, release_tgz_folder=None)
 
             elif state == "in_progress":
                 elapsed_so_far = int(time.time() - start)
-                _log(logger, f"   … still building ({elapsed_so_far}s elapsed)", log_callback)
+                # Update phase every 15 seconds
+                if time.time() - last_phase_update >= 15:
+                    _phase(logger, f"Building... ({elapsed_so_far}s elapsed)", log_callback)
+                    last_phase_update = time.time()
 
         time.sleep(POLL_INTERVAL)
 

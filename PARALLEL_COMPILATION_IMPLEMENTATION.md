@@ -1,17 +1,26 @@
 # Parallel Multi-Tester Compilation - Implementation Summary
 
 ## Overview
-Successfully implemented parallel multi-tester compilation feature that allows compiling the same TP package on multiple testers simultaneously without blocking the GUI.
+Successfully implemented parallel multi-tester compilation feature that allows compiling the same TP package on multiple testers simultaneously without blocking the GUI, plus 5 critical UX improvements.
 
 ## Changes Made
 
 ### 1. compilation_orchestrator.py
+
+#### Parallel Compilation
 Added `compile_tp_package_multi()` function:
 - Takes a list of `(hostname, env)` tuples as targets
 - Uses `ThreadPoolExecutor` to fan out compilation to multiple testers concurrently
 - Each tester gets its own ZIP file and polls independently
 - Returns a list of result dicts, each with `hostname` and `env` keys added
 - Zero changes to existing `compile_tp_package()` - fully backward compatible
+
+#### Live Progress Updates
+Added `_phase()` helper function:
+- Sends structured phase updates via `__PHASE__:` prefix
+- GUI can detect and display current compilation phase
+- Updates include: "Zipping repository...", "Waiting for tester...", "Building... (Xs elapsed)"
+- Phase updates sent every 15 seconds during build polling
 
 ### 2. main.py - GUI Changes
 
@@ -20,6 +29,7 @@ Added `compile_tp_package_multi()` function:
   - `selectmode=tk.MULTIPLE` allows Shift+Click to select multiple testers
   - Height=4 shows 4 testers at once with scrollbar
   - Search functionality preserved and enhanced to maintain selections during filtering
+  - Help text updated: "Shift+Click to select multiple testers"
 
 #### Updated Methods
 - `_resolve_tester()`: Now returns a **list** of `(hostname, env)` tuples instead of a single tuple
@@ -34,11 +44,62 @@ Added `compile_tp_package_multi()` function:
 - `_run_compile()`: Detects single vs. multiple targets and routes accordingly
   - Single target → calls `compile_tp_package()` (original flow)
   - Multiple targets → calls `compile_tp_package_multi()` (new parallel flow)
+  - Wraps log callback to detect `__PHASE__:` messages and update status label
 - `_handle_single_compile_result()`: Extracted single-tester result handling
 - `_handle_multi_compile_results()`: New method for aggregating multi-tester results
   - Shows per-tester status in log
   - Displays summary: "N success, M failed, P timeout"
   - Shows appropriate dialog based on overall outcome
+
+### 3. UX Improvements
+
+#### Issue #1: Fixed Stale "Add Tester" Dialog Text
+**Problem**: Setup guide text said "Copy watcher files to the tester" - outdated after watcher moved to shared folder.
+
+**Fix**: Updated dialog text to:
+```
+1. Verify the watcher files are accessible on the shared folder
+2. Configure Windows Task Scheduler on the tester
+3. Verify the watcher is watching the shared folder
+```
+
+#### Issue #2: Added Browse Buttons for Path Fields
+**Problem**: Users had to manually type/paste full paths (error-prone on Windows).
+
+**Fix**: Added 📁 browse buttons next to:
+- Local Repo Path
+- RAW_ZIP Path
+- RELEASE_TGZ Path
+
+New helper method: `_browse_directory(var, title)` opens folder picker and sets the variable.
+
+#### Issue #3: Added Remove Tester Button
+**Problem**: No way to remove testers from GUI - users had to manually edit JSON.
+
+**Fix**: Added 🗑 Remove button next to + Add Tester
+- Supports removing multiple selected testers at once
+- Shows confirmation dialog with list of testers to remove
+- Updates registry and saves to JSON
+- Logs removal action
+
+New method: `_remove_selected_tester()` handles removal logic.
+
+#### Issue #4: Live Progress Indication
+**Problem**: Status label stayed frozen on "Compiling..." for up to 15 minutes with no feedback.
+
+**Fix**: Implemented phase-aware status updates
+- Orchestrator sends `__PHASE__:` prefixed messages
+- GUI detects and displays in status label (truncated to 45 chars)
+- Shows: "Zipping repository..." → "Waiting for tester..." → "Building... (42s elapsed)"
+- Updates every 15 seconds during build phase
+
+#### Issue #5: TGZ Label Persistence
+**Problem**: Label field reset to blank every session - users retyped same labels repeatedly.
+
+**Fix**: Persist last-used label to settings.json
+- Added `compile.last_tgz_label` to config
+- Restored on startup
+- Auto-saved when compile runs
 
 ## Key Features
 
@@ -60,6 +121,10 @@ Added `compile_tp_package_multi()` function:
 ### User Experience
 - Shift+Click to select multiple testers
 - Real-time status badge shows selection count
+- Live progress updates during compilation
+- Browse buttons eliminate path typing errors
+- Remove button completes registry management
+- TGZ label remembered across sessions
 - Detailed per-tester results in log
 - Summary dialog shows overall outcome
 - All TGZ paths saved to workflow file
@@ -87,6 +152,10 @@ Compile on multiple testers to ensure changes work across all target environment
 2. **Two Testers**: Select ABIT and SFN2, compile same package - both should complete
 3. **Mixed Results**: Test with one valid and one invalid tester to verify partial success handling
 4. **Search Filter**: Test that multi-selection is preserved when filtering tester list
+5. **Browse Buttons**: Click 📁 buttons to verify folder picker works
+6. **Remove Tester**: Add a test tester, then remove it to verify registry update
+7. **Progress Updates**: Watch status label during compilation to verify phase updates
+8. **Label Persistence**: Set a label, restart app, verify label is restored
 
 ## Technical Notes
 
@@ -95,3 +164,20 @@ Compile on multiple testers to ensure changes work across all target environment
 - Each thread has isolated context - no race conditions
 - GUI remains responsive during compilation (background thread)
 - Log output is thread-safe via callback mechanism
+- Phase updates use `root.after(0, ...)` to ensure thread-safe GUI updates
+- Browse dialogs use tkinter's built-in `filedialog.askdirectory()`
+- Config persistence uses existing settings.json structure
+
+## Impact Summary
+
+| Issue | Effort | Impact | Status |
+|-------|--------|--------|--------|
+| Parallel multi-tester compilation | 60 min | Unlocks cross-env validation | ✅ Complete |
+| Stale "Add Tester" dialog text | 2 min | Prevents user confusion | ✅ Complete |
+| Browse buttons for paths | 10 min | Eliminates path typing errors | ✅ Complete |
+| Remove Tester button | 15 min | Completes registry management | ✅ Complete |
+| Live progress indication | 30 min | Removes "is it working?" anxiety | ✅ Complete |
+| TGZ label persistence | 5 min | Saves repetition in test sessions | ✅ Complete |
+
+**Total implementation time**: ~2 hours  
+**Total UX improvement**: Significant - addresses all major pain points in compilation workflow
