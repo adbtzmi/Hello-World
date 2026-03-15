@@ -1733,6 +1733,7 @@ Populate the template, leaving validation result sections for user to fill after
         dialog.geometry("520x380")
         dialog.resizable(False, False)
         dialog.grab_set()   # modal
+        self._centre_dialog(dialog, 520, 380)
 
         pad = {"padx": 12, "pady": 6}
 
@@ -1870,6 +1871,14 @@ Populate the template, leaving validation result sections for user to fill after
         path = filedialog.askdirectory(title=title)
         if path:
             var.set(path)
+
+    def _centre_dialog(self, dialog, w, h):
+        """Position dialog at the centre of the main window."""
+        dialog.transient(self.root)  # Keep dialog above parent
+        dialog.update_idletasks()    # Force Tk to compute dialog size
+        x = self.root.winfo_x() + (self.root.winfo_width()  - w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+        dialog.geometry(f"{w}x{h}+{x}+{y}")
 
     def trigger_compile_with_lock(self):
         """Lock GUI and run compile in background thread."""
@@ -2102,6 +2111,7 @@ Populate the template, leaving validation result sections for user to fill after
         dialog.title(title)
         dialog.geometry("600x420")
         dialog.grab_set()
+        self._centre_dialog(dialog, 600, 420)
 
         # Header
         color = "#cc0000" if status == "failed" else "#b36200"
@@ -3476,6 +3486,7 @@ Step-by-step guide for manual review and additional changes.
         # Make window modal
         self.chat_window.transient(self.root)
         self.chat_window.grab_set()
+        self._centre_dialog(self.chat_window, 900, 700)
         
         self.log(f"✓ Opening interactive chat for {step_name}...")
         
@@ -3582,6 +3593,8 @@ Step-by-step guide for manual review and additional changes.
         self.chat_window = tk.Toplevel(self.root)
         self.chat_window.title(f"AI Chat - {issue_key}")
         self.chat_window.geometry("800x600")
+        self.chat_window.transient(self.root)
+        self._centre_dialog(self.chat_window, 800, 600)
         
         self.log(f"✓ Creating chat window for {issue_key}...")
         

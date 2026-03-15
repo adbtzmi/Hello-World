@@ -101,6 +101,20 @@ New method: `_remove_selected_tester()` handles removal logic.
 - Restored on startup
 - Auto-saved when compile runs
 
+#### Issue #6: Dialogs Not Centred on Parent Window
+**Problem**: Dialogs spawned at OS default position (usually top-left corner), appearing off-screen on multi-monitor setups. No `transient()` meant dialogs could hide behind parent window.
+
+**Fix**: Added `_centre_dialog()` helper method
+- Calculates centre position relative to parent window
+- Sets `transient(self.root)` to keep dialog above parent
+- Applied to all dialogs:
+  - Add New Tester dialog (520×380)
+  - Compile error dialog (600×420)
+  - Interactive chat window (900×700)
+  - Chat continuation window (800×600)
+
+New helper method: `_centre_dialog(dialog, w, h)` handles positioning logic.
+
 ## Key Features
 
 ### Concurrent Execution
@@ -156,6 +170,8 @@ Compile on multiple testers to ensure changes work across all target environment
 6. **Remove Tester**: Add a test tester, then remove it to verify registry update
 7. **Progress Updates**: Watch status label during compilation to verify phase updates
 8. **Label Persistence**: Set a label, restart app, verify label is restored
+9. **Dialog Positioning**: Open Add Tester dialog on multi-monitor setup - should centre on parent window
+10. **Dialog Transient**: Click parent window while dialog is open - dialog should stay on top
 
 ## Technical Notes
 
@@ -178,6 +194,7 @@ Compile on multiple testers to ensure changes work across all target environment
 | Remove Tester button | 15 min | Completes registry management | ✅ Complete |
 | Live progress indication | 30 min | Removes "is it working?" anxiety | ✅ Complete |
 | TGZ label persistence | 5 min | Saves repetition in test sessions | ✅ Complete |
+| Centred dialog positioning | 5 min | Prevents off-screen dialogs | ✅ Complete |
 
-**Total implementation time**: ~2 hours  
+**Total implementation time**: ~2.2 hours  
 **Total UX improvement**: Significant - addresses all major pain points in compilation workflow

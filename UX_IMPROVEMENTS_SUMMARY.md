@@ -82,6 +82,43 @@ can receive compile jobs. Follow the setup guide to:
   3. Verify the watcher is watching the shared folder
 ```
 
+### 6. Dialog Positioning
+**Before**: Dialogs spawn at OS default position (usually top-left)
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Add New Tester                                          [×] │  ← Appears here (top-left)
+│ ─────────────────────────────────────────────────────────── │     or off-screen on multi-monitor
+│ Register New Tester                                         │
+│                                                             │
+│ Tester Hostname: [____________]                             │
+│ Environment:     [ABIT ▼]                                   │
+└─────────────────────────────────────────────────────────────┘
+
+                    ┌──────────────────────────────────────┐
+                    │ BENTO - GUI                      [×] │
+                    │                                      │
+                    │  (Main window at 1400×750)           │
+                    │                                      │
+                    └──────────────────────────────────────┘
+```
+
+**After**: Dialogs centre on parent window and stay on top
+```
+                    ┌──────────────────────────────────────┐
+                    │ BENTO - GUI                      [×] │
+                    │                                      │
+                    │  ┌─────────────────────────────┐    │
+                    │  │ Add New Tester          [×] │    │  ← Centred on parent
+                    │  │ ─────────────────────────── │    │     stays on top
+                    │  │ Register New Tester         │    │
+                    │  │                             │    │
+                    │  │ Tester Hostname: [________] │    │
+                    │  │ Environment:     [ABIT ▼]   │    │
+                    │  └─────────────────────────────┘    │
+                    │                                      │
+                    └──────────────────────────────────────┘
+```
+
 ## Multi-Tester Compilation Flow
 
 ### Single Tester (Original Flow)
@@ -162,10 +199,12 @@ Summary: 2 success, 0 failed, 0 timeout
 **Before**:
 - Add tester: ✓ (via dialog)
 - Remove tester: ✗ (edit JSON manually)
+- Dialog position: Random (often off-screen)
 
 **After**:
 - Add tester: ✓ (via dialog)
 - Remove tester: ✓ (select + click 🗑 Remove)
+- Dialog position: Centred on parent, stays on top
 
 ## Key Metrics
 
@@ -177,6 +216,7 @@ Summary: 2 success, 0 failed, 0 timeout
 | Tester management | Incomplete | Complete | Add + Remove |
 | Label retyping | Every run | Once | Persistence |
 | Multi-tester support | No | Yes | New capability |
+| Dialog positioning | Random | Centred | Professional UX |
 
 ## Technical Implementation
 
