@@ -44,7 +44,9 @@ RELEASE_TGZ_FOLDER = r"P:\temp\BENTO\RELEASE_TGZ"
 POLL_INTERVAL = 15
 
 # Total time to wait before declaring a timeout
-BUILD_TIMEOUT_SECONDS = 900   # 15 minutes
+# IMPORTANT: Must be LONGER than watcher's BUILD_TIMEOUT_SECONDS (1800s = 30 min)
+# so orchestrator never gives up before watcher does
+BUILD_TIMEOUT_SECONDS = 2100   # 35 minutes (watcher has 30 min)
 
 # File extensions to exclude when zipping the repo
 ZIP_EXCLUDE_PATTERNS = {
@@ -193,6 +195,16 @@ def wait_for_build(zip_path, logger, log_callback=None, release_tgz_folder=None)
                 if os.path.exists(tgz_full):
                     elapsed = int(time.time() - start)
                     _log(logger, f"✓ Build SUCCESS in {elapsed}s → {tgz_name}", log_callback)
+                    
+                    # Clean up ZIP and status file after successful compile
+                    try:
+                        os.remove(zip_path)
+                        os.remove(zip_path + ".bento_status")
+                        _log(logger, f"✓ Cleaned up {os.path.basename(zip_path)}", log_callback)
+                    except Exception as e:
+                        # Non-fatal — share might not allow delete, or files already gone
+                        _log(logger, f"⚠ Could not clean up ZIP: {e}", log_callback, "warning")
+                    
                     return {
                         "status":   "success",
                         "tgz_file": tgz_name,
@@ -215,8 +227,8 @@ def wait_for_build(zip_path, logger, log_callback=None, release_tgz_folder=None)
 
             elif state == "in_progress":
                 elapsed_so_far = int(time.time() - start)
-                # Update phase every 15 seconds
-                if time.time() - last_phase_update >= 15:
+                # Update phase every 2 minutes to avoid log spam
+                if elapsed_so_far % 120 < POLL_INTERVAL:
                     _phase(logger, f"Building... ({elapsed_so_far}s elapsed)", log_callback)
                     last_phase_update = time.time()
 
@@ -265,9 +277,10 @@ def compile_tp_package(
 
     logger = _get_logger(log_callback)
     env = env.upper()
-    valid_envs = {"ABIT", "SFN2", "CNFG"}
-    if env not in valid_envs:
-        msg = "Unknown env " + repr(env) + ". Must be one of " + str(valid_envs)
+    
+    # Validate env exists (no hardcoded list - any env is valid if hostname provided)
+    if not hostname:
+        msg = "Hostname is required for compilation"
         _log(logger, "[FAIL] " + msg, log_callback, "error")
         return {"status": "failed", "tgz_file": None, "detail": msg, "elapsed": 0}
 
@@ -340,20 +353,6 @@ def compile_tp_package_multi(
 
 
 # ─────────────────────────────────────────────
-# ENVIRONMENT → TESTER MAPPING  (informational)
-# ─────────────────────────────────────────────
-
-TESTER_MAP = {
-    "ABIT": "IBIR-0383",
-    "SFN2": "MPT3HVM-0156",
-    "CNFG": "CTOWTST-0031",
-}
-
-def get_tester_hostname(env: str) -> str:
-    return TESTER_MAP.get(env.upper(), "Unknown")
-
-
-# ─────────────────────────────────────────────
 # STANDALONE TEST ENTRY POINT
 # ─────────────────────────────────────────────
 
@@ -367,7 +366,7 @@ def main():
     print(f"\n{'='*60}")
     print(f"  BENTO Compilation Orchestrator")
     print(f"  JIRA:    {args.jira_key}")
-    print(f"  Env:     {args.env}  ({get_tester_hostname(args.env)})")
+    print(f"  Env:     {args.env}")
     print(f"  Source:  {args.zip_source}")
     print(f"{'='*60}\n")
 

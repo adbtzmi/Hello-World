@@ -2182,7 +2182,16 @@ Populate the template, leaving validation result sections for user to fill after
                   font=("Arial", 8), foreground="#555555").pack(
             anchor=tk.W, padx=16, pady=(2, 8))
 
-        ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=(0, 12))
+        # Buttons: Retry + Close
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=(0, 12))
+        
+        def _retry():
+            dialog.destroy()
+            self.trigger_compile_with_lock()
+        
+        ttk.Button(btn_frame, text="🔄 Retry Compile", command=_retry).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Close", command=dialog.destroy).pack(side=tk.LEFT, padx=4)
 
     def generate_implementation_only_with_lock(self):
         """Wrapper for generate_implementation_only with GUI locking"""

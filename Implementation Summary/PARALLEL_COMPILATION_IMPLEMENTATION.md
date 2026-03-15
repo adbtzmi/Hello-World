@@ -199,15 +199,21 @@ Compile on multiple testers to ensure changes work across all target environment
 
 ## Impact Summary
 
-| Issue | Effort | Impact | Status |
-|-------|--------|--------|--------|
-| Parallel multi-tester compilation | 60 min | Unlocks cross-env validation | ✅ Complete |
-| Preflight checklist dialog | 20 min | Prevents non-functional tester registration | ✅ Complete |
-| Browse buttons for paths | 10 min | Eliminates path typing errors | ✅ Complete |
-| Remove Tester button | 15 min | Completes registry management | ✅ Complete |
-| Live progress indication | 30 min | Removes "is it working?" anxiety | ✅ Complete |
-| TGZ label persistence | 5 min | Saves repetition in test sessions | ✅ Complete |
-| Centred dialog positioning | 5 min | Prevents off-screen dialogs | ✅ Complete |
+| Category | Issue | Effort | Impact | Status |
+|----------|-------|--------|--------|--------|
+| **Core Feature** | Parallel multi-tester compilation | 60 min | Unlocks cross-env validation | ✅ Complete |
+| **Critical Fix** | RAW_ZIP cleanup | 5 min | Prevents disk bloat + perf degradation | ✅ Complete |
+| **Critical Fix** | Timeout mismatch (15min vs 30min) | 1 min | Prevents silent wrong results | ✅ Complete |
+| **Maintenance** | Remove duplicate TESTER_MAP | 5 min | Single source of truth | ✅ Complete |
+| **UX** | Preflight checklist dialog | 20 min | Prevents non-functional tester registration | ✅ Complete |
+| **UX** | Browse buttons for paths | 10 min | Eliminates path typing errors | ✅ Complete |
+| **UX** | Remove Tester button | 15 min | Completes registry management | ✅ Complete |
+| **UX** | Live progress indication | 30 min | Removes "is it working?" anxiety | ✅ Complete |
+| **UX** | TGZ label persistence | 5 min | Saves repetition in test sessions | ✅ Complete |
+| **UX** | Centred dialog positioning | 5 min | Prevents off-screen dialogs | ✅ Complete |
+| **UX** | Reduce log spam (15s → 2min) | 1 min | Cleaner logs | ✅ Complete |
+| **UX** | Retry button on failure | 5 min | Eliminates re-entry friction | ✅ Complete |
 
-**Total implementation time**: ~2.5 hours  
-**Total UX improvement**: Significant - addresses all major pain points in compilation workflow
+**Total implementation time**: ~2.7 hours  
+**Critical fixes**: 2 (timeout mismatch, RAW_ZIP cleanup)  
+**Total UX improvement**: Significant - addresses all major pain points + production issues
