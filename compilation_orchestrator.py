@@ -274,6 +274,60 @@ def compile_tp_package(
     return result
 
 
+def compile_tp_package_multi(
+    source_dir,
+    targets,
+    jira_key,
+    log_callback=None,
+    raw_zip_folder=None,
+    release_tgz_folder=None,
+    label="",
+):
+    """
+    Parallel multi-tester compilation.
+    
+    Fans out ZIP creation and polling to multiple testers concurrently,
+    without blocking the GUI. Each tester gets its own ZIP and polls
+    independently.
+    
+    Args:
+        source_dir         : Local path to the TP repository
+        targets            : List of (hostname, env) tuples — one per tester
+        jira_key           : JIRA issue key e.g. TSESSD-123
+        log_callback       : Optional callable(str) for GUI log panel
+        raw_zip_folder     : Override RAW_ZIP path from GUI (optional)
+        release_tgz_folder : Override RELEASE_TGZ path from GUI (optional)
+        label              : Optional label for TGZ filename
+    
+    Returns:
+        List of result dicts, one per tester, each with 'hostname' and 'env' keys added.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
+    def _one(hostname, env):
+        result = compile_tp_package(
+            source_dir=source_dir,
+            env=env,
+            jira_key=jira_key,
+            hostname=hostname,
+            log_callback=log_callback,
+            raw_zip_folder=raw_zip_folder,
+            release_tgz_folder=release_tgz_folder,
+            label=label,
+        )
+        result["hostname"] = hostname
+        result["env"] = env
+        return result
+    
+    with ThreadPoolExecutor(max_workers=len(targets)) as pool:
+        futures = {pool.submit(_one, h, e): (h, e) for h, e in targets}
+        results = []
+        for future in as_completed(futures):
+            results.append(future.result())
+    
+    return results
+
+
 # ─────────────────────────────────────────────
 # ENVIRONMENT → TESTER MAPPING  (informational)
 # ─────────────────────────────────────────────

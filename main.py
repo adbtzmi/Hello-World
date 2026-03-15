@@ -768,8 +768,8 @@ class SimpleGUI:
         self._compile_mode_lbl.grid(
             row=0, column=1, columnspan=2, sticky=tk.W, padx=5, pady=(6, 2))
 
-        # ── Row 1: Search + dropdown + Add button ──
-        ttk.Label(compile_frame, text="Select Tester:").grid(
+        # ── Row 1: Search + listbox + Add button ──
+        ttk.Label(compile_frame, text="Select Tester(s):").grid(
             row=1, column=0, sticky=tk.W, pady=3)
 
         tester_row = ttk.Frame(compile_frame)
@@ -782,18 +782,29 @@ class SimpleGUI:
         self._tester_search_entry.insert(0, "Search...")
         self._tester_search_entry.config(foreground="gray")
 
-        self.tester_combo_var = tk.StringVar()
-        self._tester_combo = ttk.Combobox(
-            tester_row, textvariable=self.tester_combo_var,
-            state="readonly", width=26)
-        self._tester_combo.pack(side=tk.LEFT, padx=(0, 4))
+        # Replace Combobox with Listbox for multi-select
+        listbox_frame = ttk.Frame(tester_row)
+        listbox_frame.pack(side=tk.LEFT, padx=(0, 4))
+        
+        self._tester_listbox = tk.Listbox(
+            listbox_frame, 
+            selectmode=tk.MULTIPLE,
+            height=4,
+            width=28,
+            exportselection=False
+        )
+        self._tester_listbox.pack(side=tk.LEFT)
+        
+        scrollbar = ttk.Scrollbar(listbox_frame, orient=tk.VERTICAL, command=self._tester_listbox.yview)
+        scrollbar.pack(side=tk.LEFT, fill=tk.Y)
+        self._tester_listbox.config(yscrollcommand=scrollbar.set)
 
         ttk.Button(
             tester_row, text="+ Add Tester",
             command=self._open_add_tester_dialog
         ).pack(side=tk.LEFT)
 
-        ttk.Label(compile_frame, text="Type to search, then select",
+        ttk.Label(compile_frame, text="Shift+Click to select multiple testers",
                   font=("Arial", 8), foreground="gray").grid(
             row=1, column=2, sticky=tk.W, padx=5)
 
@@ -828,7 +839,7 @@ class SimpleGUI:
 
         # ── Row 6: Compile button + live status ──
         self.compile_btn = ttk.Button(
-            compile_frame, text="Compile on Selected Tester",
+            compile_frame, text="Compile on Selected Tester(s)",
             command=self.trigger_compile_with_lock)
         self.compile_btn.grid(row=6, column=0, columnspan=2, pady=(10, 6))
         self.compile_status_var = tk.StringVar(value="")
@@ -838,19 +849,27 @@ class SimpleGUI:
 
         compile_frame.columnconfigure(1, weight=1)
 
-        # ── Wire up search + combo ──
+        # ── Wire up search + listbox ──
         def _search_changed(*_):
             q = self.tester_search_var.get().strip().lower()
             if q and q != "search...":
                 matches = [k for k in self._TESTER_REGISTRY if q in k.lower()]
             else:
                 matches = list(self._TESTER_REGISTRY.keys())
-            self._tester_combo["values"] = matches
-            if matches:
-                if self.tester_combo_var.get() not in matches:
-                    self._tester_combo.current(0)
-            else:
-                self.tester_combo_var.set("")
+            
+            # Remember current selections
+            current_selections = [self._tester_listbox.get(i) for i in self._tester_listbox.curselection()]
+            
+            # Update listbox
+            self._tester_listbox.delete(0, tk.END)
+            for item in matches:
+                self._tester_listbox.insert(tk.END, item)
+            
+            # Restore selections if they're still in the filtered list
+            for i, item in enumerate(matches):
+                if item in current_selections:
+                    self._tester_listbox.selection_set(i)
+            
             self._refresh_tester_mode()
 
         def _search_focus_in(event):
@@ -866,7 +885,7 @@ class SimpleGUI:
         self.tester_search_var.trace_add("write", _search_changed)
         self._tester_search_entry.bind("<FocusIn>",  _search_focus_in)
         self._tester_search_entry.bind("<FocusOut>", _search_focus_out)
-        self._tester_combo.bind("<<ComboboxSelected>>",
+        self._tester_listbox.bind("<<ListboxSelect>>",
                                 lambda e: self._refresh_tester_mode())
 
         # Populate dropdown and set initial state
@@ -1604,45 +1623,81 @@ Populate the template, leaving validation result sections for user to fill after
             self.log("[WARN] Could not save tester registry: " + str(e))
 
     def _refresh_tester_dropdown(self):
-        """Rebuild the combo values from the current registry."""
+        """Rebuild the listbox values from the current registry."""
         keys = list(self._TESTER_REGISTRY.keys())
-        self._tester_combo["values"] = keys
-        current = self.tester_combo_var.get()
-        if keys and current not in keys:
-            self._tester_combo.current(0)
+        
+        # Remember current selections
+        current_selections = [self._tester_listbox.get(i) for i in self._tester_listbox.curselection()]
+        
+        # Update listbox
+        self._tester_listbox.delete(0, tk.END)
+        for item in keys:
+            self._tester_listbox.insert(tk.END, item)
+        
+        # Restore selections or select first item
+        restored = False
+        for i, item in enumerate(keys):
+            if item in current_selections:
+                self._tester_listbox.selection_set(i)
+                restored = True
+        
+        if not restored and keys:
+            self._tester_listbox.selection_set(0)
+        
         self._refresh_tester_mode()
 
     def _refresh_tester_mode(self):
         """Update the mode badge whenever selection changes."""
-        selection = self.tester_combo_var.get()
-        if selection and selection in self._TESTER_REGISTRY:
-            hostname, env = self._TESTER_REGISTRY[selection]
-            self._compile_mode_var.set(
-                "Selected: " + hostname + "  |  Env: " + env
-            )
-            self._compile_mode_lbl.config(foreground="#1a6e1a")
-        else:
+        selections = self._tester_listbox.curselection()
+        if not selections:
             self._compile_mode_var.set("No tester selected")
             self._compile_mode_lbl.config(foreground="#cc0000")
+        elif len(selections) == 1:
+            idx = selections[0]
+            key = self._tester_listbox.get(idx)
+            if key in self._TESTER_REGISTRY:
+                hostname, env = self._TESTER_REGISTRY[key]
+                self._compile_mode_var.set(
+                    "Selected: " + hostname + "  |  Env: " + env
+                )
+                self._compile_mode_lbl.config(foreground="#1a6e1a")
+        else:
+            # Multiple testers selected
+            tester_names = []
+            for idx in selections:
+                key = self._tester_listbox.get(idx)
+                if key in self._TESTER_REGISTRY:
+                    hostname, env = self._TESTER_REGISTRY[key]
+                    tester_names.append(f"{hostname} ({env})")
+            self._compile_mode_var.set(
+                f"Multi-compile: {len(selections)} testers - " + ", ".join(tester_names)
+            )
+            self._compile_mode_lbl.config(foreground="#0066cc")
 
     def _resolve_tester(self):
         """
-        Returns (hostname, env) — single authoritative resolution point.
+        Returns list of (hostname, env) tuples — one per selected tester.
         Raises ValueError with clear message if nothing is selected.
         """
-        selection = self.tester_combo_var.get().strip()
-        if not selection:
+        selections = self._tester_listbox.curselection()
+        if not selections:
             raise ValueError(
                 "No tester selected.\n\n"
-                "Please select a tester from the dropdown, or click\n"
+                "Please select one or more testers from the list, or click\n"
                 "'+ Add Tester' to register a new one."
             )
-        if selection not in self._TESTER_REGISTRY:
-            raise ValueError(
-                "Tester not found in registry: '" + selection + "'\n"
-                "Please re-select from the dropdown."
-            )
-        return self._TESTER_REGISTRY[selection]
+        
+        targets = []
+        for idx in selections:
+            key = self._tester_listbox.get(idx)
+            if key not in self._TESTER_REGISTRY:
+                raise ValueError(
+                    "Tester not found in registry: '" + key + "'\n"
+                    "Please re-select from the list."
+                )
+            targets.append(self._TESTER_REGISTRY[key])
+        
+        return targets
 
     def _open_add_tester_dialog(self):
         """
@@ -1748,8 +1803,13 @@ Populate the template, leaving validation result sections for user to fill after
             self._TESTER_REGISTRY[key] = (hostname, env)
             self._save_tester_registry()
             self._refresh_tester_dropdown()
-            # Select the new tester
-            self.tester_combo_var.set(key)
+            # Select the new tester in listbox
+            for i in range(self._tester_listbox.size()):
+                if self._tester_listbox.get(i) == key:
+                    self._tester_listbox.selection_clear(0, tk.END)
+                    self._tester_listbox.selection_set(i)
+                    self._tester_listbox.see(i)
+                    break
             self._refresh_tester_mode()
             self.log("[Tester Added] " + key + " registered and selected.")
             dialog.destroy()
@@ -1805,10 +1865,10 @@ Populate the template, leaving validation result sections for user to fill after
             errors.append("RELEASE_TGZ Path is required")
 
         try:
-            hostname, env = self._resolve_tester()
+            targets = self._resolve_tester()  # Now returns list of (hostname, env) tuples
         except ValueError as e:
             errors.append(str(e))
-            hostname, env = "", ""
+            targets = []
 
         if errors:
             msg = "Cannot compile. Fix the following:\n\n" + "\n".join(
@@ -1832,24 +1892,52 @@ Populate the template, leaving validation result sections for user to fill after
         self.log("\n" + sep)
         self.log("  COMPILE TP PACKAGE")
         self.log("  JIRA Issue : " + issue_key)
-        self.log("  Tester     : " + hostname + " (" + env + ")")
+        
+        # Handle single or multiple testers
+        if len(targets) == 1:
+            hostname, env = targets[0]
+            self.log("  Tester     : " + hostname + " (" + env + ")")
+        else:
+            self.log(f"  Testers    : {len(targets)} parallel compilations")
+            for hostname, env in targets:
+                self.log(f"               - {hostname} ({env})")
+        
         self.log("  Label      : " + (label if label else "(none)"))
         self.log("  Repo Path  : " + repo_path)
         self.log("  RAW_ZIP    : " + raw_zip)
         self.log("  RELEASE    : " + release)
         self.log(sep)
 
-        result = orch.compile_tp_package(
-            source_dir=repo_path,
-            env=env,
-            jira_key=issue_key,
-            hostname=hostname,
-            label=label,
-            raw_zip_folder=raw_zip,
-            release_tgz_folder=release,
-            log_callback=self.log,
-        )
+        # Use multi-tester compilation if multiple targets selected
+        if len(targets) == 1:
+            # Single tester - use original flow
+            hostname, env = targets[0]
+            result = orch.compile_tp_package(
+                source_dir=repo_path,
+                env=env,
+                jira_key=issue_key,
+                hostname=hostname,
+                label=label,
+                raw_zip_folder=raw_zip,
+                release_tgz_folder=release,
+                log_callback=self.log,
+            )
+            self._handle_single_compile_result(result)
+        else:
+            # Multiple testers - use parallel compilation
+            results = orch.compile_tp_package_multi(
+                source_dir=repo_path,
+                targets=targets,
+                jira_key=issue_key,
+                label=label,
+                raw_zip_folder=raw_zip,
+                release_tgz_folder=release,
+                log_callback=self.log,
+            )
+            self._handle_multi_compile_results(results)
 
+    def _handle_single_compile_result(self, result):
+        """Handle result from single-tester compilation"""
         status  = result.get("status", "failed")
         detail  = result.get("detail", "Unknown error")
         elapsed = result.get("elapsed", 0)
@@ -1875,6 +1963,70 @@ Populate the template, leaving validation result sections for user to fill after
         else:
             self.compile_status_var.set("FAILED")
             self._show_compile_error_dialog("Compile Failed", detail, status)
+
+    def _handle_multi_compile_results(self, results):
+        """Handle results from multi-tester parallel compilation"""
+        success_count = sum(1 for r in results if r.get("status") == "success")
+        failed_count = sum(1 for r in results if r.get("status") == "failed")
+        timeout_count = sum(1 for r in results if r.get("status") == "timeout")
+        
+        self.log("\n" + "=" * 60)
+        self.log("  MULTI-TESTER COMPILATION RESULTS")
+        self.log("=" * 60)
+        
+        tgz_paths = []
+        for r in results:
+            hostname = r.get("hostname", "Unknown")
+            env = r.get("env", "Unknown")
+            status = r.get("status", "failed")
+            tag = f"{hostname} ({env})"
+            
+            if status == "success":
+                tgz_file = r.get("tgz_file", "")
+                tgz_path = r.get("tgz_path", "")
+                elapsed = r.get("elapsed", 0)
+                self.log(f"[OK] {tag}")
+                self.log(f"     TGZ: {tgz_file}")
+                self.log(f"     Time: {int(elapsed)}s")
+                tgz_paths.append(tgz_path)
+            elif status == "timeout":
+                detail = r.get("detail", "Timeout")
+                self.log(f"[TIMEOUT] {tag}")
+                self.log(f"          {detail}")
+            else:
+                detail = r.get("detail", "Unknown error")
+                self.log(f"[FAIL] {tag}")
+                self.log(f"       {detail}")
+        
+        self.log("=" * 60)
+        self.log(f"Summary: {success_count} success, {failed_count} failed, {timeout_count} timeout")
+        self.log("=" * 60)
+        
+        # Update status and show summary dialog
+        if success_count == len(results):
+            self.compile_status_var.set(f"All {len(results)} compilations succeeded")
+            messagebox.showinfo(
+                "Multi-Compile Success",
+                f"All {len(results)} testers compiled successfully!\n\n" +
+                "\n".join(f"✓ {os.path.basename(p)}" for p in tgz_paths)
+            )
+            # Save all TGZ paths
+            self.save_workflow_step("COMPILED_TGZ", "\n".join(tgz_paths))
+        elif success_count > 0:
+            self.compile_status_var.set(f"{success_count}/{len(results)} succeeded")
+            messagebox.showwarning(
+                "Partial Success",
+                f"{success_count} of {len(results)} compilations succeeded.\n"
+                f"{failed_count} failed, {timeout_count} timed out.\n\n"
+                "Check the log for details."
+            )
+        else:
+            self.compile_status_var.set("All compilations failed")
+            messagebox.showerror(
+                "Multi-Compile Failed",
+                f"All {len(results)} compilations failed.\n\n"
+                "Check the log for details."
+            )
 
     def _show_compile_error_dialog(self, title, detail, status):
         """
