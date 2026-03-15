@@ -1665,6 +1665,13 @@ Populate the template, leaving validation result sections for user to fill after
                 self.log(f"✓ Tester registry synced to {shared_path}")
             except Exception as e:
                 self.log(f"[WARN] Could not sync to shared folder: {e}")
+                messagebox.showwarning(
+                    "Shared Folder Sync Failed",
+                    "Tester saved locally but could not write to shared folder:\n\n"
+                    + str(e) + "\n\n"
+                    "The watcher will not see this tester until the shared\n"
+                    "folder is accessible. Re-save via Remove + Add Tester."
+                )
         except Exception as e:
             self.log("[WARN] Could not save tester registry: " + str(e))
 
@@ -1838,9 +1845,12 @@ Populate the template, leaving validation result sections for user to fill after
         ttk.Label(dialog, text="Environment:").grid(
             row=6, column=0, sticky=tk.W, **pad)
         env_var = tk.StringVar(value="ABIT")
+        # Derive ENV list from registry for consistency
+        from watcher.watcher_config import TESTER_REGISTRY
+        env_values = list(TESTER_REGISTRY.keys()) if TESTER_REGISTRY else ["ABIT", "SFN2", "CNFG"]
         env_combo = ttk.Combobox(
             dialog, textvariable=env_var,
-            values=["ABIT", "SFN2", "CNFG"],
+            values=env_values,
             state="readonly", width=10)
         env_combo.grid(row=6, column=1, sticky=tk.W, **pad)
 

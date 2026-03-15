@@ -84,6 +84,8 @@ def _load_registry():
         print("[WARN] Falling back to hardcoded defaults")
         return defaults
 
+# NOTE: loaded once at startup. Restart the watcher after adding
+# a new tester via the BENTO GUI for changes to take effect.
 TESTER_REGISTRY = _load_registry()
 
 # ================================================================

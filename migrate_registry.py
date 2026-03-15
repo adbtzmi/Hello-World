@@ -52,6 +52,19 @@ def migrate():
                 "repo_dir":  repo_dir,
                 "build_cmd": build_cmd,
             }
+        elif isinstance(val, dict):
+            # Already new dict format - pass through directly
+            hostname  = val.get("hostname", "")
+            env       = val.get("env", "")
+            repo_dir  = val.get("repo_dir", r"C:\xi\adv_ibir_master")
+            build_cmd = val.get("build_cmd", "make release")
+            print(f"  {key}: already in new format")
+            new_format[key] = {
+                "hostname":  hostname,
+                "env":       env,
+                "repo_dir":  repo_dir,
+                "build_cmd": build_cmd,
+            }
     
     # Write to shared folder
     try:
