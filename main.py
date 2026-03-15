@@ -1844,10 +1844,10 @@ Populate the template, leaving validation result sections for user to fill after
 
         ttk.Label(dialog, text="Environment:").grid(
             row=6, column=0, sticky=tk.W, **pad)
-        env_var = tk.StringVar(value="ABIT")
         # Derive ENV list from registry for consistency
         from watcher.watcher_config import TESTER_REGISTRY
         env_values = list(TESTER_REGISTRY.keys()) if TESTER_REGISTRY else ["ABIT", "SFN2", "CNFG"]
+        env_var = tk.StringVar(value=env_values[0] if env_values else "")
         env_combo = ttk.Combobox(
             dialog, textvariable=env_var,
             values=env_values,
