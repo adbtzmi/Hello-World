@@ -2,19 +2,19 @@
   "IBIR-0383 (ABIT)": [
     "IBIR-0383",
     "ABIT",
-    "C:\\xi\\adv_ibir_master",
+    "C:\\BENTO\\adv_ibir_master",
     "make release"
   ],
   "MPT3HVM-0156 (SFN2)": [
     "MPT3HVM-0156",
     "SFN2",
-    "C:\\xi\\adv_ibir_master",
+    "C:\\BENTO\\adv_ibir_master",
     "make release"
   ],
   "CTOWTST-0031 (CNFG)": [
     "CTOWTST-0031",
     "CNFG",
-    "P:\\temp\\BENTO\\adv_ibir_master",
+    "C:\\BENTO\\adv_ibir_master",
     "make release supermicro"
   ]
 }
