@@ -14,7 +14,7 @@
   "CTOWTST-0031 (CNFG)": [
     "CTOWTST-0031",
     "CNFG",
-    "C:\\SK\\adv_ibir_master",
-    "make release_supermicro"
+    "P:\\temp\\BENTO\\adv_ibir_master",
+    "make release supermicro"
   ]
 }
