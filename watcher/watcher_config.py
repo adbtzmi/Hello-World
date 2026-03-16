@@ -80,7 +80,7 @@ def _load_registry():
             # File doesn't exist yet - return defaults
             return defaults
     except Exception as e:
-        print(f"[WARN] Could not load tester registry from {_REGISTRY_PATH}: {e}")
+        print("[WARN] Could not load tester registry from " + _REGISTRY_PATH + ": " + str(e))
         print("[WARN] Falling back to hardcoded defaults")
         return defaults
 
