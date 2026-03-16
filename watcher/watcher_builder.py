@@ -25,6 +25,7 @@ from datetime import datetime
 from watcher_config import (
     BUILD_TIMEOUT_SECONDS,
     POST_BUILD_SLEEP_SECONDS,
+    PRE_BUILD_SLEEP_SECONDS,
     LOG_DIR,
 )
 
@@ -134,6 +135,18 @@ def run_build(repo_dir, build_cmd, zip_name, logger):
     logger.info("Build log  : " + build_log)
     logger.info("Timeout    : " + str(BUILD_TIMEOUT_SECONDS) + "s")
 
+    # Pre-build memory cleanup
+    # Free Python references and sleep to let OS reclaim RAM from ZIP
+    # extraction before the compiler + tar start competing for memory.
+    logger.info("Pre-build cleanup: gc.collect() ...")
+    gc.collect()
+    logger.info(
+        "Pre-build cleanup: sleeping " + str(PRE_BUILD_SLEEP_SECONDS)
+        + "s to free RAM before build ..."
+    )
+    time.sleep(PRE_BUILD_SLEEP_SECONDS)
+    logger.info("Pre-build cleanup done. Starting build ...")
+
     try:
         with open(build_log, "w") as log_f:
             log_f.write("BENTO Build Log\n")
@@ -184,9 +197,10 @@ def cleanup_memory(logger):
     """
     Force Python GC and sleep to let OS reclaim RAM after make release.
 
-    Critical: without this, OS is still OOM when copy starts and kills it.
+    Called both BEFORE build (in run_build) and AFTER build (in process_zip).
+    Critical: without post-build cleanup, OS is still OOM when copy starts.
     gc.collect() drops Python references. Sleep gives Windows memory
-    manager time to reclaim pages freed by gcc/ld processes.
+    manager time to reclaim pages freed by gcc/ld/tar processes.
     """
     logger.info("Post-build cleanup: gc.collect() ...")
     gc.collect()

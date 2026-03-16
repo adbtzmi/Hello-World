@@ -103,6 +103,12 @@ LOCK_MAX_AGE_SECONDS    = 1800   # stale lock expiry (match build timeout)
 # Gives the OS time to reclaim RAM freed by the compiler.
 POST_BUILD_SLEEP_SECONDS = 10
 
+# Seconds to sleep BEFORE build starts.
+# Gives the OS time to reclaim RAM freed by ZIP extraction before
+# the compiler and tar start competing for memory.
+# Increase this if tar is being OOM-killed during make release_supermicro.
+PRE_BUILD_SLEEP_SECONDS  = 15
+
 # Chunk size for binary TGZ copy (4 MB)
 COPY_CHUNK_BYTES = 4 * 1024 * 1024
 
