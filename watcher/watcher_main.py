@@ -282,6 +282,9 @@ def watch(env, logger):
                 + " pre-existing ZIP(s) in RAW_ZIP folder."
             )
 
+    # Resolve this tester's config once — env never changes during watcher lifetime
+    cfg = TESTER_REGISTRY[env]
+
     heartbeat_count = 0
     HEARTBEAT_EVERY  = 60    # log "still watching" every 60 polls = 1 hour (at 60s/poll)
 

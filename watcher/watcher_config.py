@@ -57,7 +57,7 @@ def _load_registry():
             "hostname":  "CTOWTST-0031",
             "env":       "CNFG",
             "repo_dir":  r"C:\xi\adv_ibir_master",
-            "build_cmd": "make release",
+            "build_cmd": "make release_supermicro",
         },
     }
     
