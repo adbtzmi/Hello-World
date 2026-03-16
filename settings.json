@@ -12,5 +12,8 @@
   },
   "settings": {
     "timeout": 300
+  },
+  "compile": {
+    "last_tgz_label": ""
   }
 }

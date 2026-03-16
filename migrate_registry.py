@@ -40,8 +40,9 @@ def migrate():
                 # Old format - add defaults
                 hostname, env = val
                 repo_dir = r"C:\xi\adv_ibir_master"
-                build_cmd = "make release"
-                print(f"  Migrating {key}: added default repo_dir and build_cmd")
+                # CNFG uses a different build target
+                build_cmd = "make release_supermicro" if env.upper() == "CNFG" else "make release"
+                print(f"  Migrating {key}: added default repo_dir and build_cmd ({build_cmd})")
             else:
                 print(f"  ⚠ Skipping invalid entry: {key}")
                 continue
