@@ -44,19 +44,19 @@ def _load_registry():
         "ABIT": {
             "hostname":  "IBIR-0383",
             "env":       "ABIT",
-            "repo_dir":  r"C:\xi\adv_ibir_master",
+            "repo_dir":  r"C:\BENTO\adv_ibir_master",
             "build_cmd": "make release",
         },
         "SFN2": {
             "hostname":  "MPT3HVM-0156",
             "env":       "SFN2",
-            "repo_dir":  r"C:\xi\adv_ibir_master",
+            "repo_dir":  r"C:\BENTO\adv_ibir_master",
             "build_cmd": "make release",
         },
         "CNFG": {
             "hostname":  "CTOWTST-0031",
             "env":       "CNFG",
-            "repo_dir":  r"C:\xi\adv_ibir_master",
+            "repo_dir":  r"C:\BENTO\adv_ibir_master",
             "build_cmd": "make release_supermicro",
         },
     }

@@ -426,7 +426,7 @@ def main():
         jira_key=args.jira_key,
         hostname=args.hostname,
     )
-
+    
     print(f"\n{'='*60}")
     print(f"  Result:  {result['status'].upper()}")
     if result.get("tgz_file"):

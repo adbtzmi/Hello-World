@@ -1612,9 +1612,9 @@ Populate the template, leaving validation result sections for user to fill after
     # ================================================================
 
     _DEFAULT_TESTERS = {
-        "IBIR-0383 (ABIT)":    ("IBIR-0383",    "ABIT", r"C:\xi\adv_ibir_master", "make release"),
-        "MPT3HVM-0156 (SFN2)": ("MPT3HVM-0156", "SFN2", r"C:\xi\adv_ibir_master", "make release"),
-        "CTOWTST-0031 (CNFG)": ("CTOWTST-0031", "CNFG", r"C:\xi\adv_ibir_master", "make release"),
+        "IBIR-0383 (ABIT)":    ("IBIR-0383",    "ABIT", r"C:\BENTO\adv_ibir_master", "make release"),
+        "MPT3HVM-0156 (SFN2)": ("MPT3HVM-0156", "SFN2", r"C:\BENTO\adv_ibir_master", "make release"),
+        "CTOWTST-0031 (CNFG)": ("CTOWTST-0031", "CNFG", r"C:\BENTO\adv_ibir_master", "make release_supermicro"),
     }
 
     def _load_tester_registry(self):
@@ -1632,7 +1632,7 @@ Populate the template, leaving validation result sections for user to fill after
                             self._TESTER_REGISTRY[key] = tuple(val)
                         elif len(val) == 2:
                             # Migrate old format: add default repo_dir and build_cmd
-                            self._TESTER_REGISTRY[key] = tuple(val) + (r"C:\xi\adv_ibir_master", "make release")
+                            self._TESTER_REGISTRY[key] = tuple(val) + (r"C:\BENTO\adv_ibir_master", "make release")
         except Exception as e:
             self.log("[WARN] Could not load tester registry: " + str(e))
 
@@ -1856,7 +1856,7 @@ Populate the template, leaving validation result sections for user to fill after
 
         ttk.Label(dialog, text="Repo Path:").grid(
             row=7, column=0, sticky=tk.W, **pad)
-        repo_dir_var = tk.StringVar(value=r"C:\xi\adv_ibir_master")
+        repo_dir_var = tk.StringVar(value=r"C:\BENTO\adv_ibir_master")
         repo_frame = ttk.Frame(dialog)
         repo_frame.grid(row=7, column=1, sticky=tk.W, **pad)
         ttk.Entry(repo_frame, textvariable=repo_dir_var, width=32).pack(side=tk.LEFT)
