@@ -988,30 +988,56 @@ class SimpleGUI:
         tab = ttk.Frame(self.notebook, padding="10")
         self.notebook.add(tab, text="💻 Implementation")
         
-        ttk.Label(tab, text="Generate Implementation Plan", font=('Arial', 14, 'bold')).grid(row=0, column=0, columnspan=3, pady=10)
+        # ── SUB-NOTEBOOK ──
+        impl_notebook = ttk.Notebook(tab)
+        impl_notebook.pack(fill=tk.BOTH, expand=True)
+
+        # ==========================================
+        # SUB-TAB 1: AI Plan Generator
+        # ==========================================
+        ai_tab = ttk.Frame(impl_notebook, padding="10")
+        impl_notebook.add(ai_tab, text="🧠 AI Plan Generator")
+        
+        ttk.Label(ai_tab, text="Generate Implementation Plan", font=('Arial', 14, 'bold')).grid(row=0, column=0, columnspan=3, pady=10)
         
         # JIRA Issue Key (auto-populated from home tab)
-        ttk.Label(tab, text="JIRA Issue Key:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        ttk.Label(ai_tab, text="JIRA Issue Key:").grid(row=1, column=0, sticky=tk.W, pady=5)
         self.impl_issue_var = tk.StringVar(value=f"{self.jira_project_var.get()}-")
-        ttk.Entry(tab, textvariable=self.impl_issue_var, width=50).grid(row=1, column=1, pady=5, sticky=(tk.W, tk.E))
-        ttk.Label(tab, text="(Auto-populated from Home tab)", font=('Arial', 8), foreground='gray').grid(row=1, column=2, sticky=tk.W, padx=5)
+        ttk.Entry(ai_tab, textvariable=self.impl_issue_var, width=50).grid(row=1, column=1, pady=5, sticky=(tk.W, tk.E))
+        ttk.Label(ai_tab, text="(Auto-populated from Home tab)", font=('Arial', 8), foreground='gray').grid(row=1, column=2, sticky=tk.W, padx=5)
         
         # Repository path (local cloned repo)
-        ttk.Label(tab, text="Local Repo Path:").grid(row=2, column=0, sticky=tk.W, pady=5)
-        repo_path_frame = ttk.Frame(tab)
+        ttk.Label(ai_tab, text="Local Repo Path:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        repo_path_frame = ttk.Frame(ai_tab)
         repo_path_frame.grid(row=2, column=1, pady=5, sticky=(tk.W, tk.E))
         self.impl_repo_var = tk.StringVar()
         ttk.Entry(repo_path_frame, textvariable=self.impl_repo_var, width=47).pack(side=tk.LEFT)
         ttk.Button(repo_path_frame, text="📁", width=3,
                    command=lambda: self._browse_directory(self.impl_repo_var, "Select Repository Folder")).pack(side=tk.LEFT, padx=(2, 0))
-        ttk.Label(tab, text="(Path to cloned repository for AI indexing)", font=('Arial', 8), foreground='gray').grid(row=2, column=2, sticky=tk.W, padx=5)
+        ttk.Label(ai_tab, text="(Path to cloned repository for AI indexing)", font=('Arial', 8), foreground='gray').grid(row=2, column=2, sticky=tk.W, padx=5)
         
         # Generate button
-        ttk.Button(tab, text="Generate Implementation Plan", command=self.generate_implementation_only_with_lock).grid(row=3, column=0, columnspan=3, pady=10)
+        ttk.Button(ai_tab, text="Generate Implementation Plan", command=self.generate_implementation_only_with_lock).grid(row=3, column=0, columnspan=3, pady=10)
+
+        # ── Implementation Plan Result ──────────────────────────────
+        result_frame = ttk.LabelFrame(ai_tab, text="Implementation Plan", padding="10")
+        result_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+
+        self.impl_result_text = scrolledtext.ScrolledText(result_frame, height=25, width=70, wrap=tk.WORD)
+        self.impl_result_text.pack(fill=tk.BOTH, expand=True)
+
+        ai_tab.columnconfigure(1, weight=1)
+        ai_tab.rowconfigure(4, weight=1)
+
+        # ==========================================
+        # SUB-TAB 2: TP Compilation & Health
+        # ==========================================
+        compile_subtab = ttk.Frame(impl_notebook, padding="10")
+        impl_notebook.add(compile_subtab, text="📦 TP Compilation & Health")
 
         # ── Compile TP Package Section ──────────────────────────────
-        compile_frame = ttk.LabelFrame(tab, text="Compile TP Package", padding="10")
-        compile_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+        compile_frame = ttk.LabelFrame(compile_subtab, text="Compile TP Package", padding="10")
+        compile_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=5)
 
         # ── TESTER REGISTRY ──
         # Persisted to bento_testers.json next to main.py.
@@ -1168,28 +1194,20 @@ class SimpleGUI:
         # Populate dropdown and set initial state
         self._refresh_tester_dropdown()
 
-        # ── Implementation Plan Result ──────────────────────────────
-        result_frame = ttk.LabelFrame(tab, text="Implementation Plan", padding="10")
-        result_frame.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
-
-        self.impl_result_text = scrolledtext.ScrolledText(result_frame, height=15, width=70, wrap=tk.WORD)
-        self.impl_result_text.pack(fill=tk.BOTH, expand=True)
-
-        # ── Watcher Health Monitor — wrapped in grid row 6 ──────────
-        health_wrapper = ttk.Frame(tab)
-        health_wrapper.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(5, 0))
+        # ── Watcher Health Monitor — wrapped in grid row 1 ──────────
+        health_wrapper = ttk.Frame(compile_subtab)
+        health_wrapper.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
         health_wrapper.columnconfigure(0, weight=1)
         self.build_watcher_health_panel(health_wrapper)
 
-        # ── Compile History — wrapped in grid row 7 ──────────────────
-        history_wrapper = ttk.Frame(tab)
-        history_wrapper.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        # ── Compile History — wrapped in grid row 2 ──────────────────
+        history_wrapper = ttk.Frame(compile_subtab)
+        history_wrapper.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         history_wrapper.columnconfigure(0, weight=1)
         self._build_compile_history_section(history_wrapper)
 
-        tab.columnconfigure(1, weight=1)
-        tab.rowconfigure(5, weight=1)
-        tab.rowconfigure(7, weight=1)
+        compile_subtab.columnconfigure(0, weight=1)
+        compile_subtab.rowconfigure(2, weight=1)
     
     # Individual step methods with GUI locking wrappers
     def fetch_issue_only_with_lock(self):
