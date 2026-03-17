@@ -2328,6 +2328,9 @@ Populate the template, leaving validation result sections for user to fill after
         self.compile_status_var.set("Compiling...")
         self.compile_btn.config(state="disabled")
 
+        # Save config on main thread before thread starts (widget access not allowed in thread)
+        self.save_config()
+
         # Open live status monitor for single-tester compiles
         if len(targets) == 1:
             hostname, env = targets[0]
@@ -2358,9 +2361,6 @@ Populate the template, leaving validation result sections for user to fill after
         All parameters pre-resolved on main thread — no widget access here.
         """
         import os
-
-        # Save the label for next session
-        self.save_config()
 
         # ── Pre-flight checks ──
         errors = []
@@ -2641,13 +2641,21 @@ Populate the template, leaving validation result sections for user to fill after
                 self.log(f"     Time: {int(elapsed)}s")
                 tgz_paths.append(tgz_path)
             elif status == "timeout":
-                detail = r.get("detail", "Timeout")
+                detail   = r.get("detail", "Timeout")
+                zip_file = r.get("zip_file", "")
                 self.log(f"[TIMEOUT] {tag}")
                 self.log(f"          {detail}")
+                if zip_file:
+                    self.log("          Build log on tester: C:\\BENTO\\logs\\build_"
+                             + os.path.splitext(zip_file)[0] + ".log")
             else:
-                detail = r.get("detail", "Unknown error")
+                detail   = r.get("detail", "Unknown error")
+                zip_file = r.get("zip_file", "")
                 self.log(f"[FAIL] {tag}")
                 self.log(f"       {detail}")
+                if zip_file:
+                    self.log("       Build log on tester: C:\\BENTO\\logs\\build_"
+                             + os.path.splitext(zip_file)[0] + ".log")
         
         self.log("=" * 60)
         self.log(f"Summary: {success_count} success, {failed_count} failed, {timeout_count} timeout")

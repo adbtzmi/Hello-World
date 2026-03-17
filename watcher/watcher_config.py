@@ -109,6 +109,11 @@ POST_BUILD_SLEEP_SECONDS = 10
 # Increase this if tar is being OOM-killed during make release_supermicro.
 PRE_BUILD_SLEEP_SECONDS  = 15
 
+# How long to keep completed .bento_status sidecar files in RAW_ZIP.
+# Files older than this are deleted on watcher startup to prevent accumulation.
+# Default: 7 days. Set to 0 to disable cleanup.
+STATUS_RETENTION_SECONDS = 7 * 24 * 3600   # 7 days
+
 # Chunk size for binary TGZ copy (4 MB)
 COPY_CHUNK_BYTES = 4 * 1024 * 1024
 

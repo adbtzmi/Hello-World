@@ -68,6 +68,7 @@ from watcher_config import (
     TESTER_REGISTRY,
     POLL_INTERVAL_SECONDS,
     LOCK_MAX_AGE_SECONDS,
+    STATUS_RETENTION_SECONDS,
     LOG_DIR,
     parse_jira_key_from_zip,
     zip_belongs_to_tester,
@@ -273,6 +274,75 @@ def cleanup_stale_status_on_startup(logger, raw_zip_folder):
         )
     else:
         logger.info("Startup: no orphaned status files found.")
+
+
+def cleanup_old_status_files(logger, raw_zip_folder):
+    """
+    Delete completed .bento_status files older than STATUS_RETENTION_SECONDS.
+
+    WHY THIS EXISTS:
+        The orchestrator intentionally keeps .bento_status files after a
+        successful build so the BENTO GUI health panel can always read the
+        latest result. Without periodic cleanup, these files accumulate
+        indefinitely in RAW_ZIP (one per build).
+
+    RETENTION POLICY:
+        Files with status 'success', 'failed', or 'timeout' older than
+        STATUS_RETENTION_SECONDS (default 7 days) are deleted.
+        Files with status 'in_progress' or 'pending' are never deleted here
+        — those are handled by cleanup_stale_status_on_startup().
+
+    Args:
+        logger         : standard Python logger
+        raw_zip_folder : path to scan for .bento_status files
+    """
+    if STATUS_RETENTION_SECONDS <= 0:
+        return   # cleanup disabled
+    if not os.path.isdir(raw_zip_folder):
+        return
+
+    deleted_count = 0
+    now = time.time()
+
+    try:
+        for fname in os.listdir(raw_zip_folder):
+            if not fname.endswith(".bento_status"):
+                continue
+
+            status_path = os.path.join(raw_zip_folder, fname)
+            try:
+                age = now - os.path.getmtime(status_path)
+                if age <= STATUS_RETENTION_SECONDS:
+                    continue   # still within retention window
+
+                with open(status_path, "r") as sf:
+                    data = json.load(sf)
+
+                state = data.get("status", "unknown")
+                if state in ("in_progress", "pending"):
+                    continue   # let stale-status cleanup handle these
+
+                os.remove(status_path)
+                deleted_count += 1
+                logger.info(
+                    "Startup: deleted old status file "
+                    + fname + " (age=" + str(int(age // 86400)) + "d, status=" + state + ")"
+                )
+
+            except Exception as e:
+                logger.warning(
+                    "Startup: could not process status file "
+                    + fname + ": " + str(e)
+                )
+
+    except OSError as e:
+        logger.warning("Startup: could not scan for old status files: " + str(e))
+
+    if deleted_count > 0:
+        logger.info(
+            "Startup: deleted " + str(deleted_count)
+            + " old status file(s) (retention=" + str(STATUS_RETENTION_SECONDS // 86400) + "d)."
+        )
 
 
 # ================================================================
@@ -530,6 +600,9 @@ def watch(env, logger):
 
     # [P8] Reset orphaned in_progress status files left by a killed watcher
     cleanup_stale_status_on_startup(logger, RAW_ZIP_FOLDER)
+
+    # Delete completed status files older than STATUS_RETENTION_SECONDS (default 7 days)
+    cleanup_old_status_files(logger, RAW_ZIP_FOLDER)
 
     logger.info(
         "Watching " + RAW_ZIP_FOLDER
