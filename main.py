@@ -762,6 +762,11 @@ class SimpleGUI:
         ).pack(anchor="e", padx=5, pady=3)
 
         def _refresh():
+            try:
+                if not panel.winfo_exists():
+                    return   # widget destroyed — stop timer
+            except Exception:
+                return
             raw_zip_folder     = self.raw_zip_var.get().strip()     if hasattr(self, "raw_zip_var")     else r"P:\temp\BENTO\RAW_ZIP"
             release_tgz_folder = self.release_tgz_var.get().strip() if hasattr(self, "release_tgz_var") else r"P:\temp\BENTO\RELEASE_TGZ"
             repo_dir           = r"C:\BENTO\adv_ibir_master"
@@ -890,7 +895,8 @@ class SimpleGUI:
         ttk.Button(mon_win, text="Close",
                    command=mon_win.destroy).pack(pady=12)
 
-        self._status_monitor_active = True
+        # Use a mutable container so closure can modify it without instance var collision
+        active = [True]
         start_time = time.time()
 
         colour_map = {
@@ -909,7 +915,12 @@ class SimpleGUI:
         }
 
         def _poll():
-            if not self._status_monitor_active:
+            try:
+                if not mon_win.winfo_exists():
+                    return   # window destroyed — stop timer
+            except Exception:
+                return
+            if not active[0]:
                 return
             elapsed = int(time.time() - start_time)
             elapsed_var.set("Elapsed: " + str(elapsed) + "s")
@@ -950,7 +961,7 @@ class SimpleGUI:
             mon_win.after(3000, _poll)
 
         def _on_close():
-            self._status_monitor_active = False
+            active[0] = False
             mon_win.destroy()
 
         mon_win.protocol("WM_DELETE_WINDOW", _on_close)
@@ -997,6 +1008,11 @@ class SimpleGUI:
                          "start_time": None, "running": False}
 
         def _tick():
+            try:
+                if not status_win.winfo_exists():
+                    return   # window destroyed — stop timer
+            except Exception:
+                return
             for key, row in rows.items():
                 if row["start_time"] and row.get("running", False):
                     elapsed = int(time.time() - row["start_time"])
@@ -2299,31 +2315,43 @@ Populate the template, leaving validation result sections for user to fill after
     def trigger_compile_with_lock(self):
         """Lock GUI and run compile in background thread."""
         import threading
+
+        # ── Resolve tester on main thread (tkinter widget access) ──
+        try:
+            targets = self._resolve_tester()
+        except ValueError as e:
+            messagebox.showerror("No Tester Selected", str(e))
+            return
+
+        # ── Collect all widget values on main thread ──
+        issue_key = self.impl_issue_var.get().strip().upper()
+        repo_path = self.impl_repo_var.get().strip()
+        raw_zip   = self.raw_zip_var.get().strip()
+        release   = self.release_tgz_var.get().strip()
+        label     = self.tgz_label_var.get().strip()
+
         self.lock_gui()
         self.compile_status_var.set("Compiling...")
         self.compile_btn.config(state="disabled")
 
         # Open live status monitor for single-tester compiles
-        # (multi-tester uses the badge window instead)
-        try:
-            targets = self._resolve_tester()
-            if len(targets) == 1:
-                hostname, env = targets[0]
-                issue_key = self.impl_issue_var.get().strip().upper()
-                raw_zip   = self.raw_zip_var.get().strip()
-                if issue_key and raw_zip:
-                    self.root.after(100, lambda: self.open_build_status_monitor(
-                        issue_key, hostname, env, raw_zip))
-        except Exception:
-            pass  # non-fatal — compile still proceeds
+        if len(targets) == 1:
+            hostname, env = targets[0]
+            if issue_key and raw_zip:
+                self.root.after(100, lambda: self.open_build_status_monitor(
+                    issue_key, hostname, env, raw_zip))
 
-        t = threading.Thread(target=self._run_compile_thread, daemon=True)
+        t = threading.Thread(
+            target=self._run_compile_thread,
+            args=(targets, issue_key, repo_path, raw_zip, release, label),
+            daemon=True
+        )
         t.start()
 
-    def _run_compile_thread(self):
+    def _run_compile_thread(self, targets, issue_key, repo_path, raw_zip, release, label):
         """Background thread: runs compile and updates status on completion."""
         try:
-            self._run_compile()
+            self._run_compile(targets, issue_key, repo_path, raw_zip, release, label)
         except Exception as e:
             self.log(f"[Compile error] {str(e)}")
             self.compile_status_var.set("Error - check log")
@@ -2331,15 +2359,11 @@ Populate the template, leaving validation result sections for user to fill after
             self.unlock_gui()
             self.compile_btn.config(state="normal")
 
-    def _run_compile(self):
-        """Main compile logic called from background thread."""
+    def _run_compile(self, targets, issue_key, repo_path, raw_zip, release, label):
+        """Main compile logic called from background thread.
+        All parameters pre-resolved on main thread — no widget access here.
+        """
         import os
-
-        issue_key = self.impl_issue_var.get().strip().upper()
-        repo_path = self.impl_repo_var.get().strip()
-        raw_zip   = self.raw_zip_var.get().strip()
-        release   = self.release_tgz_var.get().strip()
-        label     = self.tgz_label_var.get().strip()
 
         # Save the label for next session
         self.save_config()
@@ -2363,11 +2387,8 @@ Populate the template, leaving validation result sections for user to fill after
             errors.append("RELEASE_TGZ folder not accessible: " + release +
                          "\n    Check that the P: drive is mapped on this machine")
 
-        try:
-            targets = self._resolve_tester()  # Now returns list of (hostname, env) tuples
-        except ValueError as e:
-            errors.append(str(e))
-            targets = []
+        if not targets:
+            errors.append("No tester selected.")
 
         if errors:
             msg = "Cannot compile. Fix the following:\n\n" + "\n".join(
@@ -2515,18 +2536,26 @@ Populate the template, leaving validation result sections for user to fill after
         scroll_y.pack(side=tk.LEFT, fill=tk.Y)
 
         def _load():
-            tree.delete(*tree.get_children())
             release_root = (self.release_tgz_var.get().strip()
                             if hasattr(self, "release_tgz_var")
                             else r"P:\temp\BENTO\RELEASE_TGZ")
-            pattern = os.path.join(release_root, "**", "build_info_*.txt")
-            files   = glob.glob(pattern, recursive=True)
-            files.sort(key=os.path.getmtime, reverse=True)
-            for i, fpath in enumerate(files):
-                row = _parse(fpath)
-                if row:
-                    tree.insert("", tk.END, values=row,
-                                tags=("even" if i % 2 == 0 else "odd",))
+
+            def _fetch():
+                pattern = os.path.join(release_root, "**", "build_info_*.txt")
+                files   = glob.glob(pattern, recursive=True)
+                files.sort(key=os.path.getmtime, reverse=True)
+                # Push results back to main thread
+                self.root.after(0, lambda: _populate(files))
+
+            def _populate(files):
+                tree.delete(*tree.get_children())
+                for i, fpath in enumerate(files):
+                    row = _parse(fpath)
+                    if row:
+                        tree.insert("", tk.END, values=row,
+                                    tags=("even" if i % 2 == 0 else "odd",))
+
+            threading.Thread(target=_fetch, daemon=True).start()
 
         def _parse(fpath):
             data = {}
@@ -3099,12 +3128,15 @@ Step-by-step guide for manual review and additional changes.
             self.log("✓ Debug mode DISABLED")
     
     def log(self, message):
+        """Thread-safe log — routes to main thread via root.after()."""
+        self.root.after(0, lambda m=message: self._log_safe(m))
+
+    def _log_safe(self, message):
+        """Actual log write — must only be called from main thread."""
         self.log_text.insert(tk.END, f"{message}\n")
         self.log_text.see(tk.END)
-        self.root.update()
         # Also write to log file
         if hasattr(self, 'file_logger') and self.file_logger:
-            # Strip emoji/special chars for cleaner log file, determine log level
             clean_msg = str(message).strip()
             if '✗' in clean_msg or 'Error' in clean_msg or 'FAILED' in clean_msg:
                 self.file_logger.error(clean_msg)
