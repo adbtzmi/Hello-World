@@ -235,7 +235,6 @@ def wait_for_build(zip_path, logger, log_callback=None, release_tgz_folder=None)
                     # Clean up ZIP and status file after successful compile
                     try:
                         os.remove(zip_path)
-                        os.remove(zip_path + ".bento_status")
                         _log(logger, f"✓ Cleaned up {os.path.basename(zip_path)}", log_callback)
                     except Exception as e:
                         # Non-fatal — share might not allow delete, or files already gone
