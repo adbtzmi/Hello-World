@@ -7,6 +7,7 @@ Provides GUI for credential entry and dropdown selections
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext, simpledialog
 import threading
+import time
 import sys
 import os
 import json
@@ -726,6 +727,262 @@ class SimpleGUI:
         tab.columnconfigure(1, weight=1)
         tab.rowconfigure(4, weight=1)
     
+    # ================================================================
+    # WATCHER HEALTH MONITOR
+    # ================================================================
+    def build_watcher_health_panel(self, parent_frame):
+        """
+        Watcher Health Monitor panel.
+        Shows live status of RAW_ZIP, RELEASE_TGZ, watcher lock, last ZIP status.
+        Auto-refreshes every 30 seconds.
+        """
+        panel = ttk.LabelFrame(parent_frame, text="🔍 Watcher Health Monitor", padding=8)
+        panel.pack(fill=tk.X, padx=10, pady=5)
+
+        rows = {}
+
+        def _add_row(label_text, default="Checking..."):
+            row = ttk.Frame(panel)
+            row.pack(fill=tk.X, pady=2)
+            ttk.Label(row, text=label_text, width=28, anchor="w",
+                      font=("Arial", 9, "bold")).pack(side=tk.LEFT)
+            val_lbl = ttk.Label(row, text=default, anchor="w", foreground="gray")
+            val_lbl.pack(side=tk.LEFT)
+            return val_lbl
+
+        rows["raw_zip"]     = _add_row("📂 RAW_ZIP Folder:")
+        rows["release_tgz"] = _add_row("📂 RELEASE_TGZ Folder:")
+        rows["watcher"]     = _add_row("🤖 Watcher Process:")
+        rows["last_zip"]    = _add_row("📦 Last ZIP Seen:")
+        rows["last_status"] = _add_row("📊 Last Build Status:")
+
+        ttk.Button(
+            panel, text="🔄 Refresh Now",
+            command=lambda: _refresh()
+        ).pack(anchor="e", padx=5, pady=3)
+
+        def _refresh():
+            raw_zip_folder     = self.raw_zip_var.get().strip()     if hasattr(self, "raw_zip_var")     else r"P:\temp\BENTO\RAW_ZIP"
+            release_tgz_folder = self.release_tgz_var.get().strip() if hasattr(self, "release_tgz_var") else r"P:\temp\BENTO\RELEASE_TGZ"
+            repo_dir           = r"C:\BENTO\adv_ibir_master"
+
+            # RAW_ZIP reachability
+            if os.path.isdir(raw_zip_folder):
+                rows["raw_zip"].config(text="✅ Reachable  " + raw_zip_folder, foreground="green")
+            else:
+                rows["raw_zip"].config(text="❌ NOT REACHABLE: " + raw_zip_folder, foreground="red")
+
+            # RELEASE_TGZ reachability
+            if os.path.isdir(release_tgz_folder):
+                rows["release_tgz"].config(text="✅ Reachable  " + release_tgz_folder, foreground="green")
+            else:
+                rows["release_tgz"].config(text="❌ NOT REACHABLE: " + release_tgz_folder, foreground="red")
+
+            # Watcher lock freshness
+            lock_path = os.path.join(repo_dir, ".bento_build_lock")
+            if os.path.exists(lock_path):
+                age = int(time.time() - os.path.getmtime(lock_path))
+                rows["watcher"].config(text="🔒 Build Lock active (age=" + str(age) + "s)", foreground="orange")
+            else:
+                has_lock = False
+                if os.path.isdir(raw_zip_folder):
+                    for f in os.listdir(raw_zip_folder):
+                        if f.endswith(".bento_lock"):
+                            has_lock = True
+                            break
+                if has_lock:
+                    rows["watcher"].config(text="🟡 ZIP lock present (picking up?)", foreground="orange")
+                else:
+                    rows["watcher"].config(text="✅ Idle (no active build lock)", foreground="green")
+
+            # Last ZIP and status
+            try:
+                zips = sorted(
+                    [f for f in os.listdir(raw_zip_folder)
+                     if f.endswith(".zip") and ".bento_" not in f],
+                    key=lambda f: os.path.getmtime(os.path.join(raw_zip_folder, f)),
+                    reverse=True
+                ) if os.path.isdir(raw_zip_folder) else []
+
+                if zips:
+                    last_zip = zips[0]
+                    rows["last_zip"].config(text=last_zip, foreground="black")
+                    status_file = os.path.join(raw_zip_folder, last_zip + ".bento_status")
+                    if os.path.exists(status_file):
+                        with open(status_file) as sf:
+                            sdata  = json.load(sf)
+                            state  = sdata.get("status", "unknown")
+                            detail = sdata.get("detail", "")
+                        colour_map = {"success": "green", "failed": "red",
+                                      "in_progress": "orange", "timeout": "purple"}
+                        rows["last_status"].config(
+                            text=state.upper() + " — " + detail[:60],
+                            foreground=colour_map.get(state, "gray")
+                        )
+                    else:
+                        rows["last_status"].config(text="No status file yet", foreground="gray")
+                else:
+                    rows["last_zip"].config(text="(no ZIPs found)", foreground="gray")
+                    rows["last_status"].config(text="—", foreground="gray")
+            except Exception as e:
+                rows["last_zip"].config(text="Error: " + str(e), foreground="red")
+
+            panel.after(30000, _refresh)
+
+        _refresh()
+        return panel
+
+    # ================================================================
+    # REAL-TIME BUILD LOG VIEWER
+    # ================================================================
+    def open_build_log_viewer(self, log_path):
+        """
+        Opens a live-tailing build log window.
+        Auto-refreshes every 2 seconds until build completes.
+        """
+        log_win = tk.Toplevel(self.root)
+        log_win.title("Live Build Log — " + os.path.basename(log_path))
+        log_win.geometry("900x600")
+        self._centre_dialog(log_win, 900, 600)
+
+        toolbar = ttk.Frame(log_win)
+        toolbar.pack(fill=tk.X, padx=5, pady=5)
+
+        status_label = ttk.Label(toolbar, text="🟡 Build in progress...", foreground="orange")
+        status_label.pack(side=tk.LEFT, padx=5)
+
+        auto_scroll_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(toolbar, text="Auto-scroll", variable=auto_scroll_var).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(toolbar, text="Open Log Folder",
+                   command=lambda: os.startfile(os.path.dirname(log_path))).pack(side=tk.RIGHT, padx=5)
+
+        log_frame = ttk.LabelFrame(log_win, text="Build Output", padding="5")
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        log_text = scrolledtext.ScrolledText(
+            log_frame, height=35, width=110,
+            wrap=tk.NONE, font=("Courier", 9), state=tk.DISABLED
+        )
+        log_text.pack(fill=tk.BOTH, expand=True)
+        log_text.tag_config("success", foreground="green")
+        log_text.tag_config("error",   foreground="red")
+        log_text.tag_config("warn",    foreground="orange")
+
+        self._log_viewer_active = True
+
+        def _tail():
+            if not self._log_viewer_active:
+                return
+            try:
+                with open(log_path, "r", errors="replace") as f:
+                    content = f.read()
+                log_text.config(state=tk.NORMAL)
+                log_text.delete("1.0", tk.END)
+                for line in content.splitlines(True):
+                    tag = ""
+                    ll = line.lower()
+                    if "success" in ll or "[ok]" in ll:
+                        tag = "success"
+                    elif "error" in ll or "failed" in ll or "fatal" in ll:
+                        tag = "error"
+                    elif "warning" in ll or "warn" in ll:
+                        tag = "warn"
+                    log_text.insert(tk.END, line, tag)
+                log_text.config(state=tk.DISABLED)
+                if auto_scroll_var.get():
+                    log_text.see(tk.END)
+                if "Result    :" in content:
+                    if "SUCCESS" in content:
+                        status_label.config(text="✅ Build SUCCESS", foreground="green")
+                    else:
+                        status_label.config(text="❌ Build FAILED", foreground="red")
+                    return
+            except FileNotFoundError:
+                pass
+            log_win.after(2000, _tail)
+
+        def _on_close():
+            self._log_viewer_active = False
+            log_win.destroy()
+
+        log_win.protocol("WM_DELETE_WINDOW", _on_close)
+        _tail()
+
+    # ================================================================
+    # PER-TESTER LIVE STATUS BADGES
+    # ================================================================
+    def open_multi_compile_status(self, targets):
+        """
+        Opens a live status window showing per-tester build progress.
+        targets: list of (hostname, env) tuples.
+        Returns (callbacks dict, status_win).
+        """
+        status_win = tk.Toplevel(self.root)
+        status_win.title("Multi-Tester Compile Status")
+        w, h = 600, 80 + len(targets) * 55
+        status_win.resizable(False, False)
+        self._centre_dialog(status_win, w, h)
+
+        ttk.Label(status_win, text="Live Compile Status",
+                  font=("Arial", 12, "bold")).pack(pady=10)
+
+        rows = {}
+
+        for hostname, env in targets:
+            key = (hostname, env)
+            row_frame = ttk.Frame(status_win, relief="groove", padding=6)
+            row_frame.pack(fill=tk.X, padx=15, pady=4)
+
+            ttk.Label(row_frame, text=hostname + "  (" + env + ")",
+                      width=25, anchor="w",
+                      font=("Courier", 10, "bold")).pack(side=tk.LEFT)
+
+            status_lbl = ttk.Label(row_frame, text="🟡 Waiting...",
+                                   foreground="orange", width=22, anchor="w")
+            status_lbl.pack(side=tk.LEFT, padx=10)
+
+            time_lbl = ttk.Label(row_frame, text="0s",
+                                 foreground="gray", width=8, anchor="e")
+            time_lbl.pack(side=tk.RIGHT)
+
+            rows[key] = {"label": status_lbl, "time_label": time_lbl,
+                         "start_time": None, "running": False}
+
+        def _tick():
+            for key, row in rows.items():
+                if row["start_time"] and row.get("running", False):
+                    elapsed = int(time.time() - row["start_time"])
+                    row["time_label"].config(text=str(elapsed) + "s")
+            status_win.after(1000, _tick)
+
+        _tick()
+
+        def make_update(key):
+            def update_status(state, elapsed=None):
+                row = rows[key]
+                lbl = row["label"]
+                if state == "building":
+                    row["start_time"] = time.time()
+                    row["running"]    = True
+                    lbl.config(text="🟡 Building...", foreground="orange")
+                elif state == "success":
+                    row["running"] = False
+                    t = str(elapsed) + "s" if elapsed else ""
+                    lbl.config(text="✅ Done " + t, foreground="green")
+                    row["time_label"].config(foreground="green")
+                elif state == "failed":
+                    row["running"] = False
+                    lbl.config(text="❌ Failed", foreground="red")
+                    row["time_label"].config(foreground="red")
+                elif state == "timeout":
+                    row["running"] = False
+                    lbl.config(text="⏱ Timeout", foreground="purple")
+                status_win.update_idletasks()
+            return update_status
+
+        callbacks = {key: make_update(key) for key in rows}
+        return callbacks, status_win
+
     def create_implementation_tab(self):
         """Tab for code implementation"""
         tab = ttk.Frame(self.notebook, padding="10")
@@ -916,6 +1173,12 @@ class SimpleGUI:
 
         self.impl_result_text = scrolledtext.ScrolledText(result_frame, height=15, width=70, wrap=tk.WORD)
         self.impl_result_text.pack(fill=tk.BOTH, expand=True)
+
+        # ── Watcher Health Monitor (inside Implementation tab) ──────
+        self.build_watcher_health_panel(tab)
+
+        # ── Compile History Tab (nested sub-notebook) ───────────────
+        self._build_compile_history_section(tab)
 
         tab.columnconfigure(1, weight=1)
         tab.rowconfigure(5, weight=1)
@@ -2102,25 +2365,138 @@ Populate the template, leaving validation result sections for user to fill after
             )
             self._handle_single_compile_result(result)
         else:
-            # Multiple testers - use parallel compilation
-            results = orch.compile_tp_package_multi(
-                source_dir=repo_path,
-                targets=targets,
-                jira_key=issue_key,
-                label=label,
-                raw_zip_folder=raw_zip,
-                release_tgz_folder=release,
-                log_callback=_compile_log,
-            )
+            # Multiple testers — open live status window first
+            callbacks, status_win = self.open_multi_compile_status(targets)
+
+            # Mark all as building before threads start
+            for hostname, env in targets:
+                self.root.after(0, lambda h=hostname, e=env:
+                    callbacks[(h, e)]("building"))
+
+            # Wrap compile_tp_package_multi to update badges as each completes
+            def _one_with_badge(hostname, env):
+                self.root.after(0, lambda: callbacks[(hostname, env)]("building"))
+                result = orch.compile_tp_package(
+                    source_dir=repo_path,
+                    env=env,
+                    jira_key=issue_key,
+                    hostname=hostname,
+                    label=label,
+                    raw_zip_folder=raw_zip,
+                    release_tgz_folder=release,
+                    log_callback=_compile_log,
+                )
+                result["hostname"] = hostname
+                result["env"]      = env
+                state = result.get("status", "failed")
+                elapsed = result.get("elapsed", None)
+                self.root.after(0, lambda s=state, el=elapsed:
+                    callbacks[(hostname, env)](s, el))
+                return result
+
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            results = []
+            with ThreadPoolExecutor(max_workers=len(targets)) as pool:
+                futures = {pool.submit(_one_with_badge, h, e): (h, e)
+                           for h, e in targets}
+                for future in as_completed(futures):
+                    results.append(future.result())
+
             self._handle_multi_compile_results(results)
+
+    def _build_compile_history_section(self, parent_tab):
+        """
+        Compile History section — reads build_info_*.txt files from
+        RELEASE_TGZ and displays them in a sortable table.
+        Placed inside the Implementation tab.
+        """
+        import glob
+
+        history_frame = ttk.LabelFrame(parent_tab, text="📋 Compile History", padding=8)
+        history_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        # Toolbar
+        toolbar = ttk.Frame(history_frame)
+        toolbar.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(toolbar, text="Past compilations from RELEASE_TGZ",
+                  font=("Arial", 9), foreground="gray").pack(side=tk.LEFT)
+        ttk.Button(toolbar, text="🔄 Refresh", command=lambda: _load()).pack(side=tk.RIGHT)
+        ttk.Button(toolbar, text="📁 Open Folder",
+                   command=lambda: os.startfile(
+                       self.release_tgz_var.get().strip()
+                       if hasattr(self, "release_tgz_var")
+                       else r"P:\temp\BENTO\RELEASE_TGZ"
+                   )).pack(side=tk.RIGHT, padx=5)
+
+        # Table
+        cols = ("Timestamp", "JIRA", "Tester", "ENV", "Label", "Output TGZ")
+        tree = ttk.Treeview(history_frame, columns=cols, show="headings", height=8)
+        col_widths = [140, 120, 110, 70, 100, 220]
+        for col, w in zip(cols, col_widths):
+            tree.heading(col, text=col, command=lambda c=col: _sort(c))
+            tree.column(col, width=w, anchor="w")
+
+        tree.tag_configure("even", background="#f5f5f5")
+        tree.tag_configure("odd",  background="#ffffff")
+
+        scroll_y = ttk.Scrollbar(history_frame, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=scroll_y.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll_y.pack(side=tk.LEFT, fill=tk.Y)
+
+        def _load():
+            tree.delete(*tree.get_children())
+            release_root = (self.release_tgz_var.get().strip()
+                            if hasattr(self, "release_tgz_var")
+                            else r"P:\temp\BENTO\RELEASE_TGZ")
+            pattern = os.path.join(release_root, "**", "build_info_*.txt")
+            files   = glob.glob(pattern, recursive=True)
+            files.sort(key=os.path.getmtime, reverse=True)
+            for i, fpath in enumerate(files):
+                row = _parse(fpath)
+                if row:
+                    tree.insert("", tk.END, values=row,
+                                tags=("even" if i % 2 == 0 else "odd",))
+
+        def _parse(fpath):
+            data = {}
+            try:
+                with open(fpath, "r") as f:
+                    for line in f:
+                        if ":" in line:
+                            k, _, v = line.partition(":")
+                            data[k.strip()] = v.strip()
+                return (data.get("Timestamp", ""), data.get("JIRA Key", ""),
+                        data.get("Tester", ""),    data.get("Env", ""),
+                        data.get("Label", ""),     data.get("Output TGZ", ""))
+            except Exception:
+                return None
+
+        def _sort(col):
+            items = [(tree.set(k, col), k) for k in tree.get_children("")]
+            items.sort()
+            for idx, (_, k) in enumerate(items):
+                tree.move(k, "", idx)
+
+        _load()
 
     def _handle_single_compile_result(self, result):
         """Handle result from single-tester compilation"""
-        status  = result.get("status", "failed")
-        detail  = result.get("detail", "Unknown error")
-        elapsed = result.get("elapsed", 0)
-        tgz     = result.get("tgz_file", "")
+        status   = result.get("status",   "failed")
+        detail   = result.get("detail",   "Unknown error")
+        elapsed  = result.get("elapsed",  0)
+        tgz      = result.get("tgz_file", "")
         tgz_path = result.get("tgz_path", "")
+        zip_file = result.get("zip_file", "")
+
+        # ── Open live log viewer if we can locate the bento_status sidecar ──
+        if zip_file:
+            raw_zip = self.raw_zip_var.get().strip() if hasattr(self, "raw_zip_var") else ""
+            status_path = os.path.join(raw_zip, zip_file + ".bento_status") if raw_zip else ""
+            build_log_hint = "C:\\BENTO\\logs\\build_" + os.path.splitext(zip_file)[0] + ".log"
+        else:
+            status_path    = ""
+            build_log_hint = ""
 
         if status == "success":
             self.compile_status_var.set("Done: " + tgz)
@@ -2128,6 +2504,8 @@ Populate the template, leaving validation result sections for user to fill after
             self.log("  TGZ file : " + tgz)
             self.log("  Location : " + tgz_path)
             self.log("  Time     : " + str(int(elapsed)) + "s")
+            if build_log_hint:
+                self.log("  Build log: " + build_log_hint + "  (on tester machine)")
             messagebox.showinfo(
                 "Compile Success",
                 "TGZ ready:\n" + tgz_path
@@ -2135,10 +2513,14 @@ Populate the template, leaving validation result sections for user to fill after
 
         elif status == "timeout":
             self.compile_status_var.set("TIMEOUT")
+            if build_log_hint:
+                detail += "\n\nBuild log on tester:\n" + build_log_hint
             self._show_compile_error_dialog("Compile Timeout", detail, status)
 
         else:
             self.compile_status_var.set("FAILED")
+            if build_log_hint:
+                detail += "\n\nBuild log on tester:\n" + build_log_hint
             self._show_compile_error_dialog("Compile Failed", detail, status)
 
     def _handle_multi_compile_results(self, results):
