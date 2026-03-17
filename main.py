@@ -1022,108 +1022,109 @@ class SimpleGUI:
         )
         self._load_tester_registry()   # populate from JSON or defaults
 
-        # ── Row 0: Tester selector label + mode badge ──
-        ttk.Label(compile_frame, text="Tester:", font=("Arial", 9, "bold")).grid(
-            row=0, column=0, sticky=tk.W, pady=(6, 2))
-        self._compile_mode_var = tk.StringVar(value="")
-        self._compile_mode_lbl = ttk.Label(
-            compile_frame, textvariable=self._compile_mode_var,
-            font=("Arial", 8, "italic"), foreground="#555555")
-        self._compile_mode_lbl.grid(
-            row=0, column=1, columnspan=2, sticky=tk.W, padx=5, pady=(6, 2))
+        compile_frame.columnconfigure(0, weight=1)
+        compile_frame.columnconfigure(1, weight=1)
 
-        # ── Row 1: Search + listbox + Add button ──
-        ttk.Label(compile_frame, text="Select Tester(s):").grid(
-            row=1, column=0, sticky=tk.W, pady=3)
+        # ── 1. TARGET TESTERS FRAME ──
+        targets_frame = ttk.LabelFrame(compile_frame, text="1. Target Testers", padding="10")
+        targets_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5), pady=(0, 5))
+        targets_frame.columnconfigure(0, weight=1)
 
-        tester_row = ttk.Frame(compile_frame)
-        tester_row.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=3, padx=5)
-
+        # Search bar
+        search_frame = ttk.Frame(targets_frame)
+        search_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
+        
+        ttk.Label(search_frame, text="Search:").pack(side=tk.LEFT, padx=(0, 5))
         self.tester_search_var = tk.StringVar()
-        self._tester_search_entry = ttk.Entry(
-            tester_row, textvariable=self.tester_search_var, width=18)
-        self._tester_search_entry.pack(side=tk.LEFT, padx=(0, 4))
+        self._tester_search_entry = ttk.Entry(search_frame, textvariable=self.tester_search_var, width=15)
+        self._tester_search_entry.pack(side=tk.LEFT)
         self._tester_search_entry.insert(0, "Search...")
         self._tester_search_entry.config(foreground="gray")
+        
+        ttk.Label(search_frame, text="(Shift+Click for multi)", font=("Arial", 8, "italic"), foreground="gray").pack(side=tk.LEFT, padx=(5, 0))
 
-        # Replace Combobox with Listbox for multi-select
-        listbox_frame = ttk.Frame(tester_row)
-        listbox_frame.pack(side=tk.LEFT, padx=(0, 4))
+        # Listbox and buttons
+        list_frame = ttk.Frame(targets_frame)
+        list_frame.grid(row=1, column=0, sticky=(tk.W, tk.E))
         
         self._tester_listbox = tk.Listbox(
-            listbox_frame, 
+            list_frame, 
             selectmode=tk.MULTIPLE,
             height=4,
             width=28,
             exportselection=False
         )
-        self._tester_listbox.pack(side=tk.LEFT)
+        self._tester_listbox.pack(side=tk.LEFT, fill=tk.Y)
         
-        scrollbar = ttk.Scrollbar(listbox_frame, orient=tk.VERTICAL, command=self._tester_listbox.yview)
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self._tester_listbox.yview)
         scrollbar.pack(side=tk.LEFT, fill=tk.Y)
         self._tester_listbox.config(yscrollcommand=scrollbar.set)
-
-        ttk.Button(
-            tester_row, text="+ Add Tester",
-            command=self._open_add_tester_dialog
-        ).pack(side=tk.LEFT)
         
-        ttk.Button(
-            tester_row, text="🗑 Remove",
-            command=self._remove_selected_tester
-        ).pack(side=tk.LEFT, padx=(4, 0))
+        btn_frame_list = ttk.Frame(list_frame)
+        btn_frame_list.pack(side=tk.LEFT, padx=(5, 0), anchor=tk.N)
+        
+        ttk.Button(btn_frame_list, text="+ Add Tester", width=12, command=self._open_add_tester_dialog).pack(pady=(0, 5))
+        ttk.Button(btn_frame_list, text="🗑 Remove", width=12, command=self._remove_selected_tester).pack(pady=(0, 5))
 
-        ttk.Label(compile_frame, text="Shift+Click to select multiple testers",
-                  font=("Arial", 8), foreground="gray").grid(
-            row=1, column=2, sticky=tk.W, padx=5)
+        # Selection info
+        info_frame = ttk.Frame(targets_frame)
+        info_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
+        
+        ttk.Label(info_frame, text="Selected:", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=(0, 5))
+        self._compile_mode_var = tk.StringVar(value="No tester selected")
+        self._compile_mode_lbl = ttk.Label(info_frame, textvariable=self._compile_mode_var, font=("Arial", 9, "italic"), foreground="#cc0000", wraplength=250)
+        self._compile_mode_lbl.pack(side=tk.LEFT)
 
-        # ── Row 2: TGZ label ──
-        ttk.Label(compile_frame, text="TGZ Label:").grid(
-            row=2, column=0, sticky=tk.W, pady=3)
+        # ── 2. CONFIGURATION & PATHS FRAME ──
+        config_frame = ttk.LabelFrame(compile_frame, text="2. Configuration & Paths", padding="10")
+        config_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(5, 0), pady=(0, 5))
+        config_frame.columnconfigure(1, weight=1)
+        
+        # TGZ Label
+        ttk.Label(config_frame, text="TGZ Label:").grid(row=0, column=0, sticky=tk.W, pady=3, padx=(0, 5))
         last_label = self.config.get('compile', {}).get('last_tgz_label', '')
         self.tgz_label_var = tk.StringVar(value=last_label)
-        ttk.Entry(compile_frame, textvariable=self.tgz_label_var, width=30).grid(
-            row=2, column=1, sticky=tk.W, pady=3, padx=5)
-        ttk.Label(compile_frame,
-                  text="e.g. passing / force_fail_1  (blank = default)",
-                  font=("Arial", 8), foreground="gray").grid(
-            row=2, column=2, sticky=tk.W, padx=5)
+        ttk.Entry(config_frame, textvariable=self.tgz_label_var, width=22).grid(row=0, column=1, sticky=tk.W, pady=3)
+        ttk.Label(config_frame, text="(blank = default)", font=("Arial", 8), foreground="gray").grid(row=0, column=2, sticky=tk.W, padx=2)
 
-        # ── Row 3: Separator ──
-        ttk.Separator(compile_frame, orient="horizontal").grid(
-            row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=6)
-
-        # ── Row 4: RAW_ZIP path ──
-        ttk.Label(compile_frame, text="RAW_ZIP Path:").grid(
-            row=4, column=0, sticky=tk.W, pady=3)
-        raw_zip_frame = ttk.Frame(compile_frame)
-        raw_zip_frame.grid(row=4, column=1, sticky=(tk.W, tk.E), pady=3, padx=5)
+        # RAW_ZIP Path
+        ttk.Label(config_frame, text="RAW_ZIP:").grid(row=1, column=0, sticky=tk.W, pady=3, padx=(0, 5))
+        raw_zip_frame = ttk.Frame(config_frame)
+        raw_zip_frame.grid(row=1, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=3)
         self.raw_zip_var = tk.StringVar(value=r"P:\temp\BENTO\RAW_ZIP")
-        ttk.Entry(raw_zip_frame, textvariable=self.raw_zip_var, width=37).pack(side=tk.LEFT)
-        ttk.Button(raw_zip_frame, text="📁", width=3,
-                   command=lambda: self._browse_directory(self.raw_zip_var, "Select RAW_ZIP Folder")).pack(side=tk.LEFT, padx=(2, 0))
+        ttk.Entry(raw_zip_frame, textvariable=self.raw_zip_var, width=28).pack(side=tk.LEFT)
+        ttk.Button(raw_zip_frame, text="📁", width=3, command=lambda: self._browse_directory(self.raw_zip_var, "Select RAW_ZIP Folder")).pack(side=tk.LEFT, padx=(2, 0))
 
-        # ── Row 5: RELEASE_TGZ path ──
-        ttk.Label(compile_frame, text="RELEASE_TGZ Path:").grid(
-            row=5, column=0, sticky=tk.W, pady=3)
-        release_tgz_frame = ttk.Frame(compile_frame)
-        release_tgz_frame.grid(row=5, column=1, sticky=(tk.W, tk.E), pady=3, padx=5)
+        # RELEASE_TGZ Path
+        ttk.Label(config_frame, text="RELEASE_TGZ:").grid(row=2, column=0, sticky=tk.W, pady=3, padx=(0, 5))
+        release_tgz_frame = ttk.Frame(config_frame)
+        release_tgz_frame.grid(row=2, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=3)
         self.release_tgz_var = tk.StringVar(value=r"P:\temp\BENTO\RELEASE_TGZ")
-        ttk.Entry(release_tgz_frame, textvariable=self.release_tgz_var, width=37).pack(side=tk.LEFT)
-        ttk.Button(release_tgz_frame, text="📁", width=3,
-                   command=lambda: self._browse_directory(self.release_tgz_var, "Select RELEASE_TGZ Folder")).pack(side=tk.LEFT, padx=(2, 0))
+        ttk.Entry(release_tgz_frame, textvariable=self.release_tgz_var, width=28).pack(side=tk.LEFT)
+        ttk.Button(release_tgz_frame, text="📁", width=3, command=lambda: self._browse_directory(self.release_tgz_var, "Select RELEASE_TGZ Folder")).pack(side=tk.LEFT, padx=(2, 0))
 
-        # ── Row 6: Compile button + live status ──
+        # ── 3. ACTION FRAME ──
+        action_frame = ttk.Frame(compile_frame)
+        action_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(5, 5))
+        
+        btn_container = ttk.Frame(action_frame)
+        btn_container.pack(expand=True)
+        
+        # Style for prominent compile button
+        style = ttk.Style()
+        style.configure('Compile.TButton', font=('Arial', 10, 'bold'), padding=6)
+        
         self.compile_btn = ttk.Button(
-            compile_frame, text="Compile on Selected Tester(s)",
-            command=self.trigger_compile_with_lock)
-        self.compile_btn.grid(row=6, column=0, columnspan=2, pady=(10, 6))
+            btn_container, text="🚀 Compile on Selected Tester(s)",
+            style='Compile.TButton',
+            command=self.trigger_compile_with_lock,
+            width=35
+        )
+        self.compile_btn.pack(pady=(0, 2))
+        
         self.compile_status_var = tk.StringVar(value="")
-        ttk.Label(compile_frame, textvariable=self.compile_status_var,
-                  font=("Arial", 9), foreground="blue").grid(
-            row=6, column=2, sticky=tk.W, padx=5)
-
-        compile_frame.columnconfigure(1, weight=1)
+        self.compile_status_lbl = ttk.Label(btn_container, textvariable=self.compile_status_var, font=("Arial", 9, "bold"), foreground="#0066cc")
+        self.compile_status_lbl.pack()
 
         # ── Wire up search + listbox ──
         def _search_changed(*_):
