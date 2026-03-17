@@ -1174,14 +1174,21 @@ class SimpleGUI:
         self.impl_result_text = scrolledtext.ScrolledText(result_frame, height=15, width=70, wrap=tk.WORD)
         self.impl_result_text.pack(fill=tk.BOTH, expand=True)
 
-        # ── Watcher Health Monitor (inside Implementation tab) ──────
-        self.build_watcher_health_panel(tab)
+        # ── Watcher Health Monitor — wrapped in grid row 6 ──────────
+        health_wrapper = ttk.Frame(tab)
+        health_wrapper.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(5, 0))
+        health_wrapper.columnconfigure(0, weight=1)
+        self.build_watcher_health_panel(health_wrapper)
 
-        # ── Compile History Tab (nested sub-notebook) ───────────────
-        self._build_compile_history_section(tab)
+        # ── Compile History — wrapped in grid row 7 ──────────────────
+        history_wrapper = ttk.Frame(tab)
+        history_wrapper.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        history_wrapper.columnconfigure(0, weight=1)
+        self._build_compile_history_section(history_wrapper)
 
         tab.columnconfigure(1, weight=1)
         tab.rowconfigure(5, weight=1)
+        tab.rowconfigure(7, weight=1)
     
     # Individual step methods with GUI locking wrappers
     def fetch_issue_only_with_lock(self):
