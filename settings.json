@@ -14,6 +14,6 @@
     "timeout": 300
   },
   "compile": {
-    "last_tgz_label": ""
+    "last_tgz_label": "test cnfg"
   }
 }
