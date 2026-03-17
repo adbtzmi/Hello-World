@@ -795,43 +795,35 @@ class SimpleGUI:
                 else:
                     rows["watcher"].config(text="✅ Idle (no active build lock)", foreground="green")
 
-            # Last ZIP and status — scan ALL .bento_status files (ZIPs deleted after success)
+            # Last ZIP and status
             try:
-                all_status_files = []
-                if os.path.isdir(raw_zip_folder):
-                    for f in os.listdir(raw_zip_folder):
-                        if f.endswith(".bento_status"):
-                            full = os.path.join(raw_zip_folder, f)
-                            all_status_files.append(full)
+                zips = sorted(
+                    [f for f in os.listdir(raw_zip_folder)
+                     if f.endswith(".zip") and ".bento_" not in f],
+                    key=lambda f: os.path.getmtime(os.path.join(raw_zip_folder, f)),
+                    reverse=True
+                ) if os.path.isdir(raw_zip_folder) else []
 
-                if all_status_files:
-                    # Pick the newest status file by modification time
-                    newest = max(all_status_files, key=os.path.getmtime)
-                    zip_name = os.path.basename(newest).replace(".bento_status", "")
-                    rows["last_zip"].config(text=zip_name, foreground="black")
-                    with open(newest) as sf:
-                        sdata  = json.load(sf)
-                        state  = sdata.get("status", "unknown")
-                        detail = sdata.get("detail", "")
-                    colour_map = {"success": "green", "failed": "red",
-                                  "in_progress": "orange", "timeout": "purple"}
-                    rows["last_status"].config(
-                        text=state.upper() + " — " + detail[:60],
-                        foreground=colour_map.get(state, "gray")
-                    )
-                else:
-                    # No status files — check if any ZIPs exist (not yet picked up)
-                    zips = [f for f in os.listdir(raw_zip_folder)
-                            if f.endswith(".zip") and ".bento_" not in f
-                            ] if os.path.isdir(raw_zip_folder) else []
-                    if zips:
-                        newest_zip = max(zips, key=lambda f: os.path.getmtime(
-                            os.path.join(raw_zip_folder, f)))
-                        rows["last_zip"].config(text=newest_zip, foreground="gray")
-                        rows["last_status"].config(text="Waiting for watcher...", foreground="orange")
+                if zips:
+                    last_zip = zips[0]
+                    rows["last_zip"].config(text=last_zip, foreground="black")
+                    status_file = os.path.join(raw_zip_folder, last_zip + ".bento_status")
+                    if os.path.exists(status_file):
+                        with open(status_file) as sf:
+                            sdata  = json.load(sf)
+                            state  = sdata.get("status", "unknown")
+                            detail = sdata.get("detail", "")
+                        colour_map = {"success": "green", "failed": "red",
+                                      "in_progress": "orange", "timeout": "purple"}
+                        rows["last_status"].config(
+                            text=state.upper() + " — " + detail[:60],
+                            foreground=colour_map.get(state, "gray")
+                        )
                     else:
-                        rows["last_zip"].config(text="(none)", foreground="gray")
-                        rows["last_status"].config(text="—", foreground="gray")
+                        rows["last_status"].config(text="No status file yet", foreground="gray")
+                else:
+                    rows["last_zip"].config(text="(no ZIPs found)", foreground="gray")
+                    rows["last_status"].config(text="—", foreground="gray")
             except Exception as e:
                 rows["last_zip"].config(text="Error: " + str(e), foreground="red")
 
@@ -843,118 +835,78 @@ class SimpleGUI:
     # ================================================================
     # REAL-TIME BUILD LOG VIEWER
     # ================================================================
-    def open_build_status_monitor(self, issue_key, hostname, env, raw_zip_folder):
+    def open_build_log_viewer(self, log_path):
         """
-        Opens a live build status monitor window.
-        Polls the .bento_status sidecar file on the shared RAW_ZIP folder
-        every 3 seconds and shows real-time progress.
-        Closes automatically when build completes.
+        Opens a live-tailing build log window.
+        Auto-refreshes every 2 seconds until build completes.
         """
-        mon_win = tk.Toplevel(self.root)
-        mon_win.title("Build Monitor — " + hostname + " (" + env + ")")
-        self._centre_dialog(mon_win, 620, 400)
-        mon_win.resizable(False, False)
+        log_win = tk.Toplevel(self.root)
+        log_win.title("Live Build Log — " + os.path.basename(log_path))
+        log_win.geometry("900x600")
+        self._centre_dialog(log_win, 900, 600)
 
-        # Header
-        ttk.Label(mon_win, text="Live Build Status",
-                  font=("Arial", 12, "bold")).pack(anchor=tk.W, padx=16, pady=(14, 2))
-        ttk.Label(mon_win,
-                  text=hostname + "  (" + env + ")  —  JIRA: " + issue_key,
-                  font=("Arial", 9), foreground="#555555").pack(anchor=tk.W, padx=16)
-        ttk.Separator(mon_win, orient="horizontal").pack(fill=tk.X, padx=16, pady=8)
+        toolbar = ttk.Frame(log_win)
+        toolbar.pack(fill=tk.X, padx=5, pady=5)
 
-        # Status badge
-        badge_var = tk.StringVar(value="🟡  Waiting for watcher to pick up ZIP...")
-        badge_lbl = ttk.Label(mon_win, textvariable=badge_var,
-                               font=("Arial", 10, "bold"), foreground="orange")
-        badge_lbl.pack(anchor=tk.W, padx=16, pady=(0, 6))
+        status_label = ttk.Label(toolbar, text="🟡 Build in progress...", foreground="orange")
+        status_label.pack(side=tk.LEFT, padx=5)
 
-        # Detail text
-        detail_var = tk.StringVar(value="")
-        ttk.Label(mon_win, textvariable=detail_var,
-                  font=("Courier", 9), foreground="#333333",
-                  wraplength=580, justify=tk.LEFT).pack(anchor=tk.W, padx=16)
+        auto_scroll_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(toolbar, text="Auto-scroll", variable=auto_scroll_var).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(toolbar, text="Open Log Folder",
+                   command=lambda: os.startfile(os.path.dirname(log_path))).pack(side=tk.RIGHT, padx=5)
 
-        # Elapsed
-        elapsed_var = tk.StringVar(value="")
-        ttk.Label(mon_win, textvariable=elapsed_var,
-                  font=("Arial", 8), foreground="gray").pack(anchor=tk.W, padx=16, pady=(4, 0))
+        log_frame = ttk.LabelFrame(log_win, text="Build Output", padding="5")
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        ttk.Separator(mon_win, orient="horizontal").pack(fill=tk.X, padx=16, pady=8)
+        log_text = scrolledtext.ScrolledText(
+            log_frame, height=35, width=110,
+            wrap=tk.NONE, font=("Courier", 9), state=tk.DISABLED
+        )
+        log_text.pack(fill=tk.BOTH, expand=True)
+        log_text.tag_config("success", foreground="green")
+        log_text.tag_config("error",   foreground="red")
+        log_text.tag_config("warn",    foreground="orange")
 
-        # Log hint
-        log_hint = "Build log on tester:  C:\\BENTO\\logs\\build_<ZIP_NAME>.log"
-        ttk.Label(mon_win, text=log_hint,
-                  font=("Arial", 8), foreground="#777777").pack(anchor=tk.W, padx=16)
+        self._log_viewer_active = True
 
-        ttk.Button(mon_win, text="Close",
-                   command=mon_win.destroy).pack(pady=12)
-
-        self._status_monitor_active = True
-        start_time = time.time()
-
-        colour_map = {
-            "success":     "green",
-            "failed":      "red",
-            "in_progress": "orange",
-            "pending":     "orange",
-            "timeout":     "purple",
-        }
-        icon_map = {
-            "success":     "✅",
-            "failed":      "❌",
-            "in_progress": "🔨",
-            "pending":     "🟡",
-            "timeout":     "⏱",
-        }
-
-        def _poll():
-            if not self._status_monitor_active:
+        def _tail():
+            if not self._log_viewer_active:
                 return
-            elapsed = int(time.time() - start_time)
-            elapsed_var.set("Elapsed: " + str(elapsed) + "s")
-
-            # Find newest matching .bento_status in RAW_ZIP
-            found = False
             try:
-                if os.path.isdir(raw_zip_folder):
-                    for fname in os.listdir(raw_zip_folder):
-                        if not fname.endswith(".bento_status"):
-                            continue
-                        # Match by hostname + env + issue_key in filename
-                        base = fname.replace(".zip.bento_status", "")
-                        if (hostname.upper() in base.upper() and
-                                env.upper() in base.upper() and
-                                issue_key.upper() in base.upper()):
-                            status_path = os.path.join(raw_zip_folder, fname)
-                            with open(status_path) as f:
-                                data = json.load(f)
-                            state  = data.get("status",  "unknown")
-                            detail = data.get("detail",  "")
-                            icon   = icon_map.get(state, "🔵")
-                            colour = colour_map.get(state, "gray")
-                            badge_var.set(icon + "  " + state.upper().replace("_", " "))
-                            badge_lbl.config(foreground=colour)
-                            detail_var.set(detail[:200] if detail else "")
-                            found = True
-                            # Stop polling on terminal states
-                            if state in ("success", "failed", "timeout"):
-                                return
-                            break
-            except Exception:
+                with open(log_path, "r", errors="replace") as f:
+                    content = f.read()
+                log_text.config(state=tk.NORMAL)
+                log_text.delete("1.0", tk.END)
+                for line in content.splitlines(True):
+                    tag = ""
+                    ll = line.lower()
+                    if "success" in ll or "[ok]" in ll:
+                        tag = "success"
+                    elif "error" in ll or "failed" in ll or "fatal" in ll:
+                        tag = "error"
+                    elif "warning" in ll or "warn" in ll:
+                        tag = "warn"
+                    log_text.insert(tk.END, line, tag)
+                log_text.config(state=tk.DISABLED)
+                if auto_scroll_var.get():
+                    log_text.see(tk.END)
+                if "Result    :" in content:
+                    if "SUCCESS" in content:
+                        status_label.config(text="✅ Build SUCCESS", foreground="green")
+                    else:
+                        status_label.config(text="❌ Build FAILED", foreground="red")
+                    return
+            except FileNotFoundError:
                 pass
-
-            if not found:
-                badge_var.set("🟡  Waiting for watcher to pick up ZIP...")
-
-            mon_win.after(3000, _poll)
+            log_win.after(2000, _tail)
 
         def _on_close():
-            self._status_monitor_active = False
-            mon_win.destroy()
+            self._log_viewer_active = False
+            log_win.destroy()
 
-        mon_win.protocol("WM_DELETE_WINDOW", _on_close)
-        _poll()
+        log_win.protocol("WM_DELETE_WINDOW", _on_close)
+        _tail()
 
     # ================================================================
     # PER-TESTER LIVE STATUS BADGES
@@ -1036,30 +988,56 @@ class SimpleGUI:
         tab = ttk.Frame(self.notebook, padding="10")
         self.notebook.add(tab, text="💻 Implementation")
         
-        ttk.Label(tab, text="Generate Implementation Plan", font=('Arial', 14, 'bold')).grid(row=0, column=0, columnspan=3, pady=10)
+        # ── SUB-NOTEBOOK ──
+        impl_notebook = ttk.Notebook(tab)
+        impl_notebook.pack(fill=tk.BOTH, expand=True)
+
+        # ==========================================
+        # SUB-TAB 1: AI Plan Generator
+        # ==========================================
+        ai_tab = ttk.Frame(impl_notebook, padding="10")
+        impl_notebook.add(ai_tab, text="🧠 AI Plan Generator")
+        
+        ttk.Label(ai_tab, text="Generate Implementation Plan", font=('Arial', 14, 'bold')).grid(row=0, column=0, columnspan=3, pady=10)
         
         # JIRA Issue Key (auto-populated from home tab)
-        ttk.Label(tab, text="JIRA Issue Key:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        ttk.Label(ai_tab, text="JIRA Issue Key:").grid(row=1, column=0, sticky=tk.W, pady=5)
         self.impl_issue_var = tk.StringVar(value=f"{self.jira_project_var.get()}-")
-        ttk.Entry(tab, textvariable=self.impl_issue_var, width=50).grid(row=1, column=1, pady=5, sticky=(tk.W, tk.E))
-        ttk.Label(tab, text="(Auto-populated from Home tab)", font=('Arial', 8), foreground='gray').grid(row=1, column=2, sticky=tk.W, padx=5)
+        ttk.Entry(ai_tab, textvariable=self.impl_issue_var, width=50).grid(row=1, column=1, pady=5, sticky=(tk.W, tk.E))
+        ttk.Label(ai_tab, text="(Auto-populated from Home tab)", font=('Arial', 8), foreground='gray').grid(row=1, column=2, sticky=tk.W, padx=5)
         
         # Repository path (local cloned repo)
-        ttk.Label(tab, text="Local Repo Path:").grid(row=2, column=0, sticky=tk.W, pady=5)
-        repo_path_frame = ttk.Frame(tab)
+        ttk.Label(ai_tab, text="Local Repo Path:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        repo_path_frame = ttk.Frame(ai_tab)
         repo_path_frame.grid(row=2, column=1, pady=5, sticky=(tk.W, tk.E))
         self.impl_repo_var = tk.StringVar()
         ttk.Entry(repo_path_frame, textvariable=self.impl_repo_var, width=47).pack(side=tk.LEFT)
         ttk.Button(repo_path_frame, text="📁", width=3,
                    command=lambda: self._browse_directory(self.impl_repo_var, "Select Repository Folder")).pack(side=tk.LEFT, padx=(2, 0))
-        ttk.Label(tab, text="(Path to cloned repository for AI indexing)", font=('Arial', 8), foreground='gray').grid(row=2, column=2, sticky=tk.W, padx=5)
+        ttk.Label(ai_tab, text="(Path to cloned repository for AI indexing)", font=('Arial', 8), foreground='gray').grid(row=2, column=2, sticky=tk.W, padx=5)
         
         # Generate button
-        ttk.Button(tab, text="Generate Implementation Plan", command=self.generate_implementation_only_with_lock).grid(row=3, column=0, columnspan=3, pady=10)
+        ttk.Button(ai_tab, text="Generate Implementation Plan", command=self.generate_implementation_only_with_lock).grid(row=3, column=0, columnspan=3, pady=10)
+
+        # ── Implementation Plan Result ──────────────────────────────
+        result_frame = ttk.LabelFrame(ai_tab, text="Implementation Plan", padding="10")
+        result_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+
+        self.impl_result_text = scrolledtext.ScrolledText(result_frame, height=25, width=70, wrap=tk.WORD)
+        self.impl_result_text.pack(fill=tk.BOTH, expand=True)
+
+        ai_tab.columnconfigure(1, weight=1)
+        ai_tab.rowconfigure(4, weight=1)
+
+        # ==========================================
+        # SUB-TAB 2: TP Compilation & Health
+        # ==========================================
+        compile_subtab = ttk.Frame(impl_notebook, padding="10")
+        impl_notebook.add(compile_subtab, text="📦 TP Compilation & Health")
 
         # ── Compile TP Package Section ──────────────────────────────
-        compile_frame = ttk.LabelFrame(tab, text="Compile TP Package", padding="10")
-        compile_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+        compile_frame = ttk.LabelFrame(compile_subtab, text="Compile TP Package", padding="10")
+        compile_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=5)
 
         # ── TESTER REGISTRY ──
         # Persisted to bento_testers.json next to main.py.
@@ -1070,108 +1048,109 @@ class SimpleGUI:
         )
         self._load_tester_registry()   # populate from JSON or defaults
 
-        # ── Row 0: Tester selector label + mode badge ──
-        ttk.Label(compile_frame, text="Tester:", font=("Arial", 9, "bold")).grid(
-            row=0, column=0, sticky=tk.W, pady=(6, 2))
-        self._compile_mode_var = tk.StringVar(value="")
-        self._compile_mode_lbl = ttk.Label(
-            compile_frame, textvariable=self._compile_mode_var,
-            font=("Arial", 8, "italic"), foreground="#555555")
-        self._compile_mode_lbl.grid(
-            row=0, column=1, columnspan=2, sticky=tk.W, padx=5, pady=(6, 2))
+        compile_frame.columnconfigure(0, weight=1)
+        compile_frame.columnconfigure(1, weight=1)
 
-        # ── Row 1: Search + listbox + Add button ──
-        ttk.Label(compile_frame, text="Select Tester(s):").grid(
-            row=1, column=0, sticky=tk.W, pady=3)
+        # ── 1. TARGET TESTERS FRAME ──
+        targets_frame = ttk.LabelFrame(compile_frame, text="1. Target Testers", padding="10")
+        targets_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5), pady=(0, 5))
+        targets_frame.columnconfigure(0, weight=1)
 
-        tester_row = ttk.Frame(compile_frame)
-        tester_row.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=3, padx=5)
-
+        # Search bar
+        search_frame = ttk.Frame(targets_frame)
+        search_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
+        
+        ttk.Label(search_frame, text="Search:").pack(side=tk.LEFT, padx=(0, 5))
         self.tester_search_var = tk.StringVar()
-        self._tester_search_entry = ttk.Entry(
-            tester_row, textvariable=self.tester_search_var, width=18)
-        self._tester_search_entry.pack(side=tk.LEFT, padx=(0, 4))
+        self._tester_search_entry = ttk.Entry(search_frame, textvariable=self.tester_search_var, width=15)
+        self._tester_search_entry.pack(side=tk.LEFT)
         self._tester_search_entry.insert(0, "Search...")
         self._tester_search_entry.config(foreground="gray")
+        
+        ttk.Label(search_frame, text="(Shift+Click for multi)", font=("Arial", 8, "italic"), foreground="gray").pack(side=tk.LEFT, padx=(5, 0))
 
-        # Replace Combobox with Listbox for multi-select
-        listbox_frame = ttk.Frame(tester_row)
-        listbox_frame.pack(side=tk.LEFT, padx=(0, 4))
+        # Listbox and buttons
+        list_frame = ttk.Frame(targets_frame)
+        list_frame.grid(row=1, column=0, sticky=(tk.W, tk.E))
         
         self._tester_listbox = tk.Listbox(
-            listbox_frame, 
+            list_frame, 
             selectmode=tk.MULTIPLE,
             height=4,
             width=28,
             exportselection=False
         )
-        self._tester_listbox.pack(side=tk.LEFT)
+        self._tester_listbox.pack(side=tk.LEFT, fill=tk.Y)
         
-        scrollbar = ttk.Scrollbar(listbox_frame, orient=tk.VERTICAL, command=self._tester_listbox.yview)
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self._tester_listbox.yview)
         scrollbar.pack(side=tk.LEFT, fill=tk.Y)
         self._tester_listbox.config(yscrollcommand=scrollbar.set)
-
-        ttk.Button(
-            tester_row, text="+ Add Tester",
-            command=self._open_add_tester_dialog
-        ).pack(side=tk.LEFT)
         
-        ttk.Button(
-            tester_row, text="🗑 Remove",
-            command=self._remove_selected_tester
-        ).pack(side=tk.LEFT, padx=(4, 0))
+        btn_frame_list = ttk.Frame(list_frame)
+        btn_frame_list.pack(side=tk.LEFT, padx=(5, 0), anchor=tk.N)
+        
+        ttk.Button(btn_frame_list, text="+ Add Tester", width=12, command=self._open_add_tester_dialog).pack(pady=(0, 5))
+        ttk.Button(btn_frame_list, text="🗑 Remove", width=12, command=self._remove_selected_tester).pack(pady=(0, 5))
 
-        ttk.Label(compile_frame, text="Shift+Click to select multiple testers",
-                  font=("Arial", 8), foreground="gray").grid(
-            row=1, column=2, sticky=tk.W, padx=5)
+        # Selection info
+        info_frame = ttk.Frame(targets_frame)
+        info_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
+        
+        ttk.Label(info_frame, text="Selected:", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=(0, 5))
+        self._compile_mode_var = tk.StringVar(value="No tester selected")
+        self._compile_mode_lbl = ttk.Label(info_frame, textvariable=self._compile_mode_var, font=("Arial", 9, "italic"), foreground="#cc0000", wraplength=250)
+        self._compile_mode_lbl.pack(side=tk.LEFT)
 
-        # ── Row 2: TGZ label ──
-        ttk.Label(compile_frame, text="TGZ Label:").grid(
-            row=2, column=0, sticky=tk.W, pady=3)
+        # ── 2. CONFIGURATION & PATHS FRAME ──
+        config_frame = ttk.LabelFrame(compile_frame, text="2. Configuration & Paths", padding="10")
+        config_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(5, 0), pady=(0, 5))
+        config_frame.columnconfigure(1, weight=1)
+        
+        # TGZ Label
+        ttk.Label(config_frame, text="TGZ Label:").grid(row=0, column=0, sticky=tk.W, pady=3, padx=(0, 5))
         last_label = self.config.get('compile', {}).get('last_tgz_label', '')
         self.tgz_label_var = tk.StringVar(value=last_label)
-        ttk.Entry(compile_frame, textvariable=self.tgz_label_var, width=30).grid(
-            row=2, column=1, sticky=tk.W, pady=3, padx=5)
-        ttk.Label(compile_frame,
-                  text="e.g. passing / force_fail_1  (blank = default)",
-                  font=("Arial", 8), foreground="gray").grid(
-            row=2, column=2, sticky=tk.W, padx=5)
+        ttk.Entry(config_frame, textvariable=self.tgz_label_var, width=22).grid(row=0, column=1, sticky=tk.W, pady=3)
+        ttk.Label(config_frame, text="(blank = default)", font=("Arial", 8), foreground="gray").grid(row=0, column=2, sticky=tk.W, padx=2)
 
-        # ── Row 3: Separator ──
-        ttk.Separator(compile_frame, orient="horizontal").grid(
-            row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=6)
-
-        # ── Row 4: RAW_ZIP path ──
-        ttk.Label(compile_frame, text="RAW_ZIP Path:").grid(
-            row=4, column=0, sticky=tk.W, pady=3)
-        raw_zip_frame = ttk.Frame(compile_frame)
-        raw_zip_frame.grid(row=4, column=1, sticky=(tk.W, tk.E), pady=3, padx=5)
+        # RAW_ZIP Path
+        ttk.Label(config_frame, text="RAW_ZIP:").grid(row=1, column=0, sticky=tk.W, pady=3, padx=(0, 5))
+        raw_zip_frame = ttk.Frame(config_frame)
+        raw_zip_frame.grid(row=1, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=3)
         self.raw_zip_var = tk.StringVar(value=r"P:\temp\BENTO\RAW_ZIP")
-        ttk.Entry(raw_zip_frame, textvariable=self.raw_zip_var, width=37).pack(side=tk.LEFT)
-        ttk.Button(raw_zip_frame, text="📁", width=3,
-                   command=lambda: self._browse_directory(self.raw_zip_var, "Select RAW_ZIP Folder")).pack(side=tk.LEFT, padx=(2, 0))
+        ttk.Entry(raw_zip_frame, textvariable=self.raw_zip_var, width=28).pack(side=tk.LEFT)
+        ttk.Button(raw_zip_frame, text="📁", width=3, command=lambda: self._browse_directory(self.raw_zip_var, "Select RAW_ZIP Folder")).pack(side=tk.LEFT, padx=(2, 0))
 
-        # ── Row 5: RELEASE_TGZ path ──
-        ttk.Label(compile_frame, text="RELEASE_TGZ Path:").grid(
-            row=5, column=0, sticky=tk.W, pady=3)
-        release_tgz_frame = ttk.Frame(compile_frame)
-        release_tgz_frame.grid(row=5, column=1, sticky=(tk.W, tk.E), pady=3, padx=5)
+        # RELEASE_TGZ Path
+        ttk.Label(config_frame, text="RELEASE_TGZ:").grid(row=2, column=0, sticky=tk.W, pady=3, padx=(0, 5))
+        release_tgz_frame = ttk.Frame(config_frame)
+        release_tgz_frame.grid(row=2, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=3)
         self.release_tgz_var = tk.StringVar(value=r"P:\temp\BENTO\RELEASE_TGZ")
-        ttk.Entry(release_tgz_frame, textvariable=self.release_tgz_var, width=37).pack(side=tk.LEFT)
-        ttk.Button(release_tgz_frame, text="📁", width=3,
-                   command=lambda: self._browse_directory(self.release_tgz_var, "Select RELEASE_TGZ Folder")).pack(side=tk.LEFT, padx=(2, 0))
+        ttk.Entry(release_tgz_frame, textvariable=self.release_tgz_var, width=28).pack(side=tk.LEFT)
+        ttk.Button(release_tgz_frame, text="📁", width=3, command=lambda: self._browse_directory(self.release_tgz_var, "Select RELEASE_TGZ Folder")).pack(side=tk.LEFT, padx=(2, 0))
 
-        # ── Row 6: Compile button + live status ──
+        # ── 3. ACTION FRAME ──
+        action_frame = ttk.Frame(compile_frame)
+        action_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(5, 5))
+        
+        btn_container = ttk.Frame(action_frame)
+        btn_container.pack(expand=True)
+        
+        # Style for prominent compile button
+        style = ttk.Style()
+        style.configure('Compile.TButton', font=('Arial', 10, 'bold'), padding=6)
+        
         self.compile_btn = ttk.Button(
-            compile_frame, text="Compile on Selected Tester(s)",
-            command=self.trigger_compile_with_lock)
-        self.compile_btn.grid(row=6, column=0, columnspan=2, pady=(10, 6))
+            btn_container, text="🚀 Compile on Selected Tester(s)",
+            style='Compile.TButton',
+            command=self.trigger_compile_with_lock,
+            width=35
+        )
+        self.compile_btn.pack(pady=(0, 2))
+        
         self.compile_status_var = tk.StringVar(value="")
-        ttk.Label(compile_frame, textvariable=self.compile_status_var,
-                  font=("Arial", 9), foreground="blue").grid(
-            row=6, column=2, sticky=tk.W, padx=5)
-
-        compile_frame.columnconfigure(1, weight=1)
+        self.compile_status_lbl = ttk.Label(btn_container, textvariable=self.compile_status_var, font=("Arial", 9, "bold"), foreground="#0066cc")
+        self.compile_status_lbl.pack()
 
         # ── Wire up search + listbox ──
         def _search_changed(*_):
@@ -1215,28 +1194,20 @@ class SimpleGUI:
         # Populate dropdown and set initial state
         self._refresh_tester_dropdown()
 
-        # ── Implementation Plan Result ──────────────────────────────
-        result_frame = ttk.LabelFrame(tab, text="Implementation Plan", padding="10")
-        result_frame.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
-
-        self.impl_result_text = scrolledtext.ScrolledText(result_frame, height=15, width=70, wrap=tk.WORD)
-        self.impl_result_text.pack(fill=tk.BOTH, expand=True)
-
-        # ── Watcher Health Monitor — wrapped in grid row 6 ──────────
-        health_wrapper = ttk.Frame(tab)
-        health_wrapper.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(5, 0))
+        # ── Watcher Health Monitor — wrapped in grid row 1 ──────────
+        health_wrapper = ttk.Frame(compile_subtab)
+        health_wrapper.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
         health_wrapper.columnconfigure(0, weight=1)
         self.build_watcher_health_panel(health_wrapper)
 
-        # ── Compile History — wrapped in grid row 7 ──────────────────
-        history_wrapper = ttk.Frame(tab)
-        history_wrapper.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        # ── Compile History — wrapped in grid row 2 ──────────────────
+        history_wrapper = ttk.Frame(compile_subtab)
+        history_wrapper.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         history_wrapper.columnconfigure(0, weight=1)
         self._build_compile_history_section(history_wrapper)
 
-        tab.columnconfigure(1, weight=1)
-        tab.rowconfigure(5, weight=1)
-        tab.rowconfigure(7, weight=1)
+        compile_subtab.columnconfigure(0, weight=1)
+        compile_subtab.rowconfigure(2, weight=1)
     
     # Individual step methods with GUI locking wrappers
     def fetch_issue_only_with_lock(self):
@@ -2302,21 +2273,6 @@ Populate the template, leaving validation result sections for user to fill after
         self.lock_gui()
         self.compile_status_var.set("Compiling...")
         self.compile_btn.config(state="disabled")
-
-        # Open live status monitor for single-tester compiles
-        # (multi-tester uses the badge window instead)
-        try:
-            targets = self._resolve_tester()
-            if len(targets) == 1:
-                hostname, env = targets[0]
-                issue_key = self.impl_issue_var.get().strip().upper()
-                raw_zip   = self.raw_zip_var.get().strip()
-                if issue_key and raw_zip:
-                    self.root.after(100, lambda: self.open_build_status_monitor(
-                        issue_key, hostname, env, raw_zip))
-        except Exception:
-            pass  # non-fatal — compile still proceeds
-
         t = threading.Thread(target=self._run_compile_thread, daemon=True)
         t.start()
 
@@ -2562,8 +2518,10 @@ Populate the template, leaving validation result sections for user to fill after
         # ── Open live log viewer if we can locate the bento_status sidecar ──
         if zip_file:
             raw_zip = self.raw_zip_var.get().strip() if hasattr(self, "raw_zip_var") else ""
+            status_path = os.path.join(raw_zip, zip_file + ".bento_status") if raw_zip else ""
             build_log_hint = "C:\\BENTO\\logs\\build_" + os.path.splitext(zip_file)[0] + ".log"
         else:
+            status_path    = ""
             build_log_hint = ""
 
         if status == "success":
