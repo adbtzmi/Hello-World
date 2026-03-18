@@ -753,8 +753,22 @@ class SimpleGUI:
         rows["raw_zip"]     = _add_row("📂 RAW_ZIP Folder:")
         rows["release_tgz"] = _add_row("📂 RELEASE_TGZ Folder:")
         rows["watcher"]     = _add_row("🤖 Watcher Process:")
-        rows["last_zip"]    = _add_row("📦 Last ZIP Seen:")
-        rows["last_status"] = _add_row("📊 Last Build Status:")
+
+        # Container for recent builds
+        recent_frame = ttk.Frame(panel)
+        recent_frame.pack(fill=tk.X, pady=(5, 2))
+        ttk.Label(recent_frame, text="📊 Recent Builds:", width=28, anchor="w", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, anchor=tk.N)
+        
+        # Text widget for multi-line colored status
+        bg_color = ttk.Style().lookup('TFrame', 'background') or '#f0f0f0'
+        builds_text = tk.Text(recent_frame, height=6, width=65, bg=bg_color, relief="flat", font=("Segoe UI", 9))
+        builds_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        builds_text.tag_config("success", foreground="#28a745")
+        builds_text.tag_config("failed", foreground="#dc3545")
+        builds_text.tag_config("in_progress", foreground="#fd7e14")
+        builds_text.tag_config("timeout", foreground="purple")
+        builds_text.tag_config("unknown", foreground="gray")
+        builds_text.tag_config("default", foreground="black")
 
         ttk.Button(
             panel, text="🔄 Refresh Now",
@@ -768,21 +782,21 @@ class SimpleGUI:
 
             # RAW_ZIP reachability
             if os.path.isdir(raw_zip_folder):
-                rows["raw_zip"].config(text="✅ Reachable  " + raw_zip_folder, foreground="green")
+                rows["raw_zip"].config(text="✅ Reachable  " + raw_zip_folder, foreground="#28a745")
             else:
-                rows["raw_zip"].config(text="❌ NOT REACHABLE: " + raw_zip_folder, foreground="red")
+                rows["raw_zip"].config(text="❌ NOT REACHABLE: " + raw_zip_folder, foreground="#dc3545")
 
             # RELEASE_TGZ reachability
             if os.path.isdir(release_tgz_folder):
-                rows["release_tgz"].config(text="✅ Reachable  " + release_tgz_folder, foreground="green")
+                rows["release_tgz"].config(text="✅ Reachable  " + release_tgz_folder, foreground="#28a745")
             else:
-                rows["release_tgz"].config(text="❌ NOT REACHABLE: " + release_tgz_folder, foreground="red")
+                rows["release_tgz"].config(text="❌ NOT REACHABLE: " + release_tgz_folder, foreground="#dc3545")
 
             # Watcher lock freshness
             lock_path = os.path.join(repo_dir, ".bento_build_lock")
             if os.path.exists(lock_path):
                 age = int(time.time() - os.path.getmtime(lock_path))
-                rows["watcher"].config(text="🔒 Build Lock active (age=" + str(age) + "s)", foreground="orange")
+                rows["watcher"].config(text="🔒 Build Lock active (age=" + str(age) + "s)", foreground="#fd7e14")
             else:
                 has_lock = False
                 if os.path.isdir(raw_zip_folder):
@@ -791,9 +805,9 @@ class SimpleGUI:
                             has_lock = True
                             break
                 if has_lock:
-                    rows["watcher"].config(text="🟡 ZIP lock present (picking up?)", foreground="orange")
+                    rows["watcher"].config(text="🟡 ZIP lock present (picking up?)", foreground="#fd7e14")
                 else:
-                    rows["watcher"].config(text="✅ Idle (no active build lock)", foreground="green")
+                    rows["watcher"].config(text="✅ Idle (no active build lock)", foreground="#28a745")
 
             # Last ZIP and status
             try:
@@ -804,28 +818,37 @@ class SimpleGUI:
                     reverse=True
                 ) if os.path.isdir(raw_zip_folder) else []
 
+                builds_text.config(state="normal")
+                builds_text.delete("1.0", tk.END)
+
                 if zips:
-                    last_zip = zips[0]
-                    rows["last_zip"].config(text=last_zip, foreground="black")
-                    status_file = os.path.join(raw_zip_folder, last_zip + ".bento_status")
-                    if os.path.exists(status_file):
-                        with open(status_file) as sf:
-                            sdata  = json.load(sf)
-                            state  = sdata.get("status", "unknown")
-                            detail = sdata.get("detail", "")
-                        colour_map = {"success": "green", "failed": "red",
-                                      "in_progress": "orange", "timeout": "purple"}
-                        rows["last_status"].config(
-                            text=state.upper() + " — " + detail[:60],
-                            foreground=colour_map.get(state, "gray")
-                        )
-                    else:
-                        rows["last_status"].config(text="No status file yet", foreground="gray")
+                    # Show up to 3 recent builds
+                    for z in zips[:3]:
+                        status_file = os.path.join(raw_zip_folder, z + ".bento_status")
+                        state = "unknown"
+                        detail = "No status file yet"
+                        
+                        if os.path.exists(status_file):
+                            try:
+                                with open(status_file) as sf:
+                                    sdata  = json.load(sf)
+                                    state  = sdata.get("status", "unknown")
+                                    detail = sdata.get("detail", "")
+                            except:
+                                detail = "Status parse error"
+                                
+                        builds_text.insert(tk.END, f"{z}\n", "default")
+                        builds_text.insert(tk.END, f"↳ {state.upper()} — {detail[:60]}\n", state)
                 else:
-                    rows["last_zip"].config(text="(no ZIPs found)", foreground="gray")
-                    rows["last_status"].config(text="—", foreground="gray")
+                    builds_text.insert(tk.END, "(no ZIPs found)\n", "unknown")
+                    
+                builds_text.config(state="disabled")
+
             except Exception as e:
-                rows["last_zip"].config(text="Error: " + str(e), foreground="red")
+                builds_text.config(state="normal")
+                builds_text.delete("1.0", tk.END)
+                builds_text.insert(tk.END, f"Error: {str(e)}", "failed")
+                builds_text.config(state="disabled")
 
             panel.after(30000, _refresh)
 
@@ -2268,18 +2291,66 @@ Populate the template, leaving validation result sections for user to fill after
         dialog.geometry(f"{w}x{h}+{x}+{y}")
 
     def trigger_compile_with_lock(self):
-        """Lock GUI and run compile in background thread."""
+        """Lock GUI and prompt for custom labels if multi-compile, then run in background thread."""
+        try:
+            targets = self._resolve_tester()
+        except ValueError as e:
+            messagebox.showerror("Configuration Error", str(e))
+            return
+            
+        if len(targets) > 1:
+            self._open_multi_label_dialog(targets)
+        else:
+            default_label = self.tgz_label_var.get().strip()
+            self._start_compile_thread([(targets[0][0], targets[0][1], default_label)])
+
+    def _open_multi_label_dialog(self, targets):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Set Custom TGZ Labels")
+        dialog.geometry("500x" + str(180 + len(targets) * 40))
+        dialog.grab_set()
+        self._centre_dialog(dialog, 500, 180 + len(targets) * 40)
+        
+        ttk.Label(dialog, text="Set Custom TGZ Labels", style="Subtitle.TLabel").pack(pady=(15, 5))
+        ttk.Label(dialog, text="Enter a specific TGZ label for each tester (leave blank for no label):").pack(pady=(0, 10))
+        
+        frame = ttk.Frame(dialog, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True, padx=20)
+        
+        label_vars = {}
+        default_label = self.tgz_label_var.get().strip()
+        
+        for i, (hostname, env) in enumerate(targets):
+            ttk.Label(frame, text=f"{hostname} ({env}):", width=25, font=('Segoe UI', 10, 'bold')).grid(row=i, column=0, pady=5, sticky=tk.W)
+            var = tk.StringVar(value=default_label)
+            label_vars[(hostname, env)] = var
+            ttk.Entry(frame, textvariable=var, width=30).grid(row=i, column=1, pady=5, sticky=tk.W)
+            
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=15)
+        
+        def on_confirm():
+            targets_with_labels = []
+            for (hostname, env) in targets:
+                targets_with_labels.append((hostname, env, label_vars[(hostname, env)].get().strip()))
+            dialog.destroy()
+            self._start_compile_thread(targets_with_labels)
+            
+        ttk.Button(btn_frame, text="Confirm & Compile", style="Compile.TButton", command=on_confirm).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+
+    def _start_compile_thread(self, targets_with_labels):
         import threading
         self.lock_gui()
         self.compile_status_var.set("Compiling...")
         self.compile_btn.config(state="disabled")
-        t = threading.Thread(target=self._run_compile_thread, daemon=True)
+        t = threading.Thread(target=self._run_compile_thread, args=(targets_with_labels,), daemon=True)
         t.start()
 
-    def _run_compile_thread(self):
+    def _run_compile_thread(self, targets_with_labels):
         """Background thread: runs compile and updates status on completion."""
         try:
-            self._run_compile()
+            self._run_compile(targets_with_labels)
         except Exception as e:
             self.log(f"[Compile error] {str(e)}")
             self.compile_status_var.set("Error - check log")
@@ -2287,7 +2358,7 @@ Populate the template, leaving validation result sections for user to fill after
             self.unlock_gui()
             self.compile_btn.config(state="normal")
 
-    def _run_compile(self):
+    def _run_compile(self, targets_with_labels):
         """Main compile logic called from background thread."""
         import os
 
@@ -2295,9 +2366,8 @@ Populate the template, leaving validation result sections for user to fill after
         repo_path = self.impl_repo_var.get().strip()
         raw_zip   = self.raw_zip_var.get().strip()
         release   = self.release_tgz_var.get().strip()
-        label     = self.tgz_label_var.get().strip()
 
-        # Save the label for next session
+        # Save the global default label for next session
         self.save_config()
 
         # ── Pre-flight checks ──
@@ -2319,11 +2389,10 @@ Populate the template, leaving validation result sections for user to fill after
             errors.append("RELEASE_TGZ folder not accessible: " + release +
                          "\n    Check that the P: drive is mapped on this machine")
 
-        try:
-            targets = self._resolve_tester()  # Now returns list of (hostname, env) tuples
-        except ValueError as e:
-            errors.append(str(e))
-            targets = []
+        targets = [(t[0], t[1]) for t in targets_with_labels]
+
+        if not targets:
+            errors.append("No testers provided for compilation.")
 
         if errors:
             msg = "Cannot compile. Fix the following:\n\n" + "\n".join(
@@ -2361,24 +2430,24 @@ Populate the template, leaving validation result sections for user to fill after
         self.log("  JIRA Issue : " + issue_key)
         
         # Handle single or multiple testers
-        if len(targets) == 1:
-            hostname, env = targets[0]
+        if len(targets_with_labels) == 1:
+            hostname, env, label = targets_with_labels[0]
             self.log("  Tester     : " + hostname + " (" + env + ")")
+            self.log("  Label      : " + (label if label else "(none)"))
         else:
-            self.log(f"  Testers    : {len(targets)} parallel compilations")
-            for hostname, env in targets:
-                self.log(f"               - {hostname} ({env})")
+            self.log(f"  Testers    : {len(targets_with_labels)} parallel compilations")
+            for hostname, env, label in targets_with_labels:
+                self.log(f"               - {hostname} ({env}) [Label: {label if label else '(none)'}]")
         
-        self.log("  Label      : " + (label if label else "(none)"))
         self.log("  Repo Path  : " + repo_path)
         self.log("  RAW_ZIP    : " + raw_zip)
         self.log("  RELEASE    : " + release)
         self.log(sep)
 
         # Use multi-tester compilation if multiple targets selected
-        if len(targets) == 1:
+        if len(targets_with_labels) == 1:
             # Single tester - use original flow
-            hostname, env = targets[0]
+            hostname, env, label = targets_with_labels[0]
             result = orch.compile_tp_package(
                 source_dir=repo_path,
                 env=env,
@@ -2400,7 +2469,7 @@ Populate the template, leaving validation result sections for user to fill after
                     callbacks[(h, e)]("building"))
 
             # Wrap compile_tp_package_multi to update badges as each completes
-            def _one_with_badge(hostname, env):
+            def _one_with_badge(hostname, env, label):
                 self.root.after(0, lambda: callbacks[(hostname, env)]("building"))
                 result = orch.compile_tp_package(
                     source_dir=repo_path,
@@ -2422,9 +2491,9 @@ Populate the template, leaving validation result sections for user to fill after
 
             from concurrent.futures import ThreadPoolExecutor, as_completed
             results = []
-            with ThreadPoolExecutor(max_workers=len(targets)) as pool:
-                futures = {pool.submit(_one_with_badge, h, e): (h, e)
-                           for h, e in targets}
+            with ThreadPoolExecutor(max_workers=len(targets_with_labels)) as pool:
+                futures = {pool.submit(_one_with_badge, h, e, l): (h, e)
+                           for h, e, l in targets_with_labels}
                 for future in as_completed(futures):
                     results.append(future.result())
 
