@@ -766,6 +766,7 @@ class SimpleGUI:
         builds_text.tag_config("success", foreground="#28a745")
         builds_text.tag_config("failed", foreground="#dc3545")
         builds_text.tag_config("in_progress", foreground="#fd7e14")
+        builds_text.tag_config("pending", foreground="#fd7e14")
         builds_text.tag_config("timeout", foreground="purple")
         builds_text.tag_config("unknown", foreground="gray")
         builds_text.tag_config("default", foreground="black")
@@ -799,58 +800,90 @@ class SimpleGUI:
 
             # Watcher lock freshness
             lock_path = os.path.join(repo_dir, ".bento_build_lock")
+            local_lock_msg = ""
             if os.path.exists(lock_path):
                 age = int(time.time() - os.path.getmtime(lock_path))
-                rows["watcher"].config(text="🔒 Build Lock active (age=" + str(age) + "s)", foreground="#fd7e14")
-            else:
-                has_lock = False
-                if os.path.isdir(raw_zip_folder):
-                    for f in os.listdir(raw_zip_folder):
-                        if f.endswith(".bento_lock"):
-                            has_lock = True
-                            break
-                if has_lock:
-                    rows["watcher"].config(text="🟡 ZIP lock present (picking up?)", foreground="#fd7e14")
-                else:
-                    rows["watcher"].config(text="✅ Idle (no active build lock)", foreground="#28a745")
+                local_lock_msg = f"Local lock ({age}s) "
 
-            # Last ZIP and status — scan .bento_status files directly
-            # (successful ZIPs are deleted after compile, status files persist)
+            active_locks = []
+            if os.path.isdir(raw_zip_folder):
+                for f in os.listdir(raw_zip_folder):
+                    if f.endswith(".bento_lock"):
+                        parts = f.split("_")
+                        if len(parts) >= 3:
+                            active_locks.append(f"{parts[1]}")
+                        else:
+                            active_locks.append("Active")
+            
+            if active_locks or local_lock_msg:
+                locks_str = ", ".join(active_locks)
+                msg = "🟡 Processing: " + locks_str if locks_str else "🟡 Processing..."
+                if local_lock_msg:
+                    msg = "🔒 " + local_lock_msg + "| " + msg
+                rows["watcher"].config(text=msg, foreground="#fd7e14")
+            else:
+                rows["watcher"].config(text="✅ Idle (no active builds)", foreground="#28a745")
+
+            # Last ZIP and status
             try:
-                all_status_files = []
+                builds_text.config(state="normal")
+                builds_text.delete("1.0", tk.END)
+                
+                # Check for .bento_status files and .zip files
+                all_builds = []
                 if os.path.isdir(raw_zip_folder):
                     for f in os.listdir(raw_zip_folder):
                         if f.endswith(".bento_status"):
-                            all_status_files.append(os.path.join(raw_zip_folder, f))
+                            base_name = f.replace(".bento_status", "")
+                            mtime = os.path.getmtime(os.path.join(raw_zip_folder, f))
+                            all_builds.append((base_name, f, mtime))
+                        elif f.endswith(".zip") and not f.endswith(".bento_lock"):
+                            # Also include zips that don't have a status file yet
+                            mtime = os.path.getmtime(os.path.join(raw_zip_folder, f))
+                            all_builds.append((f, None, mtime))
+                
+                # Sort by mtime descending
+                all_builds.sort(key=lambda x: x[2], reverse=True)
+                
+                # Deduplicate by base name to avoid showing the zip and its status file twice
+                seen_bases = set()
+                unique_builds = []
+                for base_name, status_file, mtime in all_builds:
+                    # For zips without status, base_name is the full zip name. 
+                    # If we later see the zip name again, it means we already captured its status.
+                    core_name = base_name.replace(".zip", "") if base_name.endswith(".zip") else base_name
+                    if core_name not in seen_bases:
+                        seen_bases.add(core_name)
+                        unique_builds.append((base_name, status_file))
+                        if len(unique_builds) >= 3:
+                            break
 
-                if all_status_files:
-                    newest = max(all_status_files, key=os.path.getmtime)
-                    zip_name = os.path.basename(newest).replace(".bento_status", "")
-                    rows["last_zip"].config(text=zip_name, foreground="black")
-                    with open(newest) as sf:
-                        sdata  = json.load(sf)
-                        state  = sdata.get("status", "unknown")
-                        detail = sdata.get("detail", "")
-                    colour_map = {"success": "green", "failed": "red",
-                                  "in_progress": "orange", "timeout": "purple"}
-                    rows["last_status"].config(
-                        text=state.upper() + " — " + detail[:60],
-                        foreground=colour_map.get(state, "gray")
-                    )
+                if unique_builds:
+                    for base_name, status_file in unique_builds:
+                        state = "unknown"
+                        detail = "No status file yet (Waiting for watcher...)"
+                        
+                        if status_file:
+                            full_path = os.path.join(raw_zip_folder, status_file)
+                            try:
+                                with open(full_path) as sf:
+                                    sdata  = json.load(sf)
+                                    state  = sdata.get("status", "unknown")
+                                    detail = sdata.get("detail", "")
+                            except:
+                                detail = "Status parse error"
+                        else:
+                            state = "pending"
+                                
+                        # Use standard .zip extension for display even if only status file remains
+                        display_name = base_name if base_name.endswith(".zip") else base_name + ".zip"
+                        builds_text.insert(tk.END, f"{display_name}\n", "default")
+                        builds_text.insert(tk.END, f"↳ {state.upper()} — {detail[:70]}\n", state)
                 else:
-                    # No status files — check for ZIPs not yet picked up
-                    zips = [f for f in os.listdir(raw_zip_folder)
-                            if f.endswith(".zip") and ".bento_" not in f
-                            ] if os.path.isdir(raw_zip_folder) else []
-                    if zips:
-                        newest_zip = max(zips, key=lambda f: os.path.getmtime(
-                            os.path.join(raw_zip_folder, f)))
-                        rows["last_zip"].config(text=newest_zip, foreground="gray")
-                        rows["last_status"].config(
-                            text="Waiting for watcher...", foreground="orange")
-                    else:
-                        rows["last_zip"].config(text="(none)", foreground="gray")
-                        rows["last_status"].config(text="—", foreground="gray")
+                    builds_text.insert(tk.END, "(no recent builds found)\n", "unknown")
+                    
+                builds_text.config(state="disabled")
+
             except Exception as e:
                 builds_text.config(state="normal")
                 builds_text.delete("1.0", tk.END)
@@ -2375,19 +2408,11 @@ Populate the template, leaving validation result sections for user to fill after
     def _start_compile_thread(self, targets_with_labels):
         import threading
 
-        # ── Resolve tester on main thread (tkinter widget access) ──
-        try:
-            targets = self._resolve_tester()
-        except ValueError as e:
-            messagebox.showerror("No Tester Selected", str(e))
-            return
-
         # ── Collect all widget values on main thread ──
         issue_key = self.impl_issue_var.get().strip().upper()
         repo_path = self.impl_repo_var.get().strip()
         raw_zip   = self.raw_zip_var.get().strip()
         release   = self.release_tgz_var.get().strip()
-        label     = self.tgz_label_var.get().strip()
 
         self.lock_gui()
         self.compile_status_var.set("Compiling...")
@@ -2397,31 +2422,33 @@ Populate the template, leaving validation result sections for user to fill after
         self.save_config()
 
         # Open live status monitor for single-tester compiles
-        if len(targets) == 1:
-            hostname, env = targets[0]
+        if len(targets_with_labels) == 1:
+            hostname, env, _ = targets_with_labels[0]
             if issue_key and raw_zip:
                 self.root.after(100, lambda: self.open_build_status_monitor(
                     issue_key, hostname, env, raw_zip))
 
         t = threading.Thread(
             target=self._run_compile_thread,
-            args=(targets, issue_key, repo_path, raw_zip, release, label),
+            args=(targets_with_labels, issue_key, repo_path, raw_zip, release),
             daemon=True
         )
         t.start()
 
-    def _run_compile_thread(self, targets, issue_key, repo_path, raw_zip, release, label):
+    def _run_compile_thread(self, targets_with_labels, issue_key, repo_path, raw_zip, release):
         """Background thread: runs compile and updates status on completion."""
         try:
-            self._run_compile(targets, issue_key, repo_path, raw_zip, release, label)
+            self._run_compile(targets_with_labels, issue_key, repo_path, raw_zip, release)
         except Exception as e:
             self.log(f"[Compile error] {str(e)}")
+            import traceback
+            self.log(traceback.format_exc())
             self.compile_status_var.set("Error - check log")
         finally:
             self.unlock_gui()
             self.compile_btn.config(state="normal")
 
-    def _run_compile(self, targets, issue_key, repo_path, raw_zip, release, label):
+    def _run_compile(self, targets_with_labels, issue_key, repo_path, raw_zip, release):
         """Main compile logic called from background thread.
         All parameters pre-resolved on main thread — no widget access here.
         """
@@ -2445,6 +2472,8 @@ Populate the template, leaving validation result sections for user to fill after
         elif not os.path.isdir(release):
             errors.append("RELEASE_TGZ folder not accessible: " + release +
                          "\n    Check that the P: drive is mapped on this machine")
+
+        targets = [(t[0], t[1]) for t in targets_with_labels]
 
         if not targets:
             errors.append("No tester selected.")
