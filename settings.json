@@ -15,23 +15,5 @@
   },
   "compile": {
     "last_tgz_label": ""
-  },
-  "cat": {
-    "db_path": "\\\\sifsmodauto\\modauto\\temp\\cat\\CRT_Automation.db",
-    "crt_excel_path": "\\\\sifsmodauto\\modauto\\temp\\cat\\production\\crt_from_sap.xlsx",
-    "incoming_crt_excel": "\\\\sifsmodauto\\modauto\\temp\\cat\\production\\incoming_crt.xlsx",
-    "profile_gen_excel": "\\\\sifsmodauto\\modauto\\temp\\cat\\production\\for_profile_gen.xlsx"
-  },
-  "checkout": {
-    "hot_folder": "C:\\test_program\\playground_queue",
-    "slate_log_path": "C:\\test_program\\logs\\slate_system.log",
-    "output_folder": "C:\\test_program\\results",
-    "memory_collect_exe": "C:\\tools\\memory_collect.exe",
-    "timeout_hours": 8
-  },
-  "notifications": {
-    "teams_webhook_url": "",
-    "notify_on_complete": true,
-    "notify_on_failure": true
   }
 }
