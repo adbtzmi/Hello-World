@@ -817,33 +817,40 @@ class SimpleGUI:
             # Last ZIP and status — scan .bento_status files directly
             # (successful ZIPs are deleted after compile, status files persist)
             try:
-                zips = sorted(
-                    [f for f in os.listdir(raw_zip_folder)
-                     if f.endswith(".zip") and ".bento_" not in f],
-                    key=lambda f: os.path.getmtime(os.path.join(raw_zip_folder, f)),
-                    reverse=True
-                ) if os.path.isdir(raw_zip_folder) else []
+                all_status_files = []
+                if os.path.isdir(raw_zip_folder):
+                    for f in os.listdir(raw_zip_folder):
+                        if f.endswith(".bento_status"):
+                            all_status_files.append(os.path.join(raw_zip_folder, f))
 
-                if zips:
-                    last_zip = zips[0]
-                    rows["last_zip"].config(text=last_zip, foreground="black")
-                    status_file = os.path.join(raw_zip_folder, last_zip + ".bento_status")
-                    if os.path.exists(status_file):
-                        with open(status_file) as sf:
-                            sdata  = json.load(sf)
-                            state  = sdata.get("status", "unknown")
-                            detail = sdata.get("detail", "")
-                        colour_map = {"success": "green", "failed": "red",
-                                      "in_progress": "orange", "timeout": "purple"}
-                        rows["last_status"].config(
-                            text=state.upper() + " — " + detail[:60],
-                            foreground=colour_map.get(state, "gray")
-                        )
-                    else:
-                        rows["last_status"].config(text="No status file yet", foreground="gray")
+                if all_status_files:
+                    newest = max(all_status_files, key=os.path.getmtime)
+                    zip_name = os.path.basename(newest).replace(".bento_status", "")
+                    rows["last_zip"].config(text=zip_name, foreground="black")
+                    with open(newest) as sf:
+                        sdata  = json.load(sf)
+                        state  = sdata.get("status", "unknown")
+                        detail = sdata.get("detail", "")
+                    colour_map = {"success": "green", "failed": "red",
+                                  "in_progress": "orange", "timeout": "purple"}
+                    rows["last_status"].config(
+                        text=state.upper() + " — " + detail[:60],
+                        foreground=colour_map.get(state, "gray")
+                    )
                 else:
-                    rows["last_zip"].config(text="(no ZIPs found)", foreground="gray")
-                    rows["last_status"].config(text="—", foreground="gray")
+                    # No status files — check for ZIPs not yet picked up
+                    zips = [f for f in os.listdir(raw_zip_folder)
+                            if f.endswith(".zip") and ".bento_" not in f
+                            ] if os.path.isdir(raw_zip_folder) else []
+                    if zips:
+                        newest_zip = max(zips, key=lambda f: os.path.getmtime(
+                            os.path.join(raw_zip_folder, f)))
+                        rows["last_zip"].config(text=newest_zip, foreground="gray")
+                        rows["last_status"].config(
+                            text="Waiting for watcher...", foreground="orange")
+                    else:
+                        rows["last_zip"].config(text="(none)", foreground="gray")
+                        rows["last_status"].config(text="—", foreground="gray")
             except Exception as e:
                 builds_text.config(state="normal")
                 builds_text.delete("1.0", tk.END)
@@ -2385,13 +2392,28 @@ Populate the template, leaving validation result sections for user to fill after
         self.lock_gui()
         self.compile_status_var.set("Compiling...")
         self.compile_btn.config(state="disabled")
-        t = threading.Thread(target=self._run_compile_thread, daemon=True)
+
+        # Save config on main thread before thread starts (widget access not allowed in thread)
+        self.save_config()
+
+        # Open live status monitor for single-tester compiles
+        if len(targets) == 1:
+            hostname, env = targets[0]
+            if issue_key and raw_zip:
+                self.root.after(100, lambda: self.open_build_status_monitor(
+                    issue_key, hostname, env, raw_zip))
+
+        t = threading.Thread(
+            target=self._run_compile_thread,
+            args=(targets, issue_key, repo_path, raw_zip, release, label),
+            daemon=True
+        )
         t.start()
 
-    def _run_compile_thread(self):
+    def _run_compile_thread(self, targets, issue_key, repo_path, raw_zip, release, label):
         """Background thread: runs compile and updates status on completion."""
         try:
-            self._run_compile()
+            self._run_compile(targets, issue_key, repo_path, raw_zip, release, label)
         except Exception as e:
             self.log(f"[Compile error] {str(e)}")
             self.compile_status_var.set("Error - check log")
@@ -2399,18 +2421,11 @@ Populate the template, leaving validation result sections for user to fill after
             self.unlock_gui()
             self.compile_btn.config(state="normal")
 
-    def _run_compile(self):
-        """Main compile logic called from background thread."""
+    def _run_compile(self, targets, issue_key, repo_path, raw_zip, release, label):
+        """Main compile logic called from background thread.
+        All parameters pre-resolved on main thread — no widget access here.
+        """
         import os
-
-        issue_key = self.impl_issue_var.get().strip().upper()
-        repo_path = self.impl_repo_var.get().strip()
-        raw_zip   = self.raw_zip_var.get().strip()
-        release   = self.release_tgz_var.get().strip()
-        label     = self.tgz_label_var.get().strip()
-
-        # Save the label for next session
-        self.save_config()
 
         # ── Pre-flight checks ──
         errors = []
@@ -2431,11 +2446,8 @@ Populate the template, leaving validation result sections for user to fill after
             errors.append("RELEASE_TGZ folder not accessible: " + release +
                          "\n    Check that the P: drive is mapped on this machine")
 
-        try:
-            targets = self._resolve_tester()  # Now returns list of (hostname, env) tuples
-        except ValueError as e:
-            errors.append(str(e))
-            targets = []
+        if not targets:
+            errors.append("No tester selected.")
 
         if errors:
             msg = "Cannot compile. Fix the following:\n\n" + "\n".join(
