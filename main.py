@@ -776,6 +776,11 @@ class SimpleGUI:
         ).pack(anchor="e", padx=5, pady=3)
 
         def _refresh():
+            try:
+                if not panel.winfo_exists():
+                    return
+            except Exception:
+                return
             raw_zip_folder     = self.raw_zip_var.get().strip()     if hasattr(self, "raw_zip_var")     else r"P:\temp\BENTO\RAW_ZIP"
             release_tgz_folder = self.release_tgz_var.get().strip() if hasattr(self, "release_tgz_var") else r"P:\temp\BENTO\RELEASE_TGZ"
             repo_dir           = r"C:\BENTO\adv_ibir_master"
@@ -809,7 +814,8 @@ class SimpleGUI:
                 else:
                     rows["watcher"].config(text="✅ Idle (no active build lock)", foreground="#28a745")
 
-            # Last ZIP and status
+            # Last ZIP and status — scan .bento_status files directly
+            # (successful ZIPs are deleted after compile, status files persist)
             try:
                 zips = sorted(
                     [f for f in os.listdir(raw_zip_folder)
@@ -818,32 +824,26 @@ class SimpleGUI:
                     reverse=True
                 ) if os.path.isdir(raw_zip_folder) else []
 
-                builds_text.config(state="normal")
-                builds_text.delete("1.0", tk.END)
-
                 if zips:
-                    # Show up to 3 recent builds
-                    for z in zips[:3]:
-                        status_file = os.path.join(raw_zip_folder, z + ".bento_status")
-                        state = "unknown"
-                        detail = "No status file yet"
-                        
-                        if os.path.exists(status_file):
-                            try:
-                                with open(status_file) as sf:
-                                    sdata  = json.load(sf)
-                                    state  = sdata.get("status", "unknown")
-                                    detail = sdata.get("detail", "")
-                            except:
-                                detail = "Status parse error"
-                                
-                        builds_text.insert(tk.END, f"{z}\n", "default")
-                        builds_text.insert(tk.END, f"↳ {state.upper()} — {detail[:60]}\n", state)
+                    last_zip = zips[0]
+                    rows["last_zip"].config(text=last_zip, foreground="black")
+                    status_file = os.path.join(raw_zip_folder, last_zip + ".bento_status")
+                    if os.path.exists(status_file):
+                        with open(status_file) as sf:
+                            sdata  = json.load(sf)
+                            state  = sdata.get("status", "unknown")
+                            detail = sdata.get("detail", "")
+                        colour_map = {"success": "green", "failed": "red",
+                                      "in_progress": "orange", "timeout": "purple"}
+                        rows["last_status"].config(
+                            text=state.upper() + " — " + detail[:60],
+                            foreground=colour_map.get(state, "gray")
+                        )
+                    else:
+                        rows["last_status"].config(text="No status file yet", foreground="gray")
                 else:
-                    builds_text.insert(tk.END, "(no ZIPs found)\n", "unknown")
-                    
-                builds_text.config(state="disabled")
-
+                    rows["last_zip"].config(text="(no ZIPs found)", foreground="gray")
+                    rows["last_status"].config(text="—", foreground="gray")
             except Exception as e:
                 builds_text.config(state="normal")
                 builds_text.delete("1.0", tk.END)
@@ -856,80 +856,101 @@ class SimpleGUI:
         return panel
 
     # ================================================================
-    # REAL-TIME BUILD LOG VIEWER
+    # REAL-TIME BUILD STATUS MONITOR
     # ================================================================
-    def open_build_log_viewer(self, log_path):
+    def open_build_status_monitor(self, issue_key, hostname, env, raw_zip_folder):
         """
-        Opens a live-tailing build log window.
-        Auto-refreshes every 2 seconds until build completes.
+        Opens a live build status monitor window.
+        Polls the .bento_status sidecar on the shared RAW_ZIP folder every 3s.
+        Uses local closure flag (not instance var) so multiple monitors are safe.
         """
-        log_win = tk.Toplevel(self.root)
-        log_win.title("Live Build Log — " + os.path.basename(log_path))
-        log_win.geometry("900x600")
-        self._centre_dialog(log_win, 900, 600)
+        mon_win = tk.Toplevel(self.root)
+        mon_win.title("Build Monitor — " + hostname + " (" + env + ")")
+        self._centre_dialog(mon_win, 620, 400)
+        mon_win.resizable(False, False)
 
-        toolbar = ttk.Frame(log_win)
-        toolbar.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Label(mon_win, text="Live Build Status",
+                  font=("Arial", 12, "bold")).pack(anchor=tk.W, padx=16, pady=(14, 2))
+        ttk.Label(mon_win,
+                  text=hostname + "  (" + env + ")  —  JIRA: " + issue_key,
+                  font=("Arial", 9), foreground="#555555").pack(anchor=tk.W, padx=16)
+        ttk.Separator(mon_win, orient="horizontal").pack(fill=tk.X, padx=16, pady=8)
 
-        status_label = ttk.Label(toolbar, text="🟡 Build in progress...", foreground="orange")
-        status_label.pack(side=tk.LEFT, padx=5)
+        badge_var = tk.StringVar(value="🟡  Waiting for watcher to pick up ZIP...")
+        badge_lbl = ttk.Label(mon_win, textvariable=badge_var,
+                               font=("Arial", 10, "bold"), foreground="orange")
+        badge_lbl.pack(anchor=tk.W, padx=16, pady=(0, 6))
 
-        auto_scroll_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(toolbar, text="Auto-scroll", variable=auto_scroll_var).pack(side=tk.RIGHT, padx=5)
-        ttk.Button(toolbar, text="Open Log Folder",
-                   command=lambda: os.startfile(os.path.dirname(log_path))).pack(side=tk.RIGHT, padx=5)
+        detail_var = tk.StringVar(value="")
+        ttk.Label(mon_win, textvariable=detail_var,
+                  font=("Courier", 9), foreground="#333333",
+                  wraplength=580, justify=tk.LEFT).pack(anchor=tk.W, padx=16)
 
-        log_frame = ttk.LabelFrame(log_win, text="Build Output", padding="5")
-        log_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        elapsed_var = tk.StringVar(value="")
+        ttk.Label(mon_win, textvariable=elapsed_var,
+                  font=("Arial", 8), foreground="gray").pack(anchor=tk.W, padx=16, pady=(4, 0))
 
-        log_text = scrolledtext.ScrolledText(
-            log_frame, height=35, width=110,
-            wrap=tk.NONE, font=("Courier", 9), state=tk.DISABLED
-        )
-        log_text.pack(fill=tk.BOTH, expand=True)
-        log_text.tag_config("success", foreground="green")
-        log_text.tag_config("error",   foreground="red")
-        log_text.tag_config("warn",    foreground="orange")
+        ttk.Separator(mon_win, orient="horizontal").pack(fill=tk.X, padx=16, pady=8)
+        ttk.Label(mon_win,
+                  text="Build log on tester:  C:\\BENTO\\logs\\build_<ZIP_NAME>.log",
+                  font=("Arial", 8), foreground="#777777").pack(anchor=tk.W, padx=16)
+        ttk.Button(mon_win, text="Close", command=mon_win.destroy).pack(pady=12)
 
-        self._log_viewer_active = True
+        # Fix 2: local mutable flag — safe if multiple monitors open simultaneously
+        active = [True]
+        start_time = time.time()
 
-        def _tail():
-            if not self._log_viewer_active:
-                return
+        colour_map = {"success": "green", "failed": "red",
+                      "in_progress": "orange", "pending": "orange", "timeout": "purple"}
+        icon_map   = {"success": "✅", "failed": "❌",
+                      "in_progress": "🔨", "pending": "🟡", "timeout": "⏱"}
+
+        def _poll():
+            # Fix 4: stop if window destroyed
             try:
-                with open(log_path, "r", errors="replace") as f:
-                    content = f.read()
-                log_text.config(state=tk.NORMAL)
-                log_text.delete("1.0", tk.END)
-                for line in content.splitlines(True):
-                    tag = ""
-                    ll = line.lower()
-                    if "success" in ll or "[ok]" in ll:
-                        tag = "success"
-                    elif "error" in ll or "failed" in ll or "fatal" in ll:
-                        tag = "error"
-                    elif "warning" in ll or "warn" in ll:
-                        tag = "warn"
-                    log_text.insert(tk.END, line, tag)
-                log_text.config(state=tk.DISABLED)
-                if auto_scroll_var.get():
-                    log_text.see(tk.END)
-                if "Result    :" in content:
-                    if "SUCCESS" in content:
-                        status_label.config(text="✅ Build SUCCESS", foreground="green")
-                    else:
-                        status_label.config(text="❌ Build FAILED", foreground="red")
+                if not mon_win.winfo_exists():
                     return
-            except FileNotFoundError:
+            except Exception:
+                return
+            if not active[0]:
+                return
+
+            elapsed_var.set("Elapsed: " + str(int(time.time() - start_time)) + "s")
+
+            try:
+                if os.path.isdir(raw_zip_folder):
+                    for fname in os.listdir(raw_zip_folder):
+                        if not fname.endswith(".bento_status"):
+                            continue
+                        base = fname.replace(".zip.bento_status", "")
+                        if (hostname.upper() in base.upper() and
+                                env.upper() in base.upper() and
+                                issue_key.upper() in base.upper()):
+                            with open(os.path.join(raw_zip_folder, fname)) as f:
+                                data = json.load(f)
+                            state  = data.get("status", "unknown")
+                            detail = data.get("detail", "")
+                            badge_var.set(icon_map.get(state, "🔵") + "  " +
+                                          state.upper().replace("_", " "))
+                            badge_lbl.config(foreground=colour_map.get(state, "gray"))
+                            detail_var.set(detail[:200] if detail else "")
+                            if state in ("success", "failed", "timeout"):
+                                return
+                            break
+                    else:
+                        badge_var.set("🟡  Waiting for watcher to pick up ZIP...")
+                        badge_lbl.config(foreground="orange")
+            except Exception:
                 pass
-            log_win.after(2000, _tail)
+
+            mon_win.after(3000, _poll)
 
         def _on_close():
-            self._log_viewer_active = False
-            log_win.destroy()
+            active[0] = False
+            mon_win.destroy()
 
-        log_win.protocol("WM_DELETE_WINDOW", _on_close)
-        _tail()
+        mon_win.protocol("WM_DELETE_WINDOW", _on_close)
+        _poll()
 
     # ================================================================
     # PER-TESTER LIVE STATUS BADGES
@@ -972,6 +993,11 @@ class SimpleGUI:
                          "start_time": None, "running": False}
 
         def _tick():
+            try:
+                if not status_win.winfo_exists():
+                    return
+            except Exception:
+                return
             for key, row in rows.items():
                 if row["start_time"] and row.get("running", False):
                     elapsed = int(time.time() - row["start_time"])
@@ -2341,16 +2367,31 @@ Populate the template, leaving validation result sections for user to fill after
 
     def _start_compile_thread(self, targets_with_labels):
         import threading
+
+        # ── Resolve tester on main thread (tkinter widget access) ──
+        try:
+            targets = self._resolve_tester()
+        except ValueError as e:
+            messagebox.showerror("No Tester Selected", str(e))
+            return
+
+        # ── Collect all widget values on main thread ──
+        issue_key = self.impl_issue_var.get().strip().upper()
+        repo_path = self.impl_repo_var.get().strip()
+        raw_zip   = self.raw_zip_var.get().strip()
+        release   = self.release_tgz_var.get().strip()
+        label     = self.tgz_label_var.get().strip()
+
         self.lock_gui()
         self.compile_status_var.set("Compiling...")
         self.compile_btn.config(state="disabled")
-        t = threading.Thread(target=self._run_compile_thread, args=(targets_with_labels,), daemon=True)
+        t = threading.Thread(target=self._run_compile_thread, daemon=True)
         t.start()
 
-    def _run_compile_thread(self, targets_with_labels):
+    def _run_compile_thread(self):
         """Background thread: runs compile and updates status on completion."""
         try:
-            self._run_compile(targets_with_labels)
+            self._run_compile()
         except Exception as e:
             self.log(f"[Compile error] {str(e)}")
             self.compile_status_var.set("Error - check log")
@@ -2358,7 +2399,7 @@ Populate the template, leaving validation result sections for user to fill after
             self.unlock_gui()
             self.compile_btn.config(state="normal")
 
-    def _run_compile(self, targets_with_labels):
+    def _run_compile(self):
         """Main compile logic called from background thread."""
         import os
 
@@ -2366,8 +2407,9 @@ Populate the template, leaving validation result sections for user to fill after
         repo_path = self.impl_repo_var.get().strip()
         raw_zip   = self.raw_zip_var.get().strip()
         release   = self.release_tgz_var.get().strip()
+        label     = self.tgz_label_var.get().strip()
 
-        # Save the global default label for next session
+        # Save the label for next session
         self.save_config()
 
         # ── Pre-flight checks ──
@@ -2389,10 +2431,11 @@ Populate the template, leaving validation result sections for user to fill after
             errors.append("RELEASE_TGZ folder not accessible: " + release +
                          "\n    Check that the P: drive is mapped on this machine")
 
-        targets = [(t[0], t[1]) for t in targets_with_labels]
-
-        if not targets:
-            errors.append("No testers provided for compilation.")
+        try:
+            targets = self._resolve_tester()  # Now returns list of (hostname, env) tuples
+        except ValueError as e:
+            errors.append(str(e))
+            targets = []
 
         if errors:
             msg = "Cannot compile. Fix the following:\n\n" + "\n".join(
@@ -2540,18 +2583,25 @@ Populate the template, leaving validation result sections for user to fill after
         scroll_y.pack(side=tk.LEFT, fill=tk.Y)
 
         def _load():
-            tree.delete(*tree.get_children())
             release_root = (self.release_tgz_var.get().strip()
                             if hasattr(self, "release_tgz_var")
                             else r"P:\temp\BENTO\RELEASE_TGZ")
-            pattern = os.path.join(release_root, "**", "build_info_*.txt")
-            files   = glob.glob(pattern, recursive=True)
-            files.sort(key=os.path.getmtime, reverse=True)
-            for i, fpath in enumerate(files):
-                row = _parse(fpath)
-                if row:
-                    tree.insert("", tk.END, values=row,
-                                tags=("even" if i % 2 == 0 else "odd",))
+
+            def _fetch():
+                pattern = os.path.join(release_root, "**", "build_info_*.txt")
+                files   = glob.glob(pattern, recursive=True)
+                files.sort(key=os.path.getmtime, reverse=True)
+                self.root.after(0, lambda: _populate(files))
+
+            def _populate(files):
+                tree.delete(*tree.get_children())
+                for i, fpath in enumerate(files):
+                    row = _parse(fpath)
+                    if row:
+                        tree.insert("", tk.END, values=row,
+                                    tags=("even" if i % 2 == 0 else "odd",))
+
+            threading.Thread(target=_fetch, daemon=True).start()
 
         def _parse(fpath):
             data = {}
@@ -2644,13 +2694,21 @@ Populate the template, leaving validation result sections for user to fill after
                 self.log(f"     Time: {int(elapsed)}s")
                 tgz_paths.append(tgz_path)
             elif status == "timeout":
-                detail = r.get("detail", "Timeout")
+                detail   = r.get("detail", "Timeout")
+                zip_file = r.get("zip_file", "")
                 self.log(f"[TIMEOUT] {tag}")
                 self.log(f"          {detail}")
+                if zip_file:
+                    self.log("          Build log on tester: C:\\BENTO\\logs\\build_"
+                             + os.path.splitext(zip_file)[0] + ".log")
             else:
-                detail = r.get("detail", "Unknown error")
+                detail   = r.get("detail", "Unknown error")
+                zip_file = r.get("zip_file", "")
                 self.log(f"[FAIL] {tag}")
                 self.log(f"       {detail}")
+                if zip_file:
+                    self.log("       Build log on tester: C:\\BENTO\\logs\\build_"
+                             + os.path.splitext(zip_file)[0] + ".log")
         
         self.log("=" * 60)
         self.log(f"Summary: {success_count} success, {failed_count} failed, {timeout_count} timeout")
@@ -3126,12 +3184,15 @@ Step-by-step guide for manual review and additional changes.
             self.log("✓ Debug mode DISABLED")
     
     def log(self, message):
+        """Thread-safe log — routes to main thread via root.after()."""
+        self.root.after(0, lambda m=message: self._log_safe(m))
+
+    def _log_safe(self, message):
+        """Actual log write — must only be called from main thread."""
         self.log_text.insert(tk.END, f"{message}\n")
         self.log_text.see(tk.END)
-        self.root.update()
         # Also write to log file
         if hasattr(self, 'file_logger') and self.file_logger:
-            # Strip emoji/special chars for cleaner log file, determine log level
             clean_msg = str(message).strip()
             if '✗' in clean_msg or 'Error' in clean_msg or 'FAILED' in clean_msg:
                 self.file_logger.error(clean_msg)

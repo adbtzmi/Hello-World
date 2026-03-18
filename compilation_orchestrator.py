@@ -319,20 +319,21 @@ def compile_tp_package(
     if not hostname:
         msg = "Hostname is required for compilation"
         _log(logger, "[FAIL] " + msg, log_callback, "error")
-        return {"status": "failed", "tgz_file": None, "detail": msg, "elapsed": 0}
+        return {"status": "failed", "tgz_file": None, "zip_file": None, "detail": msg, "elapsed": 0}
     
     # Validate env exists in registry (dynamic check)
     valid_envs = get_valid_envs()
     if env not in valid_envs:
         msg = f"Unknown environment '{env}'. Valid: {', '.join(sorted(valid_envs))}"
         _log(logger, "[FAIL] " + msg, log_callback, "error")
-        return {"status": "failed", "tgz_file": None, "detail": msg, "elapsed": 0}
+        return {"status": "failed", "tgz_file": None, "zip_file": None, "detail": msg, "elapsed": 0}
 
     zip_path = create_tp_zip(source_dir, env, jira_key, hostname, logger, log_callback, _raw_zip, label=label)
     if not zip_path:
         return {
             "status":   "failed",
             "tgz_file": None,
+            "zip_file": None,
             "detail":   "ZIP creation failed - check source_dir and shared folder access",
             "elapsed":  0,
         }
@@ -353,11 +354,16 @@ def compile_tp_package_multi(
 ):
     """
     Parallel multi-tester compilation.
-    
-    Fans out ZIP creation and polling to multiple testers concurrently,
-    without blocking the GUI. Each tester gets its own ZIP and polls
-    independently.
-    
+
+    NOTE: This function is retained for standalone/CLI use only.
+    The BENTO GUI (main.py) no longer calls this — it implements its own
+    parallel flow via _one_with_badge() + ThreadPoolExecutor so it can
+    update per-tester live status badges as each compile completes.
+    Any GUI-facing multi-compile changes should be made in main.py._run_compile().
+
+    Fans out ZIP creation and polling to multiple testers concurrently.
+    Each tester gets its own ZIP and polls independently.
+
     Args:
         source_dir         : Local path to the TP repository
         targets            : List of (hostname, env) tuples — one per tester
@@ -366,7 +372,7 @@ def compile_tp_package_multi(
         raw_zip_folder     : Override RAW_ZIP path from GUI (optional)
         release_tgz_folder : Override RELEASE_TGZ path from GUI (optional)
         label              : Optional label for TGZ filename
-    
+
     Returns:
         List of result dicts, one per tester, each with 'hostname' and 'env' keys added.
     """
