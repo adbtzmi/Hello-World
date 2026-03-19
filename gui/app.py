@@ -1294,7 +1294,10 @@ class SimpleGUI:
 
         compile_subtab.columnconfigure(0, weight=1)
         compile_subtab.rowconfigure(2, weight=1)
-    
+
+        # Store impl_notebook so main.py can append the Checkout sub-tab
+        self.impl_notebook = impl_notebook
+
     # Individual step methods with GUI locking wrappers
     def fetch_issue_only_with_lock(self):
         """Wrapper for fetch_issue_only with GUI locking"""
@@ -4422,3 +4425,4 @@ Step-by-step guide for manual review and additional changes.
             
             self.add_chat_message("assistant", "Chat cleared. How can I help you?")
             self.log("✓ Chat history cleared")
+            
