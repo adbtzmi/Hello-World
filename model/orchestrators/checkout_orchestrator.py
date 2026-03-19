@@ -5,15 +5,20 @@ model/orchestrators/checkout_orchestrator.py
 BENTO Checkout Orchestrator — Phase 2 Auto Start Checkout
 
 Runs on the LOCAL PC. Full flow:
-  1. Read CRT Excel from \\sifsmodtestrep\modtestrep\crab\crt_from_sap.xlsx
-  2. Generate SLATE XML (correct Profile schema with AutoStart=True)
-  3. Drop XML to P:\temp\BENTO\CHECKOUT_QUEUE\
-  4. Poll .checkout_status sidecar (mirrors wait_for_build() exactly)
-  5. Loop per test case (PASSING + FORCE FAIL sequentially)
-  6. Memory collection after all test cases
-  7. Teams notification with per-test-case summary
+1. Read CRT Excel from \\sifsmodtestrep\modtestrep\crab\crt_from_sap.xlsx
+2. Generate SLATE XML (correct Profile schema with AutoStart=True)
+3. Drop XML to P:\temp\BENTO\CHECKOUT_QUEUE\   ← FIXED: was HOT_DROP
+4. Poll .checkout_status sidecar (mirrors wait_for_build() exactly)
+5. Loop per test case (PASSING + FORCE FAIL sequentially)
+6. Memory collection after all test cases
+7. Teams notification with per-test-case summary
 
-Mirrors compilation_orchestrator.py pattern exactly.
+KEY FIX:
+  run_checkout()     → saves XML to CHECKOUT_QUEUE (shared P: drive)
+  generate_xml_only  → saves XML directly to hot_folder (playground_queue)
+  Both auto-create their target folders with os.makedirs(exist_ok=True)
+
+Mirrors compilation_orchestrator.py pattern exactly. [15]
 """
 
 import os
@@ -23,63 +28,60 @@ import json
 import logging
 import argparse
 import threading
+import shutil
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Optional, Dict, List
 
-# ─────────────────────────────────────────────
-# CONFIRMED PATHS (from CheckoutPlan.md + sys_config.json)
-# ─────────────────────────────────────────────
-
-# CRT Excel on N: drive — confirmed from Windows Explorer screenshot
+# ── CONFIRMED PATHS ───────────────────────────────────────────────────────────
+# N: drive = \\sifsmodtestrep\modtestrep  (confirmed from screenshot)
+CAT_CRAB_FOLDER         = r"\\sifsmodtestrep\modtestrep\crab"
 CRT_EXCEL_PATH          = r"\\sifsmodtestrep\modtestrep\crab\crt_from_sap.xlsx"
 CRT_DB_PATH             = r"\\sifsmodtestrep\modtestrep\crab\closed_crt_jira_info.db"
 
-# Phase 2 shared folders on P: drive
+# ── P: drive — BENTO shared folders ──────────────────────────────────────────
+# XML is staged here first, then checkout_watcher.py picks it up [24]
 CHECKOUT_QUEUE_FOLDER   = r"P:\temp\BENTO\CHECKOUT_QUEUE"
 CHECKOUT_RESULTS_FOLDER = r"P:\temp\BENTO\CHECKOUT_RESULTS"
 
-# SLATE hot folder on tester — confirmed from checkout_tab.py
-SLATE_HOT_FOLDER_DEFAULT = r"C:\test_program\playground_queue"
+# ── Tester registry ───────────────────────────────────────────────────────────
+TESTER_REGISTRY         = r"P:\temp\BENTO\bento_testers.json"
 
-# Polling
-POLL_INTERVAL            = 30    # seconds — matches watcher write cadence
-CHECKOUT_TIMEOUT_SECONDS = 3600  # 60 min default; 8h for overnight runs
+# ── Default SLATE hot folder on TESTER machine ────────────────────────────────
+# NOTE: This path only exists on the tester, not the local PC.
+# For "Generate XML Only" mode this is auto-created locally for testing.
+# For "Start Checkout" mode the watcher creates it on the tester side. [24]
+DEFAULT_HOT_FOLDER      = r"C:\test_program\playground_queue"
 
-# Teams webhook — override in settings.json or env var
+# ── Polling ───────────────────────────────────────────────────────────────────
+POLL_INTERVAL            = 30      # seconds — matches watcher write cadence
+CHECKOUT_TIMEOUT_SECONDS = 3600    # 60 min default
+
+# ── Teams webhook — override via settings.json or env var ────────────────────
 TEAMS_WEBHOOK_URL = ""
 
-# ─────────────────────────────────────────────
-# RECIPE MAP per ENV
-# Confirmed from FullAutoStart.md Step 9 XML→GUI mapping
-# ─────────────────────────────────────────────
+# ── CONFIRMED COLUMN NAMES from crt_excel_template.json [26] ─────────────────
+# ⚠️  "Product  Name" = DOUBLE SPACE — confirmed in CAT.py [33]
+_COL_MATERIAL  = "Material description"
+_COL_CFGPN     = "CFGPN"
+_COL_FW_WAVE   = "FW Wave ID"
+_COL_FIDB      = "FIDB_ASIC_FW_REV"
+_COL_PRODUCT   = "Product  Name"         # ← DOUBLE SPACE ⚠️
+_COL_CUSTOMER  = "CRT Customer"
+_COL_DRV_TYPE  = "SSD Drive Type"
+_COL_ABIT_REL  = "ABIT Release (Yes/No)"
+_COL_SFN2_REL  = "SFN2 Release (Yes/No)"
+_COL_CHECKOUT  = "CRT Checkout (Yes/No)"
+
+# ── Recipe file per ENV — confirmed from FullAutoStart.md [24] ───────────────
 RECIPE_MAP = {
     "ABIT": r"RECIPE:PEREGRINE\ON_NEOSEM_ABIT.XML",
     "SFN2": r"RECIPE:PEREGRINE\ON_NEOSEM_SFN2.XML",
     "CNFG": r"RECIPE:PEREGRINE\ON_NEOSEM_CNFG.XML",
 }
 
-# ─────────────────────────────────────────────
-# CRT EXCEL COLUMN NAMES
-# Exact names from crt_excel_template.json [24]
-# WARNING: "Product  Name" has DOUBLE SPACE — do NOT fix!
-# ─────────────────────────────────────────────
-_COL_MATERIAL = "Material description"   # lowercase 'd'
-_COL_CFGPN    = "CFGPN"
-_COL_FW_WAVE  = "FW Wave ID"
-_COL_FIDB     = "FIDB_ASIC_FW_REV"
-_COL_PRODUCT  = "Product  Name"          # ← DOUBLE SPACE ⚠️
-_COL_CUSTOMER = "CRT Customer"
-_COL_DRV_TYPE = "SSD Drive Type"
-_COL_ABIT_REL = "ABIT Release (Yes/No)"
-_COL_SFN2_REL = "SFN2 Release (Yes/No)"
-_COL_CHECKOUT = "CRT Checkout (Yes/No)"
 
-
-# ─────────────────────────────────────────────
-# LOGGER (same style as compilation_orchestrator.py)
-# ─────────────────────────────────────────────
-
+# ── LOGGER ────────────────────────────────────────────────────────────────────
 def _get_logger(log_callback=None) -> logging.Logger:
     logger = logging.getLogger("bento_checkout_orchestrator")
     if not logger.handlers:
@@ -88,7 +90,8 @@ def _get_logger(log_callback=None) -> logging.Logger:
         sh = logging.StreamHandler(sys.stdout)
         sh.setFormatter(logging.Formatter(
             "%(asctime)s | %(levelname)-8s | %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"))
+            datefmt="%Y-%m-%d %H:%M:%S"
+        ))
         logger.addHandler(sh)
     return logger
 
@@ -105,60 +108,84 @@ def _phase(logger, msg: str, log_callback=None, phase_callback=None):
         phase_callback(msg)
 
 
-# ─────────────────────────────────────────────
-# STEP 1 — Read CRT Excel
-# ─────────────────────────────────────────────
+# ── STEP 0 — Load valid ENVs ──────────────────────────────────────────────────
+def get_valid_envs() -> set:
+    """Load valid environments from shared tester registry. [13]"""
+    try:
+        if os.path.exists(TESTER_REGISTRY):
+            with open(TESTER_REGISTRY, "r") as f:
+                data = json.load(f)
+            return {
+                (v[1].upper() if isinstance(v, list) else v.get("env", "").upper())
+                for v in data.values()
+            }
+    except Exception:
+        pass
+    return {"ABIT", "SFN2", "CNFG"}
 
-def load_dut_info_from_crt(cfgpn_filter=None, excel_path=None,
-                            log_callback=None) -> List[dict]:
+
+# ── STEP 1 — Read CRT Excel ───────────────────────────────────────────────────
+def load_dut_info_from_crt(
+    cfgpn_filter: str = "",
+    excel_path:   str = "",
+    logger              = None,
+    log_callback        = None,
+) -> list:
     """
     Read CRT Excel from \\sifsmodtestrep\modtestrep\crab\crt_from_sap.xlsx
     Confirmed location from Windows Explorer screenshot (N: drive).
 
-    Mirrors CatDB.update_db_with_crt_excel() in CAT.py exactly:
+    Mirrors CatDB.update_db_with_crt_excel() in CAT.py [33] exactly:
         df = pd.read_excel(filepath, engine="openpyxl", dtype=str)
 
-    Column names confirmed from crt_excel_template.json [24].
-    "Product  Name" has DOUBLE SPACE — do not change.
+    Column names confirmed from crt_excel_template.json [26].
+    ⚠️ "Product  Name" has DOUBLE SPACE — do not change.
     """
-    try:
-        import pandas as pd
-    except ImportError:
-        raise ImportError("pandas required: pip install pandas openpyxl")
+    import pandas as pd
+
+    if logger is None:
+        logger = _get_logger()
 
     path = excel_path or CRT_EXCEL_PATH
 
     if not os.path.exists(path):
-        msg = (f"CRT Excel not found at:\n  {path}\n"
-               f"Ensure N: drive (\\\\sifsmodtestrep) is mapped "
-               f"and C.A.T. has completed a SAP export.")
-        if log_callback:
-            log_callback(f"✗ {msg}")
+        msg = (
+            f"CRT Excel not found at:\n  {path}\n"
+            f"Ensure N: drive (\\\\sifsmodtestrep) is mapped\n"
+            f"and C.A.T. has completed a SAP export."
+        )
+        _log(logger, f"✗ {msg}", log_callback, "error")
         raise FileNotFoundError(msg)
 
-    if log_callback:
-        log_callback(f"→ Reading CRT Excel: {os.path.basename(path)}")
+    _log(logger,
+         f"Reading CRT Excel: {os.path.basename(path)}", log_callback)
 
-    # Mirrors C.A.T. exactly — openpyxl engine, all columns as str
+    # Mirrors C.A.T. exactly — openpyxl engine, all columns as str [33]
     df = pd.read_excel(path, engine="openpyxl", dtype=str)
 
     # Validate critical columns
     missing = [c for c in [_COL_CFGPN, _COL_FW_WAVE, _COL_PRODUCT]
                if c not in df.columns]
     if missing:
-        raise ValueError(
+        msg = (
             f"CRT Excel missing columns: {missing}\n"
-            f"Note: 'Product  Name' requires DOUBLE SPACE.")
+            f"Note: 'Product  Name' requires DOUBLE SPACE."
+        )
+        _log(logger, f"✗ {msg}", log_callback, "error")
+        raise ValueError(msg)
 
-    # Apply CFGPN filter
+    # Apply CFGPN filter safely (pandas — no SQL injection risk)
     if cfgpn_filter:
         df = df[df[_COL_CFGPN] == str(cfgpn_filter)]
 
     if df.empty:
-        if log_callback:
-            log_callback("⚠ No CRT rows found after filter.")
+        _log(logger,
+             "⚠ No CRT rows found"
+             + (f" for CFGPN={cfgpn_filter}" if cfgpn_filter else ""),
+             log_callback, "warning")
         return []
 
+    # Return with exact column names matching checkout_tab.py [40] grid
     result = []
     for _, row in df.iterrows():
         result.append({
@@ -171,19 +198,16 @@ def load_dut_info_from_crt(cfgpn_filter=None, excel_path=None,
             "SSD Drive Type":        str(row.get(_COL_DRV_TYPE, "") or "").strip(),
             "ABIT Release (Yes/No)": str(row.get(_COL_ABIT_REL, "") or "").strip(),
             "SFN2 Release (Yes/No)": str(row.get(_COL_SFN2_REL, "") or "").strip(),
-            "CRT Checkout (Yes/No)": str(row.get(_COL_CHECKOUT, "") or "").strip(),
+            "CRT Checkout (Yes/No)": str(row.get(_COL_CHECKOUT,  "") or "").strip(),
         })
 
-    if log_callback:
-        log_callback(f"✓ Loaded {len(result)} DUT record(s) from CRT Excel.")
+    _log(logger,
+         f"✓ Loaded {len(result)} DUT record(s) from CRT Excel.",
+         log_callback)
     return result
 
 
-# ─────────────────────────────────────────────
-# STEP 2 — Generate SLATE XML
-# Correct Profile schema from FullAutoStart.md [24]
-# ─────────────────────────────────────────────
-
+# ── STEP 2 — Generate SLATE XML ───────────────────────────────────────────────
 def generate_slate_xml(
     jira_key:      str,
     mid:           str,
@@ -195,55 +219,62 @@ def generate_slate_xml(
     lot_prefix:    str  = "JAANTJB",
     dut_locations: list = None,
     label:         str  = "",
+    hostname:      str  = "",
     output_dir:    str  = "",
     dry_run:       bool = False,
-    logger                = None,
-    log_callback          = None,
+    logger               = None,
+    log_callback         = None,
 ) -> Optional[str]:
     """
     Generate SLATE XML with correct Profile schema.
+    Confirmed from FullAutoStart.md [24] Step 4 & Step 9.
     AutoStart=True eliminates manual "Run Test" click.
 
-    Schema confirmed from FullAutoStart.md Step 4 & Step 9.
-    Lot format: JAANTJB001, JAANTJB002... (auto from lot_prefix)
-    DUT locations: ["0,0","0,1","0,2","0,3"] or auto-generated.
+    output_dir controls WHERE the XML is saved:
+      - run_checkout()    → CHECKOUT_QUEUE (P: shared drive) [39]
+      - generate_xml_only → hot_folder (C:\\test_program\\playground_queue) [41]
+
+    Both callers auto-create their target folder before calling this.
     """
     if logger is None:
         logger = _get_logger()
 
-    _out  = output_dir or CHECKOUT_QUEUE_FOLDER
-    env_u = env.upper()
+    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Filename includes hostname + label for tester-specific routing [8]
+    parts      = [p for p in [jira_key, hostname, timestamp, label] if p]
+    xml_name   = "checkout_" + "_".join(parts) + ".xml"
+    out_dir    = output_dir or CHECKOUT_QUEUE_FOLDER
+    recipe     = RECIPE_MAP.get(env.upper(),
+                                r"RECIPE:PEREGRINE\ON_NEOSEM_ABIT.XML")
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    label_part = f"_{label}" if label else ""
-    xml_name  = f"checkout_{jira_key}_{env_u}_{timestamp}{label_part}.xml"
-
+    # ── Auto-create output directory ──────────────────────────────────
     try:
-        os.makedirs(_out, exist_ok=True)
+        os.makedirs(out_dir, exist_ok=True)
     except Exception as e:
-        _log(logger, f"✗ Cannot create output dir: {e}", log_callback, "error")
+        _log(logger, f"✗ Cannot create output dir {out_dir}: {e}",
+             log_callback, "error")
         return None
 
-    xml_path = os.path.join(_out, xml_name)
-    recipe   = RECIPE_MAP.get(env_u, r"RECIPE:PEREGRINE\ON_NEOSEM_ABIT.XML")
+    xml_path = os.path.join(out_dir, xml_name)
 
-    _phase(logger, f"Generating SLATE XML [{label or 'default'}]...", log_callback)
+    _phase(logger,
+           f"Generating SLATE XML [{label or 'default'}]...", log_callback)
 
     try:
+        # ── Correct Profile schema from FullAutoStart.md [24] ─────────
         profile = ET.Element("Profile")
 
-        # ── TestJobArchive ───────────────────────────────────────────────
-        # TGZ from Phase 1: P:\temp\BENTO\RELEASE_TGZ\...\ibir_release_ABIT.tgz
+        # ── TestJobArchive ────────────────────────────────────────────
+        # TGZ path from Phase 1 compile output [7]
         ET.SubElement(profile, "TestJobArchive").text = tgz_path
 
-        # ── RecipeFile ───────────────────────────────────────────────────
+        # ── RecipeFile ────────────────────────────────────────────────
         ET.SubElement(profile, "RecipeFile").text = recipe
 
-        # ── TempTraveler ─────────────────────────────────────────────────
-        # Confirmed from FullAutoStart.md Step 4
+        # ── TempTraveler — confirmed rows from FullAutoStart.md [24] ──
         tt = ET.SubElement(profile, "TempTraveler")
         for section, name, value in [
-            ("MAM",       "STEP",          env_u),
+            ("MAM",       "STEP",          env.upper()),
             ("MAM",       "NAND_OPTION",   "BAD_PLANE"),
             ("CFGPN",     "STEP_ID",       "AMB IB TEST"),
             ("CFGPN",     "SEC_PROCESS",   "ABIT_REQ0"),
@@ -255,12 +286,11 @@ def generate_slate_xml(
             a.set("Name",    name)
             a.set("Value",   value)
 
-        # ── MaterialInfo ─────────────────────────────────────────────────
-        # Use provided DUT locations or auto-generate from slot count
+        # ── MaterialInfo — user-provided DUT locations or auto-generate
+        mat       = ET.SubElement(profile, "MaterialInfo")
         locations = dut_locations or [
             f"{i // 8},{i % 8}" for i in range(dut_slots)
         ]
-        mat = ET.SubElement(profile, "MaterialInfo")
         for idx, loc in enumerate(locations):
             lot_num = f"{lot_prefix}{str(idx + 1).zfill(3)}"
             a = ET.SubElement(mat, "Attribute")
@@ -268,65 +298,99 @@ def generate_slate_xml(
             a.set("MID",         mid)
             a.set("DutLocation", loc)
 
-        # ── AutoStart = True ─────────────────────────────────────────────
-        # KEY: eliminates manual "Run Test" click [24]
+        # ── AutoStart = True — KEY: no manual click needed [24] ───────
         ET.SubElement(profile, "AutoStart").text = "True"
 
-        # Write XML
+        # ── Write XML ─────────────────────────────────────────────────
         tree = ET.ElementTree(profile)
-        try:
-            ET.indent(tree, space="    ")   # Python 3.9+
-        except AttributeError:
-            pass  # Python < 3.9 — skip pretty-printing
+        ET.indent(tree, space="    ")
         tree.write(xml_path, encoding="unicode", xml_declaration=True)
 
         size_kb = os.path.getsize(xml_path) / 1024
         _log(logger,
-             f"✓ XML: {xml_name} | AutoStart=True | {len(locations)} DUT(s) | {size_kb:.1f} KB",
+             f"✓ XML: {xml_name} | AutoStart=True | "
+             f"{len(locations)} DUT(s) | {size_kb:.1f} KB",
              log_callback)
         return xml_path
 
     except Exception as e:
-        _log(logger, f"✗ XML generation failed: {e}", log_callback, "error")
+        _log(logger, f"✗ XML generation failed: {e}",
+             log_callback, "error")
         return None
 
 
-# ─────────────────────────────────────────────
-# STATUS FILE (mirrors watcher_lock.py pattern)
-# ─────────────────────────────────────────────
-
+# ── STATUS FILE HELPERS ───────────────────────────────────────────────────────
 def write_checkout_status(xml_path: str, status: str, detail: str = ""):
-    """Write .checkout_status sidecar. Mirrors write_status() in watcher_lock.py."""
+    """Write .checkout_status sidecar — mirrors watcher_lock.py [9]."""
     status_path = xml_path + ".checkout_status"
     data = {
         "status":    status,
         "detail":    detail,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now().isoformat()
     }
     try:
-        with open(status_path, "w") as f:
-            json.dump(data, f)
-    except Exception:
-        pass
+        with open(status_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logging.getLogger("bento_checkout_orchestrator").warning(
+            f"Could not write status: {e}"
+        )
 
 
 def read_checkout_status(xml_path: str) -> dict:
-    """Safe JSON read — returns {} on any error (file mid-write)."""
+    """
+    Safely read .checkout_status sidecar JSON.
+    Returns {} on any parse or IO error — caller treats as 'not ready'. [9]
+    """
     status_path = xml_path + ".checkout_status"
     if not os.path.exists(status_path):
         return {}
     try:
-        with open(status_path, "r", encoding="utf-8") as f:
+        with open(status_path, 'r', encoding='utf-8') as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError):
-        return {}   # Treat as "not ready yet"
+    except (json.JSONDecodeError, IOError, OSError):
+        return {}
 
 
-# ─────────────────────────────────────────────
-# STEP 3 — Poll for checkout completion
-# Mirrors wait_for_build() in compilation_orchestrator.py exactly
-# ─────────────────────────────────────────────
+# ── STEP 3 — Drop XML to hot folder (Generate XML Only mode) ─────────────────
+def drop_xml_to_hot_folder(
+    xml_path:    str,
+    hot_folder:  str,
+    logger,
+    log_callback = None,
+) -> Optional[str]:
+    """
+    Copy XML directly to SLATE hot folder.
 
+    ✅ AUTO-CREATES the folder if it doesn't exist.
+
+    Used ONLY in generate_xml_only() mode — bypasses CHECKOUT_QUEUE.
+    In Start Checkout mode, the watcher handles this copy on the tester. [24][39]
+    """
+    _phase(logger, "Dropping XML to hot folder…", log_callback)
+
+    # ── AUTO-CREATE hot folder ────────────────────────────────────────
+    try:
+        os.makedirs(hot_folder, exist_ok=True)
+        _log(logger, f"[✓] Hot folder ready: {hot_folder}", log_callback)
+    except Exception as e:
+        _log(logger,
+             f"✗ Cannot create hot folder {hot_folder}: {e}",
+             log_callback, "error")
+        return None
+
+    dest = os.path.join(hot_folder, os.path.basename(xml_path))
+    try:
+        shutil.copy2(xml_path, dest)
+        _log(logger, f"✓ XML → {dest}", log_callback)
+        return dest
+    except Exception as e:
+        _log(logger, f"✗ Hot folder drop failed: {e}",
+             log_callback, "error")
+        return None
+
+
+# ── STEP 4 — Poll for completion ──────────────────────────────────────────────
 def wait_for_checkout(
     xml_path:        str,
     logger,
@@ -336,13 +400,16 @@ def wait_for_checkout(
 ) -> Dict:
     """
     Poll .checkout_status sidecar every 30s.
-    Mirrors wait_for_build() in compilation_orchestrator.py exactly.
+    Mirrors wait_for_build() in compilation_orchestrator.py [15].
+
+    The watcher on the tester writes this file after SLATE completes. [24][42]
     """
     start    = time.time()
     deadline = start + timeout_seconds
 
-    _phase(logger, "Waiting for SLATE to complete...", log_callback, phase_callback)
-    _log(logger, f"   (timeout = {timeout_seconds // 60} min)", log_callback)
+    _phase(logger,
+           f"Waiting for SLATE (timeout={timeout_seconds // 60}min)…",
+           log_callback, phase_callback)
 
     while time.time() < deadline:
         data  = read_checkout_status(xml_path)
@@ -351,252 +418,294 @@ def wait_for_checkout(
         if state == "success":
             elapsed = int(time.time() - start)
             _log(logger, f"✓ Checkout SUCCESS in {elapsed}s", log_callback)
-            return {"status": "success", "detail": data.get("detail", ""),
-                    "elapsed": elapsed}
+            return {
+                "status":  "success",
+                "detail":  data.get("detail", ""),
+                "elapsed": elapsed
+            }
 
         elif state == "failed":
             elapsed = int(time.time() - start)
             detail  = data.get("detail", "Unknown error")
-            _log(logger, f"✗ Checkout FAILED: {detail}", log_callback, "error")
-            return {"status": "failed", "detail": detail, "elapsed": elapsed}
+            _log(logger,
+                 f"✗ Checkout FAILED after {elapsed}s: {detail}",
+                 log_callback, "error")
+            return {
+                "status":  "failed",
+                "detail":  detail,
+                "elapsed": elapsed
+            }
 
         elif state == "in_progress":
-            elapsed_so_far = int(time.time() - start)
-            if elapsed_so_far % 120 < POLL_INTERVAL:
-                _phase(logger,
-                       f"SLATE running... ({elapsed_so_far}s elapsed)",
-                       log_callback, phase_callback)
+            elapsed = int(time.time() - start)
+            _phase(logger,
+                   f"SLATE running… ({elapsed}s)",
+                   log_callback, phase_callback)
 
         time.sleep(POLL_INTERVAL)
 
     elapsed = int(time.time() - start)
-    _log(logger, f"✗ Checkout TIMEOUT after {elapsed}s", log_callback, "error")
-    return {"status": "timeout",
-            "detail": f"No SLATE signal within {timeout_seconds}s",
-            "elapsed": elapsed}
+    _log(logger, f"✗ Checkout TIMEOUT after {elapsed}s",
+         log_callback, "error")
+    return {
+        "status":  "timeout",
+        "detail":  f"No SLATE signal within {timeout_seconds}s",
+        "elapsed": elapsed
+    }
 
 
-# ─────────────────────────────────────────────
-# MEMORY COLLECTION
-# ─────────────────────────────────────────────
-
+# ── STEP 5 — Memory collection ────────────────────────────────────────────────
 def collect_dut_memory(
     hostname:      str,
     jira_key:      str,
     dut_slots:     int,
-    dut_locations: list = None,
-    output_folder: str  = "",
-    logger               = None,
-    log_callback         = None,
-    phase_callback       = None,
+    output_folder: str,
+    logger         = None,
+    log_callback   = None,
+    phase_callback = None,
 ) -> Dict:
     """
-    Parallel memory collection for all DUTs after SLATE completes.
-    Results saved to P:\temp\BENTO\CHECKOUT_RESULTS\<jira_key>\
-    """
-    import concurrent.futures
+    Trigger memory collection for all DUT slots after SLATE completes.
+    Results saved to P:\\temp\\BENTO\\CHECKOUT_RESULTS\\ [24]
 
+    Replace the placeholder block with your actual tool call.
+    """
     if logger is None:
         logger = _get_logger()
 
-    _phase(logger, f"Collecting memory for {dut_slots} DUT(s)...",
+    _phase(logger, f"Collecting memory for {dut_slots} DUT(s)…",
            log_callback, phase_callback)
 
-    _out = output_folder or os.path.join(CHECKOUT_RESULTS_FOLDER, jira_key)
     try:
-        os.makedirs(_out, exist_ok=True)
+        os.makedirs(output_folder, exist_ok=True)
     except Exception as e:
-        _log(logger, f"⚠ Cannot create memory output folder: {e}",
+        _log(logger,
+             f"⚠ Cannot create memory output folder: {e}",
              log_callback, "warning")
-
-    locations = dut_locations or [f"{i//8},{i%8}" for i in range(dut_slots)]
-
-    def _collect_one(slot_idx, loc):
-        lot_num  = f"DUT_{slot_idx+1}"
-        mem_file = os.path.join(_out, f"{jira_key}_{hostname}_slot{slot_idx+1}_memory.txt")
-        try:
-            # ── INSERT YOUR REAL MEMORY COLLECTION CALL HERE ──────────────
-            # e.g. ssh_exec(hostname, f"collect_memory --slot {slot_idx}")
-            with open(mem_file, "w") as f:
-                f.write(f"Memory collection placeholder\n")
-                f.write(f"JIRA Key    : {jira_key}\n")
-                f.write(f"Hostname    : {hostname}\n")
-                f.write(f"Slot        : {slot_idx+1}\n")
-                f.write(f"DUT Location: {loc}\n")
-                f.write(f"Timestamp   : {datetime.now().isoformat()}\n")
-            return slot_idx + 1, True
-        except Exception as e:
-            _log(logger, f"  ✗ Slot {slot_idx+1} memory failed: {e}",
-                 log_callback, "warning")
-            return slot_idx + 1, False
 
     collected = []
     failed    = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(_collect_one, idx, loc): idx
-                   for idx, loc in enumerate(locations)}
-        for future in concurrent.futures.as_completed(futures):
-            slot, ok = future.result()
-            (collected if ok else failed).append(slot)
-            if ok:
-                _log(logger, f"  ✓ Slot {slot} memory collected", log_callback)
+    for slot in range(1, dut_slots + 1):
+        try:
+            # ── INSERT YOUR REAL MEMORY COLLECTION CALL HERE ──────────
+            # Option A: subprocess to memory_collect.exe on tester
+            # import subprocess
+            # cmd = [r"C:\test_program\tools\memory_collect.exe",
+            #        "--slot", str(slot), "--output", output_folder]
+            # proc = subprocess.run(cmd, capture_output=True, timeout=300)
+            # if proc.returncode != 0:
+            #     raise RuntimeError(proc.stderr.decode())
+            # ─────────────────────────────────────────────────────────
 
-    status = "success" if not failed else ("partial" if collected else "failed")
-    detail = f"Collected {len(collected)}/{len(locations)} slots"
+            # Placeholder — writes a stub file until real tool wired up
+            mem_file = os.path.join(
+                output_folder, f"{jira_key}_slot{slot}_memory.txt"
+            )
+            with open(mem_file, 'w') as f:
+                f.write(f"Memory collection placeholder\n")
+                f.write(f"JIRA Key : {jira_key}\n")
+                f.write(f"Hostname : {hostname}\n")
+                f.write(f"Slot     : {slot}\n")
+                f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+
+            collected.append(slot)
+            _log(logger,
+                 f"  ✓ Slot {slot} → {os.path.basename(mem_file)}",
+                 log_callback)
+
+        except Exception as e:
+            failed.append(slot)
+            # ✅ Log failure per DUT — don't silently swallow [24]
+            _log(logger,
+                 f"  ✗ Slot {slot} memory collection failed: {e}",
+                 log_callback, "warning")
+
+    status = "success" if not failed else (
+        "partial" if collected else "failed"
+    )
+    detail = f"Collected {len(collected)}/{dut_slots} slots"
     if failed:
-        detail += f" (failed: {failed})"
-    _log(logger, f"✓ Memory collection done: {detail}", log_callback)
+        detail += f" (failed slots: {failed})"
 
-    return {"status": status, "detail": detail,
-            "collected_slots": collected, "output_folder": _out}
+    _log(logger, f"Memory collection done: {detail}", log_callback)
+    return {
+        "status":          status,
+        "detail":          detail,
+        "collected_slots": collected
+    }
 
 
-# ─────────────────────────────────────────────
-# TEAMS NOTIFICATION
-# ─────────────────────────────────────────────
-
+# ── STEP 6 — Teams notification ───────────────────────────────────────────────
 def send_teams_notification(
     jira_key:    str,
     hostname:    str,
     status:      str,
     detail:      str,
     elapsed:     int,
-    test_cases:  list = None,
     webhook_url: str  = "",
     logger             = None,
     log_callback       = None,
 ) -> bool:
+    """
+    Send Teams notification on checkout completion. [39]
+    Non-fatal — checkout succeeded even if notification fails.
+    """
     if logger is None:
         logger = _get_logger()
 
-    _phase(logger, "Sending Teams notification...", log_callback)
-
     url = (webhook_url or TEAMS_WEBHOOK_URL
            or os.environ.get("BENTO_TEAMS_WEBHOOK", ""))
+
     if not url:
-        _log(logger, "⚠ Teams webhook URL not configured — skipping.",
+        _log(logger,
+             "⚠ Teams webhook URL not configured — skipping.",
              log_callback, "warning")
         return False
 
     try:
         import urllib.request
-        icon   = "✅" if status.lower() == "success" else "❌"
-        facts  = [
-            {"name": "Status",  "value": status.upper()},
-            {"name": "Detail",  "value": detail},
-            {"name": "Elapsed", "value": f"{elapsed}s ({elapsed//60}m {elapsed%60}s)"},
-            {"name": "Time",    "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
-        ]
-        if test_cases:
-            for tc in test_cases:
-                tc_icon = "✅" if tc.get("status") == "success" else "❌"
-                facts.append({
-                    "name":  f"  {tc_icon} {tc.get('label','?')}",
-                    "value": f"{tc.get('status','?')} in {tc.get('elapsed',0)}s"
-                })
-
+        icon    = "✅" if status.lower() == "success" else "❌"
         payload = {
             "@type":      "MessageCard",
             "@context":   "http://schema.org/extensions",
-            "themeColor": "0076D7" if status.lower() == "success" else "D40000",
+            "themeColor": "0076D7" if status.lower() == "success"
+                          else "D40000",
             "summary":    f"BENTO Checkout {status.upper()} — {jira_key}",
             "sections": [{
-                "activityTitle":    f"{icon} BENTO Auto Checkout — {status.upper()}",
-                "activitySubtitle": f"Tester: {hostname}  |  JIRA: {jira_key}",
-                "facts": facts,
+                "activityTitle":    f"{icon} BENTO Auto Checkout — "
+                                    f"{status.upper()}",
+                "activitySubtitle": f"Tester: {hostname}  |  "
+                                    f"JIRA: {jira_key}",
+                "facts": [
+                    {"name": "Status",  "value": status.upper()},
+                    {"name": "Detail",  "value": detail},
+                    {"name": "Elapsed",
+                     "value": f"{elapsed}s "
+                              f"({elapsed // 60}m {elapsed % 60}s)"},
+                    {"name": "Time",
+                     "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+                ],
             }]
         }
         data = json.dumps(payload).encode("utf-8")
         req  = urllib.request.Request(
-            url, data=data, headers={"Content-Type": "application/json"})
+            url, data=data,
+            headers={"Content-Type": "application/json"}
+        )
         with urllib.request.urlopen(req, timeout=10) as resp:
             if resp.status == 200:
                 _log(logger, "✓ Teams notification sent.", log_callback)
                 return True
-            _log(logger, f"⚠ Teams webhook HTTP {resp.status}",
-                 log_callback, "warning")
-            return False
+            else:
+                _log(logger,
+                     f"⚠ Teams webhook returned HTTP {resp.status}",
+                     log_callback, "warning")
+                return False
     except Exception as e:
-        _log(logger, f"⚠ Teams notification failed: {e}", log_callback, "warning")
+        # Non-fatal — checkout succeeded, notification is best-effort
+        _log(logger, f"⚠ Teams notification failed (non-fatal): {e}",
+             log_callback, "warning")
         return False
 
 
-# ─────────────────────────────────────────────
-# PUBLIC API — called from checkout_controller.py
-# ─────────────────────────────────────────────
-
+# ── PUBLIC API — called from checkout_controller.py [41] ─────────────────────
 def run_checkout(
     jira_key:        str,
     hostname:        str,
     env:             str,
-    tgz_path:        str  = "",
-    hot_folder:      str  = "",
-    mid:             str  = "",
-    cfgpn:           str  = "",
-    fw_ver:          str  = "",
-    dut_slots:       int  = 4,
-    lot_prefix:      str  = "JAANTJB",
-    dut_locations:   list = None,
-    test_cases:      list = None,
-    detect_method:   str  = "AUTO",
-    timeout_seconds: int  = CHECKOUT_TIMEOUT_SECONDS,
-    notify_teams:    bool = True,
-    webhook_url:     str  = "",
+    tgz_path:        str   = "",
+    hot_folder:      str   = "",
+    mid:             str   = "",
+    cfgpn:           str   = "",
+    fw_ver:          str   = "",
+    dut_slots:       int   = 4,
+    lot_prefix:      str   = "JAANTJB",
+    dut_locations:   list  = None,
+    test_cases:      list  = None,
+    detect_method:   str   = "AUTO",
+    timeout_seconds: int   = CHECKOUT_TIMEOUT_SECONDS,
+    notify_teams:    bool  = True,
+    webhook_url:     str   = "",
     log_callback           = None,
     phase_callback         = None,
 ) -> Dict:
     """
-    High-level entry point called from checkout_controller.py.
+    High-level entry point — Start Checkout full flow.
 
-    Runs checkout for each test case (PASSING + FORCE FAIL) sequentially.
-    Each test case generates its own XML with its own label.
-    Memory collection runs once after ALL test cases complete.
-    Teams notification includes per-test-case summary.
+    KEY FIX [39]:
+      XML is saved to CHECKOUT_QUEUE (P: shared drive), NOT hot_folder.
+      hot_folder (C:\\test_program\\playground_queue) is on the TESTER machine.
+      The checkout_watcher.py [42] running on the tester will:
+        1. Detect XML in CHECKOUT_QUEUE
+        2. Copy XML → C:\\test_program\\playground_queue (auto-creates it)
+        3. SLATE picks up XML → AutoStart=True → test begins [24]
 
-    Returns dict: {status, detail, elapsed, test_cases, memory}
+    Runs each test case sequentially, collects memory after all done,
+    then sends Teams notification with summary. [24]
     """
-    logger = _get_logger(log_callback)
-    env    = env.upper()
-    start  = time.time()
+    logger      = _get_logger(log_callback)
+    env         = env.upper()
+    start       = time.time()
+    _test_cases = test_cases or [{"type": "passing", "label": "passing"}]
 
-    # Validate
+    # ── Validate inputs ───────────────────────────────────────────────
     if not hostname:
         msg = "Hostname is required for checkout."
         _log(logger, f"[FAIL] {msg}", log_callback, "error")
         return {"status": "failed", "detail": msg, "elapsed": 0,
                 "test_cases": [], "memory": {}}
 
+    valid_envs = get_valid_envs()
+    if env not in valid_envs:
+        msg = (f"Unknown ENV '{env}'. "
+               f"Valid: {', '.join(sorted(valid_envs))}")
+        _log(logger, f"[FAIL] {msg}", log_callback, "error")
+        return {"status": "failed", "detail": msg, "elapsed": 0,
+                "test_cases": [], "memory": {}}
+
     _log(logger, f"=== BENTO Auto Checkout ===", log_callback)
-    _log(logger, f"JIRA     : {jira_key}", log_callback)
-    _log(logger, f"Hostname : {hostname}", log_callback)
-    _log(logger, f"ENV      : {env}", log_callback)
-    _log(logger, f"MID      : {mid}", log_callback)
-    _log(logger, f"CFGPN    : {cfgpn}", log_callback)
-    _log(logger, f"FW       : {fw_ver}", log_callback)
-    _log(logger, f"Slots    : {dut_slots}", log_callback)
+    _log(logger, f"JIRA     : {jira_key}",  log_callback)
+    _log(logger, f"Hostname : {hostname}",   log_callback)
+    _log(logger, f"ENV      : {env}",        log_callback)
+    _log(logger, f"MID      : {mid}",        log_callback)
+    _log(logger, f"CFGPN    : {cfgpn}",      log_callback)
+    _log(logger, f"FW       : {fw_ver}",     log_callback)
+    _log(logger, f"Slots    : {dut_slots}",  log_callback)
     _log(logger, f"Lot pfx  : {lot_prefix}", log_callback)
 
+    # ── KEY FIX: XML goes to CHECKOUT_QUEUE, not hot_folder ──────────
+    # CHECKOUT_QUEUE = P:\temp\BENTO\CHECKOUT_QUEUE  (shared P: drive)
+    # The watcher on the tester picks it up and copies to playground_queue
     _queue = CHECKOUT_QUEUE_FOLDER
-    _test_cases = test_cases or [{"type": "passing", "label": "passing"}]
+
+    # ── Auto-create CHECKOUT_QUEUE on shared drive ────────────────────
+    try:
+        os.makedirs(_queue, exist_ok=True)
+        _log(logger, f"[✓] Queue folder ready: {_queue}", log_callback)
+    except Exception as e:
+        msg = f"Cannot create CHECKOUT_QUEUE {_queue}: {e}"
+        _log(logger, f"[FAIL] {msg}", log_callback, "error")
+        return {"status": "failed", "detail": msg, "elapsed": 0,
+                "test_cases": [], "memory": {}}
+
     all_tc_results = []
 
-    # ── Loop per test case ────────────────────────────────────────────────
+    # ── Loop per test case (PASSING + FORCE FAIL sequentially) ────────
     for tc in _test_cases:
         label   = tc.get("label", "passing")
-        tc_type = tc.get("type", "passing")
+        tc_type = tc.get("type",  "passing")
         tc_desc = tc.get("description", "")
 
         _log(logger,
-             f"\n{'='*50}\n"
+             f"\n{'=' * 50}\n"
              f"Test case: {label} ({tc_type})\n"
-             f"{'='*50}",
+             f"{'=' * 50}",
              log_callback)
 
-        if tc_desc:
-            _log(logger, f"Description: {tc_desc}", log_callback)
-
-        # Generate XML for this test case
+        # ── Generate XML → save to CHECKOUT_QUEUE ─────────────────────
+        # NOT to C:\test_program\playground_queue
+        # (that path only exists on the tester machine) [39]
         xml_path = generate_slate_xml(
             jira_key      = jira_key,
             mid           = mid,
@@ -608,26 +717,36 @@ def run_checkout(
             lot_prefix    = lot_prefix,
             dut_locations = dut_locations,
             label         = label,
-            output_dir    = _queue,
+            hostname      = hostname,
+            output_dir    = _queue,      # ← P:\temp\BENTO\CHECKOUT_QUEUE
             logger        = logger,
             log_callback  = log_callback,
         )
 
         if not xml_path:
-            tc_result = {"status": "failed",
-                         "detail": "XML generation failed",
-                         "elapsed": 0, "label": label, "type": tc_type}
-            all_tc_results.append(tc_result)
+            result = {
+                "status":      "failed",
+                "detail":      "XML generation failed.",
+                "elapsed":     int(time.time() - start),
+                "label":       label,
+                "type":        tc_type,
+                "description": tc_desc
+            }
+            all_tc_results.append(result)
             continue
 
-        # Write initial queued status
-        write_checkout_status(xml_path, "queued",
-                              f"Waiting for tester pickup — {label}")
+        # ── Write initial queued status ────────────────────────────────
+        write_checkout_status(
+            xml_path, "queued",
+            f"Waiting for tester pickup — {label}"
+        )
 
-        _phase(logger, f"Waiting for tester [{label}]...",
-               log_callback, phase_callback)
+        _log(logger,
+             f"[✓] XML queued: {os.path.basename(xml_path)}\n"
+             f"    Waiting for checkout_watcher.py on {hostname} to pick up...",
+             log_callback)
 
-        # Poll for this test case
+        # ── Poll for SLATE completion ──────────────────────────────────
         tc_result = wait_for_checkout(
             xml_path        = xml_path,
             logger          = logger,
@@ -642,53 +761,52 @@ def run_checkout(
 
         icon = "✓" if tc_result["status"] == "success" else "✗"
         _log(logger,
-             f"{icon} {label}: {tc_result['status']} in {tc_result['elapsed']}s",
+             f"[{icon}] {label}: {tc_result['status']} "
+             f"in {tc_result['elapsed']}s",
              log_callback)
 
-        # Stop if a test case fails hard (watcher error, not SLATE fail)
-        if tc_result["status"] == "failed" and "Watcher" in tc_result.get("detail", ""):
-            _log(logger, "⚠ Watcher error — stopping test case loop.",
-                 log_callback, "warning")
-            break
-
-    # ── Memory collection after ALL test cases ────────────────────────────
-    _phase(logger, "Collecting DUT memory...", log_callback, phase_callback)
-    mem_output = os.path.join(CHECKOUT_RESULTS_FOLDER, jira_key)
+    # ── Memory collection after ALL test cases ────────────────────────
+    _phase(logger, "Collecting DUT memory…", log_callback, phase_callback)
+    mem_output = os.path.join(
+        CHECKOUT_RESULTS_FOLDER, f"{jira_key}_{hostname}"
+    )
     mem_result = collect_dut_memory(
-        hostname      = hostname,
-        jira_key      = jira_key,
-        dut_slots     = dut_slots,
-        dut_locations = dut_locations,
-        output_folder = mem_output,
-        logger        = logger,
-        log_callback  = log_callback,
-        phase_callback= phase_callback,
+        hostname       = hostname,
+        jira_key       = jira_key,
+        dut_slots      = dut_slots,
+        output_folder  = mem_output,
+        logger         = logger,
+        log_callback   = log_callback,
+        phase_callback = phase_callback,
     )
 
-    # ── Overall status ────────────────────────────────────────────────────
-    all_ok      = all(r["status"] == "success" for r in all_tc_results)
-    any_ok      = any(r["status"] == "success" for r in all_tc_results)
-    final_status = "success" if all_ok else ("partial" if any_ok else "failed")
-    final_detail = " | ".join(
-        f"{r['label']}:{r['status']}" for r in all_tc_results)
+    # ── Teams notification ────────────────────────────────────────────
+    final_status  = ("success"
+                     if all(r["status"] == "success"
+                            for r in all_tc_results)
+                     else "partial"
+                     if any(r["status"] == "success"
+                            for r in all_tc_results)
+                     else "failed")
+    final_detail  = " | ".join(
+        f"{r['label']}:{r['status']}" for r in all_tc_results
+    )
     final_elapsed = int(time.time() - start)
 
-    # ── Teams notification ────────────────────────────────────────────────
     if notify_teams:
         send_teams_notification(
-            jira_key    = jira_key,
-            hostname    = hostname,
-            status      = final_status,
-            detail      = final_detail,
-            elapsed     = final_elapsed,
-            test_cases  = all_tc_results,
-            webhook_url = webhook_url,
-            logger      = logger,
-            log_callback= log_callback,
+            jira_key     = jira_key,
+            hostname     = hostname,
+            status       = final_status,
+            detail       = final_detail,
+            elapsed      = final_elapsed,
+            webhook_url  = webhook_url,
+            logger       = logger,
+            log_callback = log_callback,
         )
 
     _log(logger,
-         f"\n=== Checkout {final_status.upper()} in {final_elapsed}s ===",
+         f"=== Checkout {final_status.upper()} in {final_elapsed}s ===",
          log_callback)
 
     return {
@@ -700,24 +818,24 @@ def run_checkout(
     }
 
 
-# ─────────────────────────────────────────────
-# STANDALONE ENTRY POINT
-# ─────────────────────────────────────────────
-
+# ── STANDALONE ENTRY POINT ────────────────────────────────────────────────────
 def main():
+    valid_envs = get_valid_envs()
     parser = argparse.ArgumentParser(
-        description="BENTO Checkout Orchestrator (standalone test)")
-    parser.add_argument("--jira-key",   required=True)
-    parser.add_argument("--hostname",   required=True)
-    parser.add_argument("--env",        required=True)
-    parser.add_argument("--tgz-path",   default="")
-    parser.add_argument("--mid",        default="")
-    parser.add_argument("--cfgpn",      default="")
-    parser.add_argument("--fw-ver",     default="")
-    parser.add_argument("--dut-slots",  type=int, default=4)
-    parser.add_argument("--lot-prefix", default="JAANTJB")
-    parser.add_argument("--timeout-min",type=int, default=60)
-    parser.add_argument("--no-notify",  action="store_true")
+        description="BENTO Checkout Orchestrator (standalone test)"
+    )
+    parser.add_argument("--jira-key",    required=True)
+    parser.add_argument("--hostname",    required=True)
+    parser.add_argument("--env",         required=True,
+                        help=f"({', '.join(sorted(valid_envs))})")
+    parser.add_argument("--tgz-path",    default="")
+    parser.add_argument("--mid",         default="")
+    parser.add_argument("--cfgpn",       default="")
+    parser.add_argument("--fw-ver",      default="")
+    parser.add_argument("--dut-slots",   type=int, default=4)
+    parser.add_argument("--lot-prefix",  default="JAANTJB")
+    parser.add_argument("--timeout-min", type=int, default=60)
+    parser.add_argument("--no-notify",   action="store_true")
     args = parser.parse_args()
 
     result = run_checkout(
@@ -734,16 +852,12 @@ def main():
         notify_teams    = not args.no_notify,
     )
 
-    print(f"\n{'='*60}")
-    print(f"  Result : {result['status'].upper()}")
-    print(f"  Detail : {result['detail']}")
-    print(f"  Elapsed: {result['elapsed']}s")
-    for tc in result.get("test_cases", []):
-        icon = "✓" if tc["status"] == "success" else "✗"
-        print(f"  {icon} {tc['label']}: {tc['status']} ({tc['elapsed']}s)")
-    print(f"{'='*60}\n")
-    sys.exit(0 if result["status"] in ("success", "partial") else 1)
+    print(f"\nResult : {result['status'].upper()}")
+    print(f"Detail : {result['detail']}")
+    print(f"Elapsed: {result['elapsed']}s")
+    sys.exit(0 if result["status"] == "success" else 1)
 
 
 if __name__ == "__main__":
     main()
+    
