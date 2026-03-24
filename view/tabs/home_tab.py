@@ -57,19 +57,28 @@ class HomeTab(BaseTab):
             row=3, column=1, columnspan=3, pady=2, sticky=tk.W)
 
         # Debug toggle with trace to update indicator
-        self.context.set_var('debug_var', tk.BooleanVar(value=False))
         self.context.get_var('debug_var').trace_add('write', self._toggle_debug_mode)
         ttk.Checkbutton(config_frame, text="Enable Debug Mode",
                         variable=self.context.get_var('debug_var')).grid(
             row=4, column=0, columnspan=2, sticky=tk.W, pady=2)
 
+        # Hidden Model Variables for config saving
+        modes_data = self.context.config.get('ai_modes', {})
+        models = modes_data.get('models', {})
+        self.context.set_var('analysis_model', tk.StringVar(value=models.get('analysis', {}).get('name', 'gemini-3.0-pro-preview')))
+        self.context.set_var('code_model', tk.StringVar(value=models.get('code_generation', {}).get('name', 'claude-sonnet-4-5')))
+
         # Save Config and Test Config buttons
         config_btn_frame = ttk.Frame(config_frame)
         config_btn_frame.grid(row=5, column=0, columnspan=4, pady=5)
-        ttk.Button(config_btn_frame, text="Save Config",
-                   command=self._save_config).pack(side=tk.LEFT, padx=5)
-        ttk.Button(config_btn_frame, text="Test Config",
-                   command=self._test_config).pack(side=tk.LEFT, padx=5)
+        
+        save_cfg_btn = ttk.Button(config_btn_frame, text="Save Config", command=self._save_config)
+        save_cfg_btn.pack(side=tk.LEFT, padx=5)
+        self.context.lockable_buttons.append(save_cfg_btn)
+        
+        test_cfg_btn = ttk.Button(config_btn_frame, text="Test Config", command=self._test_config)
+        test_cfg_btn.pack(side=tk.LEFT, padx=5)
+        self.context.lockable_buttons.append(test_cfg_btn)
 
         # ── Credentials Section ────────────────────────────────────────────
         cred_frame = ttk.LabelFrame(self, text="Credentials (Encrypted)", padding="10")
@@ -117,10 +126,14 @@ class HomeTab(BaseTab):
         # Credential buttons
         cred_btn_frame = ttk.Frame(cred_frame)
         cred_btn_frame.grid(row=4, column=0, columnspan=3, pady=5)
-        ttk.Button(cred_btn_frame, text="Load Credentials",
-                   command=self._load_credentials).pack(side=tk.LEFT, padx=2)
-        ttk.Button(cred_btn_frame, text="Save",
-                   command=self._save_credentials).pack(side=tk.LEFT, padx=2)
+        
+        load_cred_btn = ttk.Button(cred_btn_frame, text="Load Credentials", command=self._load_credentials)
+        load_cred_btn.pack(side=tk.LEFT, padx=2)
+        self.context.lockable_buttons.append(load_cred_btn)
+        
+        save_cred_btn = ttk.Button(cred_btn_frame, text="Save", command=self._save_credentials)
+        save_cred_btn.pack(side=tk.LEFT, padx=2)
+        self.context.lockable_buttons.append(save_cred_btn)
 
         # ── Task / Workflow Section ────────────────────────────────────────
         task_frame = ttk.LabelFrame(self, text="Task Details - Full Workflow", padding="10")
@@ -128,48 +141,43 @@ class HomeTab(BaseTab):
 
         # JIRA Issue
         ttk.Label(task_frame, text="JIRA Issue:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        issue_prefix = f"{self.context.config.get('jira', {}).get('project_key', 'TSESSD')}-"
-        self.context.set_var('issue_var', tk.StringVar(value=issue_prefix))
         ttk.Entry(task_frame, textvariable=self.context.get_var('issue_var'), width=70).grid(
             row=0, column=1, pady=2)
 
         # Repository
         ttk.Label(task_frame, text="Repository:").grid(row=1, column=0, sticky=tk.W, pady=2)
         self.context.set_var('repo_var', tk.StringVar())
-        self.repo_combo = ttk.Combobox(task_frame,
-                                        textvariable=self.context.get_var('repo_var'), width=67)
+        self.repo_combo = ttk.Combobox(task_frame, textvariable=self.context.get_var('repo_var'), width=67)
         self.repo_combo.grid(row=1, column=1, pady=2)
+        self.repo_combo.bind('<<ComboboxSelected>>', self._on_repo_selected)
+        self.repo_combo.bind('<KeyRelease>', self._filter_repos)
 
         # Base Branch
         ttk.Label(task_frame, text="Base Branch:").grid(row=2, column=0, sticky=tk.W, pady=2)
         self.context.set_var('branch_var', tk.StringVar())
-        self.branch_combo = ttk.Combobox(task_frame,
-                                          textvariable=self.context.get_var('branch_var'), width=67)
+        self.branch_combo = ttk.Combobox(task_frame, textvariable=self.context.get_var('branch_var'), width=67)
         self.branch_combo.grid(row=2, column=1, pady=2)
+        self.branch_combo.bind('<KeyRelease>', self._filter_branches)
 
         # Feature Branch
         ttk.Label(task_frame, text="Feature Branch:").grid(row=3, column=0, sticky=tk.W, pady=2)
-        self.context.set_var('feature_branch_var', tk.StringVar(
-            value="If empty, will automatically be named as 'feature/TSESSD-XXXX'"))
-        ttk.Entry(task_frame, textvariable=self.context.get_var('feature_branch_var'), width=70).grid(
-            row=3, column=1, pady=2)
+        
+        # Use centrally-managed feature_branch_var from context
+        feature_branch_var = self.context.get_var('feature_branch_var')
+        ttk.Entry(task_frame, textvariable=feature_branch_var, width=70).grid(row=3, column=1, pady=2)
 
         # Workflow buttons
         workflow_btn_frame = ttk.Frame(task_frame)
         workflow_btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
-        ttk.Button(workflow_btn_frame, text="📂 Load Workflow",
-                   command=self._load_workflow).pack(side=tk.LEFT, padx=5)
-        ttk.Button(workflow_btn_frame, text="🚀 Start Full Analysis Workflow",
-                   style='Accent.TButton',
-                   command=self._start_workflow).pack(side=tk.LEFT, padx=5)
-
-        # ── Debug Mode Indicator (initially hidden) ────────────────────────
-        self.debug_indicator = ttk.Label(self, text="🐛 DEBUG MODE",
-                                         font=('Arial', 10, 'bold'),
-                                         foreground='red',
-                                         background='yellow',
-                                         padding="5")
-        # Don't grid it yet - will be shown when debug mode is enabled
+        
+        load_wf_btn = ttk.Button(workflow_btn_frame, text="📂 Load Workflow", command=self._load_workflow)
+        load_wf_btn.pack(side=tk.LEFT, padx=5)
+        self.context.lockable_buttons.append(load_wf_btn)
+        
+        start_wf_btn = ttk.Button(workflow_btn_frame, text="🚀 Start Full Analysis Workflow",
+                   style='Accent.TButton', command=self._start_workflow)
+        start_wf_btn.pack(side=tk.LEFT, padx=5)
+        self.context.lockable_buttons.append(start_wf_btn)
 
         # Status label
         self.status_label = ttk.Label(self, text="")
@@ -217,6 +225,68 @@ class HomeTab(BaseTab):
             entry_widget.configure(show='')
         else:
             entry_widget.configure(show='*')
+
+    def _toggle_debug_mode(self, *args):
+        # The main title bar already handles mapping/unmapping visually via AppContext variable.
+        if self.context.get_var('debug_var').get():
+            self.log("🐛 Debug mode enabled")
+            if self.context.analyzer:
+                self.context.analyzer.debug_mode = True
+        else:
+            self.log("🐛 Debug mode disabled")
+            if self.context.analyzer:
+                self.context.analyzer.debug_mode = False
+
+    def _on_repo_selected(self, event=None):
+        selected_text = self.context.get_var('repo_var').get()
+        if ' - ' in selected_text:
+            repo_slug = selected_text.split(' - ')[0]
+        else:
+            repo_slug = selected_text
+        
+        project_key = self.context.get_var('bb_project').get()
+        self.log(f"Fetching branches for {repo_slug}...")
+        
+        if hasattr(self.context.controller, 'repo_controller') and self.context.controller.repo_controller:
+            def _on_fetched(result):
+                if result and result.get('success'):
+                    branches = result.get('branches', [])
+                    self.context.branches = branches
+                    self.branch_combo['values'] = branches
+                    self.log(f"✓ Found {len(branches)} branches")
+                    if branches:
+                        self.branch_combo.current(0)
+                        self.context.set_branch(self.context.get_var('branch_var').get())
+                else:
+                    self.log("✗ Failed to fetch branches")
+            
+            # Run in background via RepoController
+            self.log("Requesting branches via RepoController...")
+            self.context.controller.repo_controller.fetch_branches(
+                repo_slug, project_key, _on_fetched
+            )
+
+    def _filter_repos(self, event=None):
+        typed = self.context.get_var('repo_var').get().lower()
+        if not hasattr(self.context, 'repos'):
+            self.context.repos = []
+        if not typed:
+            repo_names = [f"{r['slug']} - {r['name']}" for r in self.context.repos]
+            self.repo_combo['values'] = repo_names
+        else:
+            filtered = [f"{r['slug']} - {r['name']}" for r in self.context.repos
+                        if typed in r['slug'].lower() or typed in r['name'].lower()]
+            self.repo_combo['values'] = filtered
+
+    def _filter_branches(self, event=None):
+        typed = self.context.get_var('branch_var').get().lower()
+        if not hasattr(self.context, 'branches'):
+            self.context.branches = []
+        if not typed:
+            self.branch_combo['values'] = self.context.branches
+        else:
+            filtered = [b for b in self.context.branches if typed in b.lower()]
+            self.branch_combo['values'] = filtered
 
     def _load_credentials(self):
         """Load credentials from encrypted file"""
@@ -305,7 +375,7 @@ class HomeTab(BaseTab):
             self.show_error("Error", "Workflow controller not initialized")
             return
         
-        self.context.controller.workflow_controller.load_workflow_file(self._on_workflow_loaded)
+        self.context.controller.workflow_controller.load_workflow_file(self.root, self._on_workflow_loaded)
 
     def _on_workflow_loaded(self, workflow_data):
         """Callback when workflow is loaded"""
@@ -317,13 +387,21 @@ class HomeTab(BaseTab):
         if issue_key:
             self.context.get_var('issue_var').set(issue_key)
         
-        repo_info = workflow_data.get('repository_info', {})
-        if repo_info.get('repository'):
-            self.context.get_var('repo_var').set(repo_info['repository'])
-        if repo_info.get('base_branch'):
-            self.context.get_var('branch_var').set(repo_info['base_branch'])
-        if repo_info.get('feature_branch'):
-            self.context.get_var('feature_branch_var').set(repo_info['feature_branch'])
+        repo = workflow_data.get('repository')
+        if repo:
+            self.context.get_var('repo_var').set(repo)
+        
+        base_branch = workflow_data.get('base_branch')
+        if base_branch:
+            self.context.get_var('branch_var').set(base_branch)
+            
+        feature_branch = workflow_data.get('feature_branch')
+        if feature_branch:
+            self.context.get_var('feature_branch_var').set(feature_branch)
+            
+        local_path = workflow_data.get('local_path')
+        if local_path:
+            self.context.get_var('impl_repo_var').set(local_path)
         
         self.log(f"✓ Workflow loaded for {issue_key}")
         self.show_info("Workflow Loaded", 

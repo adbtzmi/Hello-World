@@ -65,7 +65,7 @@ class CompileController:
         try:
             registry_path = self._config.get("registry_path", _REGISTRY_PATH)
             if not os.path.exists(registry_path):
-                logger.warning(f"Tester registry not found: {registry_path}")
+                logger.debug(f"DEBUG_REGISTRY_MISSING: {registry_path}")
                 return []
             with open(registry_path, "r") as f:
                 data = json.load(f)

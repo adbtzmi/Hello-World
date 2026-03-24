@@ -31,7 +31,10 @@ class AppContext:
         self.vars     = {}
         self.repos    = []
         self.branches = []
+        self.branches = []
         self.gui_locked = False
+        self.lockable_buttons = []
+
         
         # Phase 2 additions
         self.chat_window = None  # active chat window reference

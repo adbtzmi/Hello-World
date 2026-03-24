@@ -139,7 +139,7 @@ class WorkflowController:
         """
         return self.context.workflow_state.get(step_name)
     
-    def load_workflow_file(self, root_window):
+    def load_workflow_file(self, root_window, callback=None):
         """
         Load a workflow file via file dialog and populate fields.
         Extracted from gui/app.py lines 452-524.
@@ -171,7 +171,7 @@ class WorkflowController:
             self.load_workflow_state()
             
             # Extract issue key from filename
-            issue_key = self.get_workflow_step("ISSUE_KEY")
+            issue_key = self.get_workflow_step("ISSUE_KEY") or self.get_workflow_step("ISSUE KEY")
             if not issue_key:
                 # Try to extract from filename
                 basename = os.path.basename(filename)
@@ -215,14 +215,23 @@ class WorkflowController:
             logger.info(f"Loaded workflow file: {filename}")
             
             # Return parsed data for caller to populate UI
-            return {
+            result = {
                 "issue_key": issue_key,
-                "repo_name": repo_name,
+                "repository": repo_name,
                 "base_branch": base_branch,
                 "feature_branch": feature_branch,
-                "repo_path": repo_path,
+                "local_path": repo_path,
                 "sections": sections
             }
+            
+            if callback:
+                # Use root_window if it's the root, otherwise fallback to result
+                if hasattr(root_window, 'after'):
+                    root_window.after(0, lambda: callback(result))
+                else:
+                    callback(result)
+                    
+            return result
             
         except Exception as e:
             self.context.log(f"✗ Error loading workflow file: {e}")

@@ -1,0 +1,893 @@
+#!/usr/bin/env python3
+"""
+view/tabs/implementation_tab.py
+================================
+Implementation Tab (View) — matches gui/app.py create_implementation_tab()
+"""
+
+import tkinter as tk
+from tkinter import ttk, scrolledtext, filedialog
+import logging
+
+from view.tabs.base_tab import BaseTab
+
+logger = logging.getLogger("bento_app")
+
+
+class ImplementationTab(BaseTab):
+    """
+    Top-level Implementation tab — contains a nested Notebook.
+
+    Layout (nested) matches original gui/app.py:
+      ├── 🧠 AI Plan Generator
+      ├── 📦 TP Compilation & Health
+      └── 🧪 Checkout (injected by main.py)
+    """
+
+    _BADGE_COLOURS = {
+        "IDLE":     ("#888888", "white"),
+        "PENDING":  ("#0078d4", "white"),
+        "RUNNING":  ("#005a9e", "white"),
+        "SUCCESS":  ("#107c10", "white"),
+        "FAILED":   ("#a80000", "white"),
+        "TIMEOUT":  ("#ca5010", "white"),
+    }
+
+    def __init__(self, notebook, context):
+        super().__init__(notebook, context, "💻 Implementation")
+        self._badge_labels = {}
+        self._tester_vars  = {}
+        self._history_rows = []
+        self._build_ui()
+
+    def _build_ui(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        self.impl_notebook = ttk.Notebook(self)
+        self.impl_notebook.grid(row=0, column=0, sticky="nsew")
+
+        self._ai_frame = ttk.Frame(self.impl_notebook, padding="10")
+        self._compile_subtab = ttk.Frame(self.impl_notebook, padding="10")
+
+        self.impl_notebook.add(self._ai_frame, text="🧠 AI Plan Generator")
+        self.impl_notebook.add(self._compile_subtab, text="📦 TP Compilation & Health")
+
+        self._build_ai_tab()
+        self._build_compile_tab()
+
+
+    # ──────────────────────────────────────────────────────────────────────
+    # SUB-TAB 1: AI PLAN GENERATOR
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _build_ai_tab(self):
+        f = self._ai_frame
+        
+        ttk.Label(f, text="Generate Implementation Plan", font=('Arial', 14, 'bold')).grid(
+            row=0, column=0, columnspan=3, pady=10)
+        
+        ttk.Label(f, text="JIRA Issue Key:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(f, textvariable=self.context.get_var("issue_var"), width=50).grid(
+            row=1, column=1, pady=5, sticky="we")
+        ttk.Label(f, text="(Auto-populated from Home tab)", font=('Arial', 8), foreground='gray').grid(
+            row=1, column=2, sticky=tk.W, padx=5)
+
+        ttk.Label(f, text="Local Repo Path:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        repo_path_frame = ttk.Frame(f)
+        repo_path_frame.grid(row=2, column=1, pady=5, sticky="we")
+        self.context.set_var("impl_repo_var", tk.StringVar())
+        ttk.Entry(repo_path_frame, textvariable=self.context.get_var("impl_repo_var"), width=47).pack(side=tk.LEFT)
+        ttk.Button(repo_path_frame, text="📁", width=3, command=self._browse_repo).pack(side=tk.LEFT, padx=(2, 0))
+        ttk.Label(f, text="(Path to cloned repository for AI indexing)", font=('Arial', 8), foreground='gray').grid(
+            row=2, column=2, sticky=tk.W, padx=5)
+
+        self.generate_btn = ttk.Button(f, text="Generate Implementation Plan", command=self._generate_plan)
+        self.generate_btn.grid(row=3, column=0, columnspan=3, pady=10)
+        self.context.lockable_buttons.append(self.generate_btn)
+
+        result_frame = ttk.LabelFrame(f, text="Implementation Plan", padding="10")
+        result_frame.grid(row=4, column=0, columnspan=3, sticky="nsew", pady=5)
+
+        self.plan_text = scrolledtext.ScrolledText(result_frame, height=15, width=70, wrap=tk.WORD)
+        self.plan_text.pack(fill=tk.BOTH, expand=True)
+
+        f.columnconfigure(1, weight=1)
+        f.rowconfigure(4, weight=1)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # SUB-TAB 2: TP COMPILATION & HEALTH
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _build_compile_tab(self):
+        f = self._compile_subtab
+
+        # Transition to pack() for the main vertical sections to match original GUI behavior
+        # and ensure everything fits within the 750px height.
+        
+        # 1. Compile TP Package (Top)
+        compile_frame = ttk.LabelFrame(f, text="Compile TP Package", padding="6")
+        compile_frame.pack(fill=tk.X, padx=10, pady=5)
+        compile_frame.columnconfigure(0, weight=1)
+        compile_frame.columnconfigure(1, weight=1)
+
+        # 1. Target Testers
+        targets_frame = ttk.LabelFrame(compile_frame, text="1. Target Testers", padding="6")
+        targets_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5), pady=(0, 5))
+        targets_frame.columnconfigure(0, weight=1)
+
+        search_frame = ttk.Frame(targets_frame)
+        search_frame.grid(row=0, column=0, sticky="we", pady=(0, 5))
+        ttk.Label(search_frame, text="Search:").pack(side=tk.LEFT, padx=(0, 5))
+        self._tester_search_var = tk.StringVar()
+        self._tester_search_var.trace_add("write", self._filter_testers)
+        self._tester_search_entry = ttk.Entry(search_frame, textvariable=self._tester_search_var, width=15)
+        self._tester_search_entry.pack(side=tk.LEFT)
+        self._tester_search_entry.insert(0, "Search...")
+        self._tester_search_entry.config(foreground="gray")
+        self._tester_search_entry.bind("<FocusIn>", lambda e: self._tester_search_entry.delete(0, tk.END) if self._tester_search_entry.get() == "Search..." else None)
+        self._tester_search_entry.bind("<FocusOut>", lambda e: (self._tester_search_entry.insert(0, "Search..."), self._tester_search_entry.config(foreground="gray")) if not self._tester_search_entry.get() else None)
+        ttk.Label(search_frame, text="(Shift+Click for multi)", font=("Arial", 8, "italic"), foreground="gray").pack(side=tk.LEFT, padx=(5, 0))
+
+        list_frame = ttk.Frame(targets_frame)
+        list_frame.grid(row=1, column=0, sticky="we")
+        self._tester_listbox = tk.Listbox(list_frame, selectmode=tk.MULTIPLE, height=3, width=28, exportselection=False)
+        self._tester_listbox.pack(side=tk.LEFT, fill=tk.Y)
+        self._tester_listbox.bind("<<ListboxSelect>>", self._on_tester_selected)
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self._tester_listbox.yview)
+        scrollbar.pack(side=tk.LEFT, fill=tk.Y)
+        self._tester_listbox.config(yscrollcommand=scrollbar.set)
+        
+        btn_frame_list = ttk.Frame(list_frame)
+        btn_frame_list.pack(side=tk.LEFT, padx=(5, 0), anchor=tk.N)
+        ttk.Button(btn_frame_list, text="+ Add Tester", width=12, command=self._add_tester).pack(pady=(0, 5))
+        ttk.Button(btn_frame_list, text="🗑 Remove", width=12, command=self._remove_tester).pack(pady=(0, 5))
+
+        info_frame = ttk.Frame(targets_frame)
+        info_frame.grid(row=2, column=0, sticky="we", pady=(5, 0))
+        ttk.Label(info_frame, text="Selected:", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=(0, 5))
+        self._compile_mode_var = tk.StringVar(value="No tester selected")
+        self._compile_mode_lbl = ttk.Label(info_frame, textvariable=self._compile_mode_var, font=("Arial", 9, "italic"), foreground="#cc0000")
+        self._compile_mode_lbl.pack(side=tk.LEFT)
+
+        # 2. Configuration & Paths
+        config_frame = ttk.LabelFrame(compile_frame, text="2. Configuration & Paths", padding="6")
+        config_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0), pady=(0, 5))
+        config_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(config_frame, text="TGZ Label:").grid(row=0, column=0, sticky=tk.W, pady=2, padx=(0, 5))
+        self.context.set_var("tgz_label_var", tk.StringVar())
+        ttk.Entry(config_frame, textvariable=self.context.get_var("tgz_label_var"), width=22).grid(row=0, column=1, sticky=tk.W, pady=2)
+        ttk.Label(config_frame, text="(blank = default)", font=("Arial", 8), foreground="gray").grid(row=0, column=2, sticky=tk.W, padx=2)
+
+        ttk.Label(config_frame, text="RAW_ZIP:").grid(row=1, column=0, sticky=tk.W, pady=2, padx=(0, 5))
+        raw_zip_frame = ttk.Frame(config_frame)
+        raw_zip_frame.grid(row=1, column=1, columnspan=2, sticky="we", pady=2)
+        self.context.set_var("compile_raw_zip", tk.StringVar(value=r"P:\temp\BENTO\RAW_ZIP"))
+        ttk.Entry(raw_zip_frame, textvariable=self.context.get_var("compile_raw_zip"), width=28).pack(side=tk.LEFT)
+        ttk.Button(raw_zip_frame, text="📁", width=3, command=self._browse_raw_zip).pack(side=tk.LEFT, padx=(2, 0))
+
+        ttk.Label(config_frame, text="RELEASE_TGZ:").grid(row=2, column=0, sticky=tk.W, pady=2, padx=(0, 5))
+        release_tgz_frame = ttk.Frame(config_frame)
+        release_tgz_frame.grid(row=2, column=1, columnspan=2, sticky="we", pady=2)
+        self.context.set_var("compile_release_tgz", tk.StringVar(value=r"P:\temp\BENTO\RELEASE_TGZ"))
+        ttk.Entry(release_tgz_frame, textvariable=self.context.get_var("compile_release_tgz"), width=28).pack(side=tk.LEFT)
+        ttk.Button(release_tgz_frame, text="📁", width=3, command=self._browse_release_tgz).pack(side=tk.LEFT, padx=(2, 0))
+
+        # 3. Action Frame
+        action_frame = ttk.Frame(compile_frame)
+        action_frame.grid(row=1, column=0, columnspan=2, sticky="we", pady=(0, 5))
+        btn_container = ttk.Frame(action_frame)
+        btn_container.pack(expand=True)
+        
+        style = ttk.Style()
+        style.configure('Compile.TButton')
+        self.compile_btn = ttk.Button(btn_container, text="🚀 Compile on Selected Tester(s)", style='Compile.TButton', command=self._start_compile, width=35)
+        self.compile_btn.pack(pady=(0, 2))
+        self.context.lockable_buttons.append(self.compile_btn)
+        self.compile_status_var = tk.StringVar(value="")
+        ttk.Label(btn_container, textvariable=self.compile_status_var, font=("Arial", 9, "bold"), foreground="#0066cc").pack()
+
+        self._refresh_testers()
+
+        # 2. Watcher Health Monitor (Middle)
+        self.health_wrapper = ttk.LabelFrame(f, text="🔍 Watcher Health Monitor", padding="6")
+        self.health_wrapper.pack(fill=tk.X, padx=10, pady=5)
+        
+        row_frame1 = ttk.Frame(self.health_wrapper)
+        row_frame1.pack(fill=tk.X, pady=1)
+        ttk.Label(row_frame1, text="📂 RAW_ZIP Folder:", width=28, anchor="w", font=("Arial", 9, "bold")).pack(side=tk.LEFT)
+        self.health_raw_zip_lbl = ttk.Label(row_frame1, text="Checking...", foreground="gray")
+        self.health_raw_zip_lbl.pack(side=tk.LEFT)
+
+        row_frame2 = ttk.Frame(self.health_wrapper)
+        row_frame2.pack(fill=tk.X, pady=1)
+        ttk.Label(row_frame2, text="📂 RELEASE_TGZ Folder:", width=28, anchor="w", font=("Arial", 9, "bold")).pack(side=tk.LEFT)
+        self.health_release_lbl = ttk.Label(row_frame2, text="Checking...", foreground="gray")
+        self.health_release_lbl.pack(side=tk.LEFT)
+
+        row_frame3 = ttk.Frame(self.health_wrapper)
+        row_frame3.pack(fill=tk.X, pady=1)
+        ttk.Label(row_frame3, text="🤖 Watcher Process:", width=28, anchor="w", font=("Arial", 9, "bold")).pack(side=tk.LEFT)
+        self.health_watcher_lbl = ttk.Label(row_frame3, text="Checking...", foreground="gray")
+        self.health_watcher_lbl.pack(side=tk.LEFT)
+
+        recent_frame = ttk.Frame(self.health_wrapper)
+        recent_frame.pack(fill=tk.X, pady=(2, 1))
+        ttk.Label(recent_frame, text="📊 Recent Builds:", width=28, anchor="w", font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, anchor=tk.N)
+        
+        self.builds_text = tk.Text(recent_frame, height=3, width=65, bg="white", relief="flat", font=("Segoe UI", 9))
+        self.builds_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self.builds_text.tag_config("success",     foreground="#28a745")
+        self.builds_text.tag_config("failed",      foreground="#dc3545")
+        self.builds_text.tag_config("in_progress", foreground="#fd7e14")
+        self.builds_text.tag_config("pending",     foreground="#fd7e14")
+        self.builds_text.tag_config("timeout",     foreground="purple")
+        self.builds_text.tag_config("unknown",     foreground="gray")
+        self.builds_text.tag_config("default",     foreground="black")
+
+        ttk.Button(self.health_wrapper, text="🔄 Refresh Now", command=self._refresh_health).pack(anchor="e", padx=5, pady=0)
+        self._refresh_health()
+
+        # 3. Compile History Section (Bottom - Fills remainder)
+        history_wrapper = ttk.LabelFrame(f, text="📋 Compile History", padding="6")
+        history_wrapper.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        history_wrapper.columnconfigure(0, weight=1)
+
+        # Toolbar (matches original)
+        toolbar = ttk.Frame(history_wrapper)
+        toolbar.grid(row=0, column=0, columnspan=2, sticky="we", pady=(0, 2))
+        ttk.Label(toolbar, text="Past compilations from RELEASE_TGZ",
+                  font=("Arial", 8), foreground="gray").pack(side=tk.LEFT)
+        
+        ttk.Button(toolbar, text="🔄 Refresh", 
+                   command=self._refresh_history_from_disk).pack(side=tk.RIGHT)
+        ttk.Button(toolbar, text="📁 Open Folder",
+                   command=self._open_release_folder).pack(side=tk.RIGHT, padx=5)
+
+        # Treeview (height=6 to save space, columns match original)
+        hist_cols = ("Timestamp", "JIRA", "Tester", "ENV", "Label", "Output TGZ")
+        self._history_tree = ttk.Treeview(history_wrapper, columns=hist_cols, show="headings", height=4)
+        
+        # Column widths matching original
+        col_widths = [140, 120, 110, 70, 100, 220]
+        for col, width in zip(hist_cols, col_widths):
+            self._history_tree.heading(col, text=col)
+            self._history_tree.column(col, width=width, anchor="w")
+
+        # Row colors (even/odd tags match original)
+        self._history_tree.tag_configure("even", background="#f5f5f5")
+        self._history_tree.tag_configure("odd",  background="#ffffff")
+
+        hist_scroll = ttk.Scrollbar(history_wrapper, orient=tk.VERTICAL, command=self._history_tree.yview)
+        self._history_tree.configure(yscrollcommand=hist_scroll.set)
+        
+        self._history_tree.grid(row=1, column=0, sticky="nsew")
+        hist_scroll.grid(row=1, column=1, sticky="ns")
+        
+        history_wrapper.rowconfigure(1, weight=1)
+        
+        # Initial history load
+        self._refresh_history_from_disk()
+
+    # ──────────────────────────────────────────────────────────────────────
+    # AI PLAN GENERATOR — USER ACTIONS
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _browse_repo(self):
+        path = filedialog.askdirectory(title="Select Repository Folder")
+        if path:
+            self.context.get_var("impl_repo_var").set(path)
+
+    def _browse_raw_zip(self):
+        path = filedialog.askdirectory(title="Select RAW_ZIP Folder")
+        if path:
+            self.context.get_var("compile_raw_zip").set(path)
+
+    def _browse_release_tgz(self):
+        path = filedialog.askdirectory(title="Select RELEASE_TGZ Folder")
+        if path:
+            self.context.get_var("compile_release_tgz").set(path)
+
+    def _generate_plan(self):
+        issue_key = self.context.get_var("issue_var").get().strip().upper()
+        repo_path = self.context.get_var("impl_repo_var").get().strip()
+
+        jira_project = self.context.config.get("jira", {}).get("project_key", "TSESSD")
+        if not issue_key or issue_key == f"{jira_project}-":
+            self.show_error("Input Error", "Enter a valid JIRA issue key.")
+            return
+        if not repo_path:
+            self.show_error("Input Error", "Select the local repository path.")
+            return
+
+        ctrl = getattr(self.context.controller, "implementation_controller", None)
+        if ctrl is None:
+            self.show_error("Error", "ImplementationController is not initialised.")
+            return
+
+        self.lock_gui()
+        self.plan_text.delete("1.0", tk.END)
+        self.plan_text.insert(tk.END, "⏳ Generating implementation plan…\n")
+        self.log(f"[Implementation] Generating plan for {issue_key}")
+
+        ctrl.generate_implementation_plan(issue_key, repo_path, self._on_plan_generated)
+
+    def _on_plan_generated(self, result):
+        """Callback — runs on main thread via root.after in controller."""
+        self.unlock_gui()
+
+        if not result.get("success"):
+            error = result.get("error", "Unknown error")
+            self.plan_text.delete("1.0", tk.END)
+            self.plan_text.insert(tk.END, f"✗ Generation failed:\n{error}")
+            self.show_error("Generation Failed", error)
+            self.log(f"✗ Implementation plan generation failed: {error}")
+            return
+
+        plan = result.get("plan", "")
+        from_cache = result.get("from_cache", False)
+
+        self.plan_text.delete("1.0", tk.END)
+        self.plan_text.insert(tk.END, plan)
+        self.log(f"✓ Implementation plan generated{' (from cache)' if from_cache else ''}")
+
+        # Open interactive chat for review/refinement
+        issue_key = self.context.get_var("issue_var").get().strip().upper()
+        chat_ctrl = getattr(self.context.controller, "chat_controller", None)
+        if chat_ctrl:
+            chat_ctrl.open_interactive_chat(
+                issue_key=issue_key,
+                step_name="Implementation Plan",
+                initial_content=plan,
+                finalize_callback=lambda: self._finalize_plan()
+            )
+
+    def _finalize_plan(self):
+        issue_key = self.context.get_var("issue_var").get().strip().upper()
+        plan_text = self.plan_text.get("1.0", tk.END).strip()
+        if not plan_text:
+            self.show_error("Error", "No plan to finalize.")
+            return
+
+        ctrl = getattr(self.context.controller, "implementation_controller", None)
+        if ctrl:
+            success = ctrl.finalize_plan(issue_key, plan_text)
+            if success:
+                self.log(f"✓ Implementation plan finalized for {issue_key}")
+            else:
+                self.show_error("Error", "Failed to save plan to workflow.")
+
+    # ──────────────────────────────────────────────────────────────────────
+    # TP COMPILATION — USER ACTIONS
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _refresh_testers(self):
+        self._tester_listbox.delete(0, tk.END)
+        ctrl = getattr(self.context.controller, "compile_controller", None)
+        testers = ctrl.get_available_testers() if ctrl else []
+        for i, (hostname, env) in enumerate(testers):
+            self._tester_listbox.insert(tk.END, f"{hostname} ({env})")
+
+    def _filter_testers(self, *_):
+        if not hasattr(self, '_tester_listbox'):
+            return
+        query = self._tester_search_var.get().lower()
+        if query == "search...":
+            query = ""
+        self._tester_listbox.delete(0, tk.END)
+        ctrl = getattr(self.context.controller, "compile_controller", None)
+        testers = ctrl.get_available_testers() if ctrl else []
+        for hostname, env in testers:
+            label = f"{hostname} ({env})"
+            if query in hostname.lower() or query in env.lower():
+                self._tester_listbox.insert(tk.END, label)
+        self._on_tester_selected()
+
+    def _on_tester_selected(self, event=None):
+        selections = self._tester_listbox.curselection()
+        if not selections:
+            self._compile_mode_var.set("No tester selected")
+            self._compile_mode_lbl.config(foreground="#cc0000")
+        elif len(selections) == 1:
+            val = self._tester_listbox.get(selections[0])
+            self._compile_mode_var.set("Selected: " + val)
+            self._compile_mode_lbl.config(foreground="#1a6e1a")
+        else:
+            self._compile_mode_var.set(f"Multi-compile: {len(selections)} testers - " + ", ".join([self._tester_listbox.get(i) for i in selections]))
+            self._compile_mode_lbl.config(foreground="#0066cc")
+
+    def _add_tester(self):
+        """Open the custom Add Tester dialog (matches legacy app.py)."""
+        AddTesterDialog(self.root, self)
+
+    def _browse_directory(self, var, title):
+        """Open directory browser and set the variable."""
+        from tkinter import filedialog
+        path = filedialog.askdirectory(title=title)
+        if path:
+            var.set(path)
+
+    def _centre_dialog(self, dialog, w, h):
+        """Position dialog at the centre of the main window (matches legacy app.py)."""
+        dialog.transient(self.root)
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width()  - w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+        dialog.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _remove_tester(self):
+        """Remove selected tester(s) with confirmation (matches legacy app.py)."""
+        from tkinter import messagebox
+        selections = self._tester_listbox.curselection()
+        if not selections:
+            messagebox.showwarning("No Selection", "Please select one or more testers to remove.")
+            return
+        
+        testers_to_remove = [self._tester_listbox.get(idx) for idx in selections]
+        
+        if len(testers_to_remove) == 1:
+            msg = f"Remove '{testers_to_remove[0]}' from the registry?"
+        else:
+            msg = f"Remove {len(testers_to_remove)} testers from the registry?\n\n" + "\n".join(f"  • {t}" for t in testers_to_remove)
+        
+        if messagebox.askyesno("Remove Tester(s)", msg):
+            # Load current registry to delete correctly
+            import json, os
+            registry_path = self.context.config.get("registry_path", r"P:\temp\BENTO\bento_testers.json")
+            registry_data = {}
+            if os.path.exists(registry_path):
+                try:
+                    with open(registry_path, "r") as f:
+                        registry_data = json.load(f)
+                except Exception: pass
+                
+            for key in testers_to_remove:
+                if key in registry_data:
+                    del registry_data[key]
+                    self.log(f"[Tester Removed] {key}")
+            
+            self._save_tester_registry(registry_data)
+            self._refresh_testers()
+
+    def _save_tester_registry(self, registry_data=None):
+        """
+        Persist tester list to bento_testers.json (both local and shared).
+        Directly ports the logic from legacy app.py.
+        """
+        import json, os
+        registry_path = self.context.config.get("registry_path", r"P:\temp\BENTO\bento_testers.json")
+        try:
+            os.makedirs(os.path.dirname(registry_path), exist_ok=True)
+            
+            # If we didn't get explicit data, we reconstruct from listbox (legacy behavior for removals)
+            if registry_data is None:
+                registry_data = {}
+                for i in range(self._tester_listbox.size()):
+                    item = self._tester_listbox.get(i)
+                    if " (" in item and item.endswith(")"):
+                        hostname, env = item.split(" (", 1)
+                        env = env[:-1]
+                        # Use defaults for legacy fields if reconstructing from listbox
+                        registry_data[item] = {
+                            "hostname": hostname,
+                            "env": env,
+                            "repo_dir": r"C:\BENTO\adv_ibir_master",
+                            "build_cmd": "make release"
+                        }
+
+            with open(registry_path, "w") as f:
+                json.dump(registry_data, f, indent=4)
+            self.log("✓ Tester registry updated.")
+        except Exception as e:
+            self.show_error("Registry Error", f"Could not save registry:\n{e}")
+        except Exception as e:
+            self.show_error("Registry Error", f"Could not save registry:\n{e}")
+
+    def _get_selected_hostnames(self):
+        selection = self._tester_listbox.curselection()
+        hostnames = []
+        for idx in selection:
+            label = self._tester_listbox.get(idx)
+            hostname = label.split(" (")[0].strip()
+            hostnames.append(hostname)
+        return hostnames
+
+    def _start_compile(self):
+        issue_key = self.context.get_var("issue_var").get().strip().upper()
+        # Original reads source_dir from impl_repo_var
+        source_dir = self.context.get_var("impl_repo_var").get().strip()
+        shared_folder = self.context.get_var("compile_raw_zip").get().strip().replace("\\RAW_ZIP", "") # Hack to get parent
+        label = self.context.get_var("tgz_label_var").get().strip()
+        hostnames = self._get_selected_hostnames()
+
+        if not source_dir:
+            self.show_error("Input Error", "Select a local repo path (Implementation sub-tab).")
+            return
+        if not issue_key or issue_key.endswith("-"):
+            self.show_error("Input Error", "Enter a JIRA key (Implementation sub-tab).")
+            return
+        if not hostnames:
+            self.show_error("Input Error", "Select at least one tester.")
+            return
+
+        ctrl = getattr(self.context.controller, "compile_controller", None)
+        if ctrl is None:
+            self.show_error("Error", "CompileController is not initialised.")
+            return
+
+        self.lock_gui()
+        self.compile_status_var.set("Running...")
+        self.log(f"[Compile] Starting compile for {issue_key} on {len(hostnames)} tester(s)…")
+
+        ctrl.start_compile(
+            source_dir=source_dir,
+            jira_key=issue_key,
+            shared_folder=shared_folder,
+            label=label,
+            hostnames=hostnames,
+        )
+
+    def _refresh_health(self):
+        import os
+        import time
+        import json
+        
+        raw_zip = self.context.get_var("compile_raw_zip").get().strip()
+        release_tgz = self.context.get_var("compile_release_tgz").get().strip()
+        repo_dir = r"C:\BENTO\adv_ibir_master" # Default as per original
+        
+        # 1. Folder Reachability
+        if os.path.isdir(raw_zip):
+            self.health_raw_zip_lbl.config(text="✅ Reachable  " + raw_zip, foreground="#28a745")
+        else:
+            self.health_raw_zip_lbl.config(text="❌ NOT REACHABLE: " + raw_zip, foreground="#dc3545")
+            
+        if os.path.isdir(release_tgz):
+            self.health_release_lbl.config(text="✅ Reachable  " + release_tgz, foreground="#28a745")
+        else:
+            self.health_release_lbl.config(text="❌ NOT REACHABLE: " + release_tgz, foreground="#dc3545")
+            
+        # 2. Watcher Process & Locks
+        lock_path = os.path.join(repo_dir, ".bento_build_lock")
+        local_lock_msg = ""
+        if os.path.exists(lock_path):
+            age = int(time.time() - os.path.getmtime(lock_path))
+            local_lock_msg = f"Local lock ({age}s) "
+
+        active_locks = []
+        if os.path.isdir(raw_zip):
+            try:
+                for f in os.listdir(raw_zip):
+                    if f.endswith(".bento_lock"):
+                        parts = f.split("_")
+                        if len(parts) >= 3:
+                            active_locks.append(f"{parts[1]}")
+                        else:
+                            active_locks.append("Active")
+            except Exception:
+                pass
+        
+        if active_locks or local_lock_msg:
+            locks_str = ", ".join(active_locks)
+            msg = "🟡 Processing: " + locks_str if locks_str else "🟡 Processing..."
+            if local_lock_msg:
+                msg = "🔒 " + local_lock_msg + "| " + msg
+            self.health_watcher_lbl.config(text=msg, foreground="#fd7e14")
+        else:
+            self.health_watcher_lbl.config(text="✅ Idle (no active builds)", foreground="#28a745")
+            
+        # 3. Recent Builds List
+        try:
+            self.builds_text.config(state="normal")
+            self.builds_text.delete("1.0", tk.END)
+            
+            all_builds = []
+            if os.path.isdir(raw_zip):
+                try:
+                    for f in os.listdir(raw_zip):
+                        if f.endswith(".bento_status"):
+                            base_name = f.replace(".bento_status", "")
+                            mtime = os.path.getmtime(os.path.join(raw_zip, f))
+                            all_builds.append((base_name, f, mtime))
+                        elif f.endswith(".zip") and not f.endswith(".bento_lock"):
+                            mtime = os.path.getmtime(os.path.join(raw_zip, f))
+                            all_builds.append((f, None, mtime))
+                except Exception:
+                    pass
+            
+            # Sort by mtime descending
+            all_builds.sort(key=lambda x: x[2], reverse=True)
+            
+            # Deduplicate by core name
+            seen_bases = set()
+            unique_count = 0
+            for base_name, status_file, mtime in all_builds:
+                core_name = base_name.replace(".zip", "") if base_name.endswith(".zip") else base_name
+                if core_name not in seen_bases:
+                    seen_bases.add(core_name)
+                    unique_count += 1
+                    
+                    state = "unknown"
+                    detail = "No status file yet (Waiting for watcher...)"
+                    
+                    if status_file:
+                        full_status_path = os.path.join(raw_zip, status_file)
+                        try:
+                            with open(full_status_path, 'r') as sf:
+                                sdata = json.load(sf)
+                                state = sdata.get("status", "unknown")
+                                detail = sdata.get("detail", "")
+                        except Exception:
+                            detail = "Status parse error"
+                    else:
+                        state = "pending"
+                    
+                    display_name = base_name if base_name.endswith(".zip") else base_name + ".zip"
+                    self.builds_text.insert(tk.END, f"{display_name}\n", "default")
+                    self.builds_text.insert(tk.END, f"↳ {state.upper()} — {detail[:70]}\n", state)
+                    
+                    if unique_count >= 3:
+                        break
+            
+            if unique_count == 0:
+                self.builds_text.insert(tk.END, "(no recent builds found)\n", "unknown")
+                
+        except Exception as e:
+            self.builds_text.insert(tk.END, f"Refresh error: {e}", "failed")
+        finally:
+            self.builds_text.config(state="disabled")
+
+        # Auto-refresh loop
+        self.after(30000, self._refresh_health)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # VIEW CALLBACKS
+    # ──────────────────────────────────────────────────────────────────────
+
+    def on_compile_started(self, hostname: str, env: str):
+        self.log(f"⚙ Compile started → {hostname} ({env})")
+
+    def on_compile_completed(self, hostname: str, env: str, result: dict):
+        status = result.get("status", "failed").upper()
+        elapsed = result.get("elapsed", 0)
+        jira_key = self.context.get_var("issue_var").get().strip()
+        label = self.context.get_var("tgz_label_var").get().strip()
+
+        import datetime
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        self._history_tree.insert("", 0, values=(ts, jira_key, hostname, label, status, f"{elapsed}s"))
+
+        self.unlock_gui()
+        self.compile_status_var.set("")
+
+        self.log(f"{'✓' if status == 'SUCCESS' else '✗'} Compile {status} → {hostname} ({env}): {result.get('detail', '')}")
+
+    def on_implementation_completed(self, result: dict):
+        issue_key = result.get("issue_key", "")
+        self.log(f"✓ Implementation step complete: {issue_key}")
+        # Refresh history after a successful compile
+        self._refresh_history_from_disk()
+
+    # ──────────────────────────────────────────────────────────────────────
+    # COMPILE HISTORY LOGIC
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _open_release_folder(self):
+        import os
+        repo_dir = self.context.get_var("compile_release_tgz").get().strip()
+        if os.path.isdir(repo_dir):
+            os.startfile(repo_dir)
+        else:
+            self.show_error("Error", f"Release folder not found: {repo_dir}")
+
+    def _refresh_history_from_disk(self):
+        """Matches original _load() logic in gui/app.py."""
+        import glob
+        import os
+        import threading
+        
+        release_root = self.context.get_var("compile_release_tgz").get().strip()
+        if not os.path.isdir(release_root):
+            return
+
+        def _fetch():
+            pattern = os.path.join(release_root, "**", "build_info_*.txt")
+            try:
+                files = glob.glob(pattern, recursive=True)
+                files.sort(key=os.path.getmtime, reverse=True)
+                self.root.after(0, lambda: self._populate_history(files))
+            except Exception as e:
+                self.log(f"✗ Failed to load history: {e}")
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _populate_history(self, files):
+        self._history_tree.delete(*self._history_tree.get_children())
+        for i, fpath in enumerate(files[:100]): # Limit to 100 entries
+            row = self._parse_build_info(fpath)
+            if row:
+                tag = "even" if i % 2 == 0 else "odd"
+                self._history_tree.insert("", tk.END, values=row, tags=(tag,))
+
+    def _parse_build_info(self, fpath):
+        """Matches original _parse() logic in gui/app.py."""
+        data = {}
+        try:
+            with open(fpath, "r") as f:
+                for line in f:
+                    if ":" in line:
+                        k, v = line.split(":", 1)
+                        data[k.strip()] = v.strip()
+            
+            # Original cols: ("Timestamp", "JIRA", "Tester", "ENV", "Label", "Output TGZ")
+            return (
+                data.get("Timestamp", "N/A"),
+                data.get("JIRA", "N/A"),
+                data.get("Tester", "N/A"),
+                data.get("ENV", "N/A"),
+                data.get("Label", "N/A"),
+                os.path.basename(fpath).replace("build_info_", "").replace(".txt", ".tgz")
+            )
+        except Exception:
+            return None
+
+# ──────────────────────────────────────────────────────────────────────
+
+class AddTesterDialog:
+    """
+    Modal dialog to register a new tester.
+    Final adjustment for exact 1:1 parity and visibility.
+    """
+    def __init__(self, root, parent_tab):
+        self.root = root
+        self.parent_tab = parent_tab
+        
+        self.dialog = tk.Toplevel(root)
+        self.dialog.title("Add New Tester")
+        self.dialog.geometry("560x640")
+        self.dialog.resizable(False, False)
+        self.dialog.grab_set()
+        
+        self.parent_tab._centre_dialog(self.dialog, 560, 640)
+
+        # Container frame
+        self.main_frame = ttk.Frame(self.dialog, padding="10")
+        self.main_frame.pack(fill=tk.BOTH, expand=True)
+        self.main_frame.columnconfigure(1, weight=1)
+
+        # ── Header ──
+        ttk.Label(self.main_frame, text="Register New Tester",
+                  font=("Arial", 12, "bold")).grid(
+            row=0, column=0, columnspan=2, pady=(2, 6))
+
+        ttk.Separator(self.main_frame, orient="horizontal").grid(
+            row=1, column=0, columnspan=2, sticky="we", pady=(0, 6))
+
+        # ── Preflight Checklist ──
+        checklist_frame = ttk.LabelFrame(self.main_frame, text="⚠ Preflight Checklist", padding=10)
+        checklist_frame.grid(row=2, column=0, columnspan=2, sticky="we", pady=2)
+
+        ttk.Label(checklist_frame,
+                  text="Before registering, confirm the tester is ready to receive compile jobs:",
+                  font=("Arial", 9, "bold"), foreground="#cc6600",
+                  wraplength=500).pack(anchor=tk.W, pady=(0, 4))
+
+        self.check_vars = []
+        checklist_items = [
+            "Watcher files visible at P:\\temp\\BENTO\\watcher\\",
+            "Watcher running (Task Scheduler configured on tester)",
+            "Shared folder P:\\temp\\BENTO accessible from tester"
+        ]
+        for text in checklist_items:
+            v = tk.BooleanVar(value=False)
+            self.check_vars.append(v)
+            ttk.Checkbutton(checklist_frame, text=text, variable=v).pack(anchor=tk.W, pady=1)
+
+        def open_guide():
+            import os, webbrowser
+            from tkinter import messagebox
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            guide_path = os.path.join(base_dir, "BENTO_Watcher_Setup_Guide.pdf")
+            if os.path.exists(guide_path):
+                try:
+                    os.startfile(guide_path)
+                except Exception:
+                    webbrowser.open("file:///" + guide_path.replace("\\", "/"))
+            else:
+                messagebox.showwarning("Guide Not Found", f"Setup guide PDF not found at:\n{guide_path}")
+        
+        ttk.Button(checklist_frame, text="📄 Open Setup Guide (PDF)", command=open_guide).pack(anchor=tk.W, pady=(6, 0))
+
+        ttk.Separator(self.main_frame, orient="horizontal").grid(
+            row=3, column=0, columnspan=2, sticky="we", pady=8)
+
+        # ── Tester Details ──
+        pad = {"padx": 10, "pady": 4}
+        
+        ttk.Label(self.main_frame, text="Tester Hostname:").grid(row=4, column=0, sticky="w", **pad)
+        self.hostname_var = tk.StringVar()
+        self.hostname_entry = ttk.Entry(self.main_frame, textvariable=self.hostname_var, width=30)
+        self.hostname_entry.grid(row=4, column=1, sticky="w", **pad)
+        ttk.Label(self.main_frame, text="e.g.  IBIR-0999", font=("Arial", 8), foreground="gray").grid(row=5, column=1, sticky="w", padx=10, pady=0)
+
+        ttk.Label(self.main_frame, text="Environment:").grid(row=6, column=0, sticky="w", **pad)
+        self.env_var = tk.StringVar(value="ABIT")
+        env_combo = ttk.Combobox(self.main_frame, textvariable=self.env_var, values=["ABIT", "SFN2", "CNFG"], state="readonly", width=12)
+        env_combo.grid(row=6, column=1, sticky="w", **pad)
+
+        ttk.Label(self.main_frame, text="Repo Path:").grid(row=7, column=0, sticky="w", **pad)
+        self.repo_dir_var = tk.StringVar(value=r"C:\BENTO\adv_ibir_master")
+        repo_frame = ttk.Frame(self.main_frame)
+        repo_frame.grid(row=7, column=1, sticky="w", **pad)
+        ttk.Entry(repo_frame, textvariable=self.repo_dir_var, width=32).pack(side=tk.LEFT)
+        ttk.Button(repo_frame, text="📁", width=3, command=lambda: self.parent_tab._browse_directory(self.repo_dir_var, "Select TP Repository")).pack(side=tk.LEFT, padx=(2, 0))
+
+        ttk.Label(self.main_frame, text="Build Command:").grid(row=8, column=0, sticky="w", **pad)
+        self.build_cmd_var = tk.StringVar(value="make release")
+        build_combo = ttk.Combobox(self.main_frame, textvariable=self.build_cmd_var, values=["make release", "make release_supermicro"], width=28)
+        build_combo.grid(row=8, column=1, sticky="w", **pad)
+
+        ttk.Separator(self.main_frame, orient="horizontal").grid(row=9, column=0, columnspan=2, sticky="we", pady=8)
+
+        # ── Error label ──
+        self.err_var = tk.StringVar(value="")
+        ttk.Label(self.main_frame, textvariable=self.err_var, foreground="#cc0000", font=("Arial", 8)).grid(row=10, column=0, columnspan=2)
+
+        # ── Buttons ──
+        btn_row = ttk.Frame(self.main_frame)
+        btn_row.grid(row=11, column=0, columnspan=2, pady=10)
+        
+        self.add_btn = ttk.Button(btn_row, text="Add Tester", command=self._confirm, state="disabled", width=14)
+        self.add_btn.pack(side=tk.LEFT, padx=6)
+        ttk.Button(btn_row, text="Cancel", command=self.dialog.destroy, width=14).pack(side=tk.LEFT, padx=6)
+
+        # ── Validation ──
+        def _update_add_btn(*_):
+            all_checked = all(v.get() for v in self.check_vars)
+            self.add_btn.config(state="normal" if all_checked else "disabled")
+            if all_checked:
+                self.err_var.set("")
+        
+        for v in self.check_vars:
+            v.trace_add("write", _update_add_btn)
+
+        self.hostname_entry.focus_set()
+
+    def _confirm(self):
+        hostname = self.hostname_var.get().strip().upper()
+        env      = self.env_var.get().strip().upper()
+        repo_dir = self.repo_dir_var.get().strip()
+        build_cmd = self.build_cmd_var.get().strip()
+        
+        if not hostname:
+            self.err_var.set("Hostname cannot be empty.")
+            return
+        
+        key = f"{hostname} ({env})"
+        
+        import json, os
+        registry_path = self.parent_tab.context.config.get("registry_path", r"P:\temp\BENTO\bento_testers.json")
+        registry_data = {}
+        if os.path.exists(registry_path):
+            try:
+                with open(registry_path, "r") as f:
+                    registry_data = json.load(f)
+            except Exception: pass
+
+        if key in registry_data:
+            self.err_var.set(f"Tester '{key}' is already registered.")
+            return
+
+        registry_data[key] = {
+            "hostname": hostname,
+            "env": env,
+            "repo_dir": repo_dir,
+            "build_cmd": build_cmd
+        }
+        
+        self.parent_tab._save_tester_registry(registry_data)
+        self.parent_tab._refresh_testers()
+        self.parent_tab.log(f"[Tester Added] {key} registered.")
+        self.dialog.destroy()

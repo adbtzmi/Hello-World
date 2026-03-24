@@ -73,8 +73,8 @@ class CheckoutController(object):
         try:
             registry_path = self._config.get("registry_path", _REGISTRY_PATH)
             if not os.path.exists(registry_path):
-                logger.warning(
-                    "Tester registry not found: " + registry_path
+                logger.debug(
+                    "DEBUG_REGISTRY_MISSING: " + registry_path
                 )
                 return []
             with open(registry_path, "r") as f:

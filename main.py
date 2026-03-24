@@ -1,137 +1,143 @@
 #!/usr/bin/env python3
 """
 BENTO - Build, Evaluate, Navigate, Test & Orchestrate
-Entry Point — Phase 2 MVC
+Entry Point — Phase 3D (Clean MVC, no gui/app.py)
 
-Wiring order (critical):
-  1. Load config
-  2. Create Tk root
-  3. Launch existing SimpleGUI (gui/app.py) — Phase 1 unchanged
-  4. Remove legacy top-level Compile/Checkout tabs
-  5. Build AppContext using existing analyzer from SimpleGUI
-  6. Create BentoController(config) — NO context yet
-  7. Create BentoApp view (builds tabs, each tab gets context)
-  8. controller.set_view(view) — wires context into all controllers
-  9. Inject Checkout into Implementation sub-notebook
+Wiring order:
+  1. Load config from settings.json
+  2. Create Tk root (with High-DPI fix)
+  3. Create JIRAAnalyzer (model layer)
+  4. Create AppContext (shared state)
+  5. Create BentoController(config)  — no context yet
+  6. Create BentoApp(root, controller, config, ...) — builds all tabs
+  7. controller.set_view(app)         — wires context into all controllers
+  8. Inject CheckoutTab into impl_notebook
+  9. root.mainloop()
+
+gui/app.py (SimpleGUI) is no longer launched.
 """
 
 import sys
 import os
 import json
+import logging
 import tkinter as tk
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# ── Logging setup ──────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.WARNING,
+    format="%(asctime)s  %(name)s  %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("bento_app")
 
-def _remove_top_level_tabs(notebook, names_to_remove):
-    """Remove top-level tabs whose label contains any of names_to_remove."""
-    removed = []
-    for tab_id in reversed(notebook.tabs()):
-        tab_text = notebook.tab(tab_id, "text")
-        for name in names_to_remove:
-            if name.lower() in tab_text.lower():
-                notebook.forget(tab_id)
-                removed.append(tab_text)
-                break
-    return removed
+APP_TITLE   = "BENTO"
+APP_VERSION = "- GUI"
 
 
 def main():
-    # ── High-DPI fix ──────────────────────────────────────────────────────
+    # ── High-DPI fix (Windows) ─────────────────────────────────────────────
     try:
         from ctypes import windll
         windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
         pass
 
+    # ── Step 1: Load config ────────────────────────────────────────────────
+    config = {}
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+    try:
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                config = json.load(f)
+        else:
+            logger.warning(f"settings.json not found at {config_path} — using defaults")
+    except Exception as e:
+        logger.error(f"Could not load settings.json: {e}")
+
+    # ── Step 2: Create Tk root ─────────────────────────────────────────────
     root = tk.Tk()
 
-    # ── Step 1: Load config ───────────────────────────────────────────────
-    config = {}
+    # ── Step 3: Create JIRAAnalyzer (Model) ────────────────────────────────
+    analyzer = None
     try:
-        if os.path.exists('settings.json'):
-            with open('settings.json', 'r') as f:
-                config = json.load(f)
+        from jira_analyzer import JIRAAnalyzer
+        analyzer = JIRAAnalyzer()   # takes no constructor args; credentials loaded later via UI
     except Exception as e:
-        print(f"⚠ Could not load settings.json: {e}")
+        logger.error(f"Could not initialise JIRAAnalyzer: {e}")
 
-    # ── Step 2: Launch existing SimpleGUI (Phase 1 — completely unchanged) ─
-    from gui.app import SimpleGUI
-    app = SimpleGUI(root)
-
-    # ── Step 3: Remove legacy top-level Compile and Checkout tabs ─────────
-    removed = _remove_top_level_tabs(app.notebook, ["Compile", "Checkout"])
-    for name in removed:
-        print(f"✓ Removed legacy top-level tab: {name}")
-
-    # ── Step 4: Wire Phase 2 MVC ──────────────────────────────────────────
+    # ── Step 4: Create AppContext ───────────────────────────────────────────
     try:
         from context import AppContext
-        from controller.bento_controller import BentoController
-        from view.tabs.checkout_tab import CheckoutTab
-
-        # Shared log callback — pipes into existing GUI log panel
-        def log_to_gui(msg):
-            try:
-                app.log(msg)
-            except Exception:
-                print(msg)
-
-        # AppContext — uses existing analyzer from SimpleGUI
         context = AppContext(
             root=root,
-            analyzer=app.analyzer,
+            analyzer=analyzer,
             config=config,
-            log_callback=log_to_gui,
+            log_callback=None,   # overwritten by BentoApp._log_message after set_view
         )
-
-        # BentoController — pass config only (context wired via set_view)
-        controller = BentoController(config=config)
-        context.controller = controller
-
-        # Inject Checkout as sub-tab inside Implementation tab
-        impl_notebook = app.impl_notebook
-        checkout_tab  = CheckoutTab(impl_notebook, context)
-
-        # Minimal view adapter for checkout callbacks
-        class _MinimalView:
-            def __init__(self):
-                self.root         = root
-                self.context      = context
-                self.checkout_tab = checkout_tab
-
-            def compile_started(self, hostname, env):
-                pass   # handled by existing TP Compilation & Health tab
-
-            def compile_completed(self, hostname, env, result):
-                pass   # handled by existing TP Compilation & Health tab
-
-            def checkout_started(self, hostname):
-                self.checkout_tab.on_checkout_started(hostname)
-
-            def checkout_progress(self, hostname, phase):
-                self.checkout_tab.on_checkout_progress(hostname, phase)
-
-            def checkout_completed(self, hostname, result):
-                self.checkout_tab.on_checkout_completed(hostname, result)
-
-            def jira_analysis_completed(self, result):
-                pass   # handled by existing SimpleGUI
-
-        view = _MinimalView()
-        controller.set_view(view)
-
-        print("✓ Phase 2: 🧪 Checkout tab injected into Implementation")
-        print("  Tab order: 🧠 AI Plan Generator | 📦 TP Compilation & Health | 🧪 Checkout")
-
     except Exception as e:
-        print(f"⚠ Phase 2 MVC could not load (existing GUI still works): {e}")
+        logger.critical(f"Cannot create AppContext: {e}")
+        root.destroy()
+        return
+
+    # ── Step 5: Create BentoController ─────────────────────────────────────
+    try:
+        from controller.bento_controller import BentoController
+        controller = BentoController(config=config)
+        # Wire controller into context NOW so tabs can access it during __init__
+        context.controller = controller
+    except Exception as e:
+        logger.critical(f"Cannot create BentoController: {e}")
+        root.destroy()
+        return
+
+    # ── Step 6: Create BentoApp (View — builds all tabs) ───────────────────
+    try:
+        from view.app import BentoApp
+        app = BentoApp(
+            root=root,
+            controller=controller,
+            config=config,
+            app_title=APP_TITLE,
+            app_version=APP_VERSION,
+        )
+    except Exception as e:
+        logger.critical(f"Cannot create BentoApp: {e}")
+        import traceback
+        traceback.print_exc()
+        root.destroy()
+        return
+
+    # ── Step 7: Wire context + analyzer into all controllers ────────────────
+    try:
+        # Inject analyzer into the app's AppContext
+        app.context.analyzer = analyzer
+        # set_view: wires context into every sub-controller (Phase 2 + 3C/3D)
+        controller.set_view(app)
+        # Also update the log_callback now that BentoApp owns the log panel
+        app.context.log_callback = app._log_message
+    except Exception as e:
+        logger.error(f"set_view() failed: {e}")
         import traceback
         traceback.print_exc()
 
+    # ── Step 8: Inject CheckoutTab into Implementation sub-notebook ─────────
+    try:
+        from view.tabs.checkout_tab import CheckoutTab
+        impl_notebook = app.impl_notebook          # exposed by BentoApp._build_tabs()
+        checkout_tab  = CheckoutTab(impl_notebook, app.context)
+        # Store reference so BentoApp callbacks can reach it
+        app.checkout_tab = checkout_tab
+    except Exception as e:
+        logger.error(f"CheckoutTab injection failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+    # ── Step 9: Enter Tk event loop ─────────────────────────────────────────
     root.mainloop()
 
 
 if __name__ == "__main__":
     main()
-

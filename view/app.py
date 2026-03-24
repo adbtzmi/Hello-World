@@ -2,38 +2,32 @@
 """
 view/app.py
 ===========
-BENTO Main Application Window (View)
+BENTO Main Application Window (View) — Phase 3C/3D
 
-Responsibilities:
-  - Builds the Tk root window, notebook, and all tabs
-  - Owns the log panel (shared by all tabs via AppContext)
-  - Exposes GUI-callback methods that controllers call to update display
-    (mirrors gui.CrtGui in the C.A.T. project)
+Tab order:
+  1. 🏠 Home               (view/tabs/home_tab.py)
+  2. 📋 Fetch Issue         (view/tabs/fetch_issue_tab.py)
+  3. 🤖 Analyze JIRA        (view/tabs/analyze_jira_tab.py)
+  4. 📦 Repository          (view/tabs/repository_tab.py)
+  5. 💻 Implementation      (view/tabs/implementation_tab.py)  ← Phase 3C
+  6. 🧪 Test Scenarios      (view/tabs/test_scenarios_tab.py)
+  7. 📋 Validation & Risk   (view/tabs/validation_tab.py)
 
-Phase 2 tabs (in workflow order):
-  - HomeTab           : JIRA / Bitbucket configuration
-  - FetchIssueTab     : Fetch JIRA issue data [NEW]
-  - AnalyzeJiraTab    : AI-powered JIRA analysis [NEW]
-  - RepositoryTab     : Clone repo & create branch [NEW]
-  - TestScenariosTab  : Generate test scenarios [NEW]
-  - CompileTab        : Phase 1 compilation trigger + status badges
-  - CheckoutTab       : Phase 2 Auto Start Checkout automation
+Checkout lives inside the Implementation sub-notebook (injected by main.py).
 """
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, scrolledtext, messagebox
 import logging
 
-from view.tabs.base_tab import BaseTab
 from view.tabs.home_tab import HomeTab
 from view.tabs.fetch_issue_tab import FetchIssueTab
 from view.tabs.analyze_jira_tab import AnalyzeJiraTab
 from view.tabs.repository_tab import RepositoryTab
+from view.tabs.implementation_tab import ImplementationTab
 from view.tabs.test_scenarios_tab import TestScenariosTab
 from view.tabs.validation_tab import ValidationTab
-from view.tabs.compile_tab import CompileTab
-from view.tabs.checkout_tab import CheckoutTab
-from context import AppContext  # ✅ FIXED: Import from root context.py
+from context import AppContext
 
 logger = logging.getLogger("bento_app")
 
@@ -44,7 +38,7 @@ class BentoApp:
 
     Mirrors gui.CrtGui:
       - __init__  : store refs, create window skeleton
-      - init_GUI  : build all child widgets / tabs
+      - _build_*  : build all child widgets / tabs
       - Callback methods called BY controllers to update display
     """
 
@@ -56,19 +50,21 @@ class BentoApp:
         self.app_title   = app_title
         self.app_version = app_version
 
-        # AppContext is the shared state object (ViewModel) passed to every tab
+        # AppContext — shared state object (ViewModel) passed to every tab
         self.context = AppContext(
             root=root,
-            analyzer=None,          # set by controller after wiring
+            analyzer=None,          # injected by controller after set_view()
             config=config,
             log_callback=self._log_message,
         )
 
         self._build_window()
         self._build_layout()
+        # Wire controller into context BEFORE building tabs.
+        # Some tabs (e.g. RepositoryTab) access context.controller during __init__.
+        self.context.controller = controller
         self._build_tabs()
 
-        logger.info("BentoApp (View) initialised.")
 
     # ──────────────────────────────────────────────────────────────────────
     # WINDOW SETUP
@@ -76,70 +72,112 @@ class BentoApp:
 
     def _build_window(self):
         """Configure the root Tk window."""
-        self.root.title(f"{self.app_title}  {self.app_version}")
-        self.root.geometry("1280x800")
+        self.root.title("BENTO - GUI")
+        self.root.geometry("1400x750")
         self.root.minsize(960, 600)
 
-        # Style
         style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Accent.TButton", foreground="white", background="#0078d4")
+        # style.theme_use("clam")  # Disabled to follow original and prevent black treeview
+        
+        # Use standard styles (no overrides to match default OS button font/size)
+        style.configure("Accent.TButton")
+        style.configure("Compile.TButton")
+        
         style.configure("Success.TLabel", foreground="green")
         style.configure("Error.TLabel",   foreground="red")
         style.configure("Warning.TLabel", foreground="orange")
 
-        # Intercept close
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_layout(self):
-        """Build the outer frame: top notebook + bottom log panel."""
-        # ── Top notebook fills most of the window ──
-        self.notebook = ttk.Notebook(self.root)
+        """Build outer frame: top notebook + side log panel."""
+        self.paned_window = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        self.paned_window.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+
+        # Left side - Main container
+        main_frame = ttk.Frame(self.paned_window, padding="2")
+        self.paned_window.add(main_frame, weight=3)
+
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(fill=tk.X, pady=(2, 6))
+        
+        title = ttk.Label(title_frame, text="BENTO - Build, Evaluate, Navigate, Test & Orchestrate", font=('Arial', 14, 'bold'))
+        title.pack(side=tk.LEFT)
+        
+        self.debug_indicator = ttk.Label(title_frame, text="🐛 DEBUG MODE", 
+                                       font=('Arial', 10, 'bold'), 
+                                       foreground='red', 
+                                       background='yellow',
+                                       padding="5")
+        # Do not pack initially
+        
+        self.debug_var = tk.BooleanVar(value=False)
+        self.context.set_var('debug_var', self.debug_var)
+        self.debug_var.trace_add("write", lambda *_: self._on_debug_toggled())
+
+        # Centralized Shared Variables (unifies all tabs)
+        jira_project = self.config.get('jira', {}).get('project_key', 'TSESSD')
+        issue_prefix = f"{jira_project}-"
+        
+        self.context.set_var('issue_var', tk.StringVar(value=issue_prefix))
+        self.context.set_var('repo_var',  tk.StringVar())
+        self.context.set_var('branch_var', tk.StringVar())
+        self.context.set_var('feature_branch_var', tk.StringVar(value=f"If empty, will automatically be named as 'feature/{jira_project}-XXXX'"))
+        self.context.set_var('impl_repo_var', tk.StringVar())
+
+        self.notebook = ttk.Notebook(main_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=(5, 0))
 
-        # ── Bottom log panel ──────────────────────────────────────────────
-        log_outer = ttk.LabelFrame(self.root, text="Log", padding="5")
-        log_outer.pack(fill=tk.X, padx=5, pady=5)
+        # Right side - Log container
+        log_frame = ttk.Frame(self.paned_window, padding="5")
+        self.paned_window.add(log_frame, weight=2)
 
-        self.log_text = tk.Text(
-            log_outer, height=8, state=tk.DISABLED,
-            font=("Consolas", 9), bg="#1e1e1e", fg="#d4d4d4",
-            relief=tk.FLAT, wrap=tk.WORD,
+        log_outer = ttk.LabelFrame(log_frame, text="Progress Log", padding="5")
+        log_outer.pack(fill=tk.BOTH, expand=True)
+
+        self.log_text = scrolledtext.ScrolledText(
+            log_outer, state=tk.DISABLED,
+            height=48, width=45, wrap=tk.WORD
         )
-        log_scroll = ttk.Scrollbar(log_outer, orient=tk.VERTICAL, command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=log_scroll.set)
-        self.log_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        log_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Clear button
-        ttk.Button(log_outer, text="Clear", width=6,
-                   command=self._clear_log).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(log_outer, text="Clear Log", width=12,
+                   command=self._clear_log).pack(side=tk.BOTTOM, pady=5)
+
+    def _on_debug_toggled(self):
+        """Show or hide debug indicator on the title bar."""
+        if self.debug_var.get():
+            self.debug_indicator.pack(side=tk.RIGHT, padx=10)
+        else:
+            self.debug_indicator.pack_forget()
 
     def _build_tabs(self):
-        """Instantiate and add all tab views to the notebook."""
-        # Phase 2 tabs in workflow order
+        """Instantiate and add all tab views to the notebook (Phase 3C/3D order)."""
+        # 1. Home
         self.home_tab           = HomeTab(self.notebook, self.context)
+        # 2. Fetch Issue
         self.fetch_issue_tab    = FetchIssueTab(self.notebook, self.context)
+        # 3. Analyze JIRA
         self.analyze_jira_tab   = AnalyzeJiraTab(self.notebook, self.context)
+        # 4. Repository
         self.repository_tab     = RepositoryTab(self.notebook, self.context)
-        # Implementation tab still in gui/app.py (not migrated yet)
+        # 5. Implementation (Phase 3C — contains nested Checkout sub-tab)
+        self.implementation_tab = ImplementationTab(self.notebook, self.context)
+        # Expose impl_notebook so main.py can inject CheckoutTab
+        self.impl_notebook      = self.implementation_tab.impl_notebook
+        # 6. Test Scenarios
         self.test_scenarios_tab = TestScenariosTab(self.notebook, self.context)
-        # Phase 3B: Validation tab
+        # 7. Validation & Risk (Phase 3B)
         self.validation_tab     = ValidationTab(self.notebook, self.context)
-        self.compile_tab        = CompileTab(self.notebook, self.context)
-        self.checkout_tab       = CheckoutTab(self.notebook, self.context)
 
     # ──────────────────────────────────────────────────────────────────────
     # LOG PANEL
     # ──────────────────────────────────────────────────────────────────────
 
     def _log_message(self, message: str):
-        """
-        Append a timestamped message to the log panel.
-        Thread-safe via root.after().
-        """
+        """Append a timestamped message to the log panel (thread-safe)."""
         import datetime
-        ts  = datetime.datetime.now().strftime("%H:%M:%S")
+        ts   = datetime.datetime.now().strftime("%H:%M:%S")
         line = f"[{ts}] {message}\n"
 
         def _append():
@@ -148,69 +186,92 @@ class BentoApp:
             self.log_text.see(tk.END)
             self.log_text.configure(state=tk.DISABLED)
 
-        # Schedule on the main thread — safe to call from worker threads
         self.root.after(0, _append)
 
     def _clear_log(self):
-        """Clear all messages from the log panel."""
         self.log_text.configure(state=tk.NORMAL)
         self.log_text.delete("1.0", tk.END)
         self.log_text.configure(state=tk.DISABLED)
 
     # ──────────────────────────────────────────────────────────────────────
     # CONTROLLER → VIEW CALLBACKS
-    # (mirrors CatGUI.fw_mig_started / fw_mig_completed etc.)
     # ──────────────────────────────────────────────────────────────────────
 
     def compile_started(self, hostname: str, env: str):
         """Called by CompileController when a compile job begins."""
         self._log_message(f"⚙ Compile started → {hostname} ({env})")
-        self.compile_tab.on_compile_started(hostname, env)
+        if hasattr(self, "implementation_tab"):
+            self.implementation_tab.on_compile_started(hostname, env)
 
     def compile_completed(self, hostname: str, env: str, result: dict):
         """Called by CompileController when a compile job finishes."""
         status = result.get("status", "unknown").upper()
-        self._log_message(f"{'✓' if status == 'SUCCESS' else '✗'} Compile {status} → {hostname} ({env}): {result.get('detail', '')}")
-        self.compile_tab.on_compile_completed(hostname, env, result)
+        self._log_message(
+            f"{'✓' if status == 'SUCCESS' else '✗'} "
+            f"Compile {status} → {hostname} ({env}): {result.get('detail', '')}")
+        if hasattr(self, "implementation_tab"):
+            self.implementation_tab.on_compile_completed(hostname, env, result)
 
     def checkout_started(self, hostname: str):
         """Called by CheckoutController when checkout automation begins."""
         self._log_message(f"🚀 Checkout started → {hostname}")
-        self.checkout_tab.on_checkout_started(hostname)
+        # Checkout tab lives inside impl_notebook — relay via the tab itself
+        checkout_tab = getattr(self, "checkout_tab", None)
+        if checkout_tab:
+            checkout_tab.on_checkout_started(hostname)
 
     def checkout_completed(self, hostname: str, result: dict):
         """Called by CheckoutController when checkout automation finishes."""
         status = result.get("status", "unknown").upper()
-        self._log_message(f"{'✓' if status == 'SUCCESS' else '✗'} Checkout {status} → {hostname}: {result.get('detail', '')}")
-        self.checkout_tab.on_checkout_completed(hostname, result)
+        self._log_message(
+            f"{'✓' if status == 'SUCCESS' else '✗'} "
+            f"Checkout {status} → {hostname}: {result.get('detail', '')}")
+        checkout_tab = getattr(self, "checkout_tab", None)
+        if checkout_tab:
+            checkout_tab.on_checkout_completed(hostname, result)
 
     def checkout_progress(self, hostname: str, phase: str):
         """Called by CheckoutController to relay mid-run phase updates."""
         self._log_message(f"   ↳ [{hostname}] {phase}")
-        self.checkout_tab.on_checkout_progress(hostname, phase)
+        checkout_tab = getattr(self, "checkout_tab", None)
+        if checkout_tab:
+            checkout_tab.on_checkout_progress(hostname, phase)
 
     def jira_analysis_completed(self, result: dict):
         """Called by JiraController when ticket analysis finishes."""
         self._log_message(f"✓ JIRA analysis complete: {result.get('issue_key', '')}")
-        self.home_tab.on_jira_analysis_completed(result)
+        if hasattr(self, "home_tab"):
+            self.home_tab.on_jira_analysis_completed(result)
+
+    def implementation_completed(self, result: dict):
+        """Called by ImplementationController when plan generation finishes."""
+        self._log_message(f"✓ Implementation: {result.get('issue_key', '')}")
+        if hasattr(self, "implementation_tab"):
+            self.implementation_tab.on_implementation_completed(result)
+
+    def validation_completed(self, result: dict):
+        """Called by ValidationController when validation finishes."""
+        self._log_message(f"✓ Validation: {result.get('issue_key', '')}")
+        if hasattr(self, "validation_tab"):
+            self.validation_tab.on_validation_completed(result)
 
     # ──────────────────────────────────────────────────────────────────────
     # WINDOW LIFECYCLE
     # ──────────────────────────────────────────────────────────────────────
 
     def _on_close(self):
-        """
-        Guard against closing while background tasks are running.
-        Mirrors C.A.T.'s smart-close behaviour for profile generation / FW mig.
-        """
+        """Guard against closing while background tasks are running."""
+        choice = messagebox.askokcancel("Quit", "Do you want to close the application?")
+        if not choice:
+            return
+            
         if self.controller.has_active_tasks():
-            from tkinter import messagebox
-            choice = messagebox.askyesno(
+            choice2 = messagebox.askyesno(
                 "Active Tasks",
                 "Background tasks are still running.\n"
                 "Force close anyway? (data may be lost)",
             )
-            if not choice:
+            if not choice2:
                 return
         logger.info("Application closing.")
         self.root.destroy()

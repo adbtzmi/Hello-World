@@ -8,7 +8,8 @@ Handles credential loading, saving, and debug mode toggling.
 """
 
 import logging
-import getpass
+import tkinter as tk
+from tkinter import simpledialog
 
 logger = logging.getLogger("bento_app")
 
@@ -112,10 +113,12 @@ class CredentialController:
             logger.error(f"CredentialController.toggle_debug_mode: {e}")
 
     def _prompt_password(self, prompt):
-        """Prompt for password (console-based for now)"""
-        # Note: In a full GUI implementation, this would use a password dialog
-        # For now, using console input as fallback
+        """Prompt for password using a GUI dialog"""
         try:
-            return getpass.getpass(prompt)
-        except:
+            # Use the root window from context as parent for the modal dialog
+            return simpledialog.askstring("Credentials", prompt, 
+                                        parent=self._context.root, 
+                                        show='*')
+        except Exception as e:
+            logger.error(f"CredentialController._prompt_password: {e}")
             return None
