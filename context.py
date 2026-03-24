@@ -2,6 +2,7 @@ import os
 import json
 import logging
 from datetime import datetime
+from typing import Any, Callable, Optional
 
 
 class AppContext:
@@ -17,12 +18,16 @@ class AppContext:
       - vars      : shared Tkinter variables across tabs
     """
 
+    # Declare types so Pylance accepts later assignments
+    analyzer:   Any
+    controller: Any
+
     def __init__(self, root, analyzer, config, log_callback):
         self.root       = root
-        self.analyzer   = analyzer
+        self.analyzer:   Any = analyzer
         self.config     = config
         self.log        = log_callback
-        self.controller = None          # wired by main.py after BentoController is ready
+        self.controller: Any = None     # wired by main.py after BentoController is ready
 
         self.workflow_file  = None
         self.workflow_state = {}
@@ -47,6 +52,17 @@ class AppContext:
         
         # File logger reference (set by main app)
         self.file_logger = None
+
+    # ── log_callback alias (main.py sets app.context.log_callback) ────────
+
+    @property
+    def log_callback(self):
+        """Alias for self.log — allows main.py to read/write via log_callback."""
+        return self.log
+
+    @log_callback.setter
+    def log_callback(self, value):
+        self.log = value
 
     # ── Shared variable store ─────────────────────────────────────────────
 

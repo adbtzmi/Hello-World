@@ -28,16 +28,16 @@ from datetime import datetime
 
 # ── Import shared watcher modules ────────────────────────────────────────────
 try:
-    from watcher_config import (
+    from model.watcher.watcher_config import (
         TESTER_REGISTRY,
         POLL_INTERVAL_SECONDS,
         LOCK_MAX_AGE_SECONDS,
         LOG_DIR,
     )
-    from watcher_lock import (
-        LockFile,
-        write_status,
-        cleanup_stale_locks_on_startup,
+    from model.watcher.watcher_lock import (
+        LockFile,               # type: ignore[assignment]
+        write_status,           # type: ignore[assignment]
+        cleanup_stale_locks_on_startup,  # type: ignore[assignment]
     )
 except ImportError:
     # Fallback defaults when running standalone

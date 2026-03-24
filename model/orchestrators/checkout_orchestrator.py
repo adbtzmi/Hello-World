@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""
+r"""
 model/orchestrators/checkout_orchestrator.py
 =============================================
 BENTO Checkout Orchestrator — Phase 2 Auto Start Checkout
@@ -7,15 +7,15 @@ BENTO Checkout Orchestrator — Phase 2 Auto Start Checkout
 Runs on the LOCAL PC. Full flow:
 1. Read CRT Excel from \\sifsmodtestrep\modtestrep\crab\crt_from_sap.xlsx
 2. Generate SLATE XML (correct Profile schema with AutoStart=True)
-3. Drop XML to P:\temp\BENTO\CHECKOUT_QUEUE\   ← FIXED: was HOT_DROP
+3. Drop XML to P:\temp\BENTO\CHECKOUT_QUEUE\   <- FIXED: was HOT_DROP
 4. Poll .checkout_status sidecar (mirrors wait_for_build() exactly)
 5. Loop per test case (PASSING + FORCE FAIL sequentially)
 6. Memory collection after all test cases
 7. Teams notification with per-test-case summary
 
 KEY FIX:
-  run_checkout()     → saves XML to CHECKOUT_QUEUE (shared P: drive)
-  generate_xml_only  → saves XML directly to hot_folder (playground_queue)
+  run_checkout()     -> saves XML to CHECKOUT_QUEUE (shared P: drive)
+  generate_xml_only  -> saves XML directly to hot_folder (playground_queue)
   Both auto-create their target folders with os.makedirs(exist_ok=True)
 
 Mirrors compilation_orchestrator.py pattern exactly. [15]
@@ -131,7 +131,7 @@ def load_dut_info_from_crt(
     logger              = None,
     log_callback        = None,
 ) -> list:
-    """
+    r"""
     Read CRT Excel from \\sifsmodtestrep\modtestrep\crab\crt_from_sap.xlsx
     Confirmed location from Windows Explorer screenshot (N: drive).
 
@@ -139,7 +139,7 @@ def load_dut_info_from_crt(
         df = pd.read_excel(filepath, engine="openpyxl", dtype=str)
 
     Column names confirmed from crt_excel_template.json [26].
-    ⚠️ "Product  Name" has DOUBLE SPACE — do not change.
+    "Product  Name" has DOUBLE SPACE -- do not change.
     """
     import pandas as pd
 
@@ -216,9 +216,9 @@ def generate_slate_xml(
     dut_slots:     int,
     tgz_path:      str,
     env:           str,
-    lot_prefix:    str  = "JAANTJB",
-    dut_locations: list = None,
-    label:         str  = "",
+    lot_prefix:    str            = "JAANTJB",
+    dut_locations: Optional[list] = None,
+    label:         str            = "",
     hostname:      str  = "",
     output_dir:    str  = "",
     dry_run:       bool = False,
@@ -621,8 +621,8 @@ def run_checkout(
     fw_ver:          str   = "",
     dut_slots:       int   = 4,
     lot_prefix:      str   = "JAANTJB",
-    dut_locations:   list  = None,
-    test_cases:      list  = None,
+    dut_locations:   Optional[list] = None,
+    test_cases:      Optional[list] = None,
     detect_method:   str   = "AUTO",
     timeout_seconds: int   = CHECKOUT_TIMEOUT_SECONDS,
     notify_teams:    bool  = True,

@@ -19,6 +19,7 @@ Checkout lives inside the Implementation sub-notebook (injected by main.py).
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 import logging
+from typing import Any
 
 from view.tabs.home_tab import HomeTab
 from view.tabs.fetch_issue_tab import FetchIssueTab
@@ -58,6 +59,7 @@ class BentoApp:
     implementation_tab: ImplementationTab
     test_scenarios_tab: TestScenariosTab
     validation_tab:     ValidationTab
+    checkout_tab:       Any  # injected by main.py after BentoApp is built
 
     # ──────────────────────────────────────────────────────────────────────
     def __init__(self, root, controller, config, app_title, app_version):

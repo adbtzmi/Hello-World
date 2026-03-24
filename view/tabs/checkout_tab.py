@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, filedialog
+from typing import Any
 from view.tabs.base_tab import BaseTab
 
 
@@ -47,11 +48,11 @@ class CheckoutTab(BaseTab):
 
     def __init__(self, notebook, context):
         super().__init__(notebook, context, "🧪 Checkout")
-        self._badge_labels = {}
-        self._phase_labels = {}
-        self._tester_vars  = {}
-        self._tester_frame = None
-        self._tester_row   = 1
+        self._badge_labels              = {}
+        self._phase_labels              = {}
+        self._tester_vars               = {}
+        self._tester_frame: Any         = None
+        self._tester_row                = 1
         self._build_ui()
 
     # ──────────────────────────────────────────────────────────────────────

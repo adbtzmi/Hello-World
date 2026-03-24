@@ -22,6 +22,7 @@ import json
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
 
 logger = logging.getLogger("bento_app")
 
@@ -55,10 +56,10 @@ class CheckoutController(object):
     """
 
     def __init__(self, master, config):
-        self._master  = master
-        self._config  = config
-        self._view    = None
-        self._running = False
+        self._master        = master
+        self._config        = config
+        self._view: Any     = None
+        self._running       = False
         logger.info("CheckoutController initialised.")
 
     def set_view(self, view):
@@ -121,7 +122,7 @@ class CheckoutController(object):
 
     # ── CRT EXCEL READER ──────────────────────────────────────────────────────
     def load_from_crt_excel(self, cfgpn="", excel_path=""):
-        """
+        r"""
         Read CRT Excel and return structured data for the grid.
         Confirmed path: \\sifsmodtestrep\modtestrep\crab\crt_from_sap.xlsx
         Column names from crt_excel_template.json.
