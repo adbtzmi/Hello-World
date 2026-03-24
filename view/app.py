@@ -42,6 +42,23 @@ class BentoApp:
       - Callback methods called BY controllers to update display
     """
 
+    # ── Attributes (declared for IDE support) ─────────────────────────
+    paned_window:    ttk.PanedWindow
+    notebook:        ttk.Notebook
+    log_text:        scrolledtext.ScrolledText
+    debug_indicator: ttk.Label
+    debug_var:       tk.BooleanVar
+    impl_notebook:   ttk.Notebook
+
+    # Tab references
+    home_tab:           HomeTab
+    fetch_issue_tab:    FetchIssueTab
+    analyze_jira_tab:   AnalyzeJiraTab
+    repository_tab:     RepositoryTab
+    implementation_tab: ImplementationTab
+    test_scenarios_tab: TestScenariosTab
+    validation_tab:     ValidationTab
+
     # ──────────────────────────────────────────────────────────────────────
     def __init__(self, root, controller, config, app_title, app_version):
         self.root        = root
@@ -113,7 +130,7 @@ class BentoApp:
         
         self.debug_var = tk.BooleanVar(value=False)
         self.context.set_var('debug_var', self.debug_var)
-        self.debug_var.trace_add("write", lambda *_: self._on_debug_toggled())
+        self.debug_var.trace_add("write", lambda name, index, mode: self._on_debug_toggled())
 
         # Centralized Shared Variables (unifies all tabs)
         jira_project = self.config.get('jira', {}).get('project_key', 'TSESSD')

@@ -52,7 +52,7 @@ class FetchIssueTab(BaseTab):
         # Row 3 — result display
         result_frame = ttk.LabelFrame(self, text="Issue Details", padding="10")
         result_frame.grid(row=3, column=0, columnspan=2,
-                          sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+                          sticky="nesw", pady=5)
 
         self.issue_result_text = scrolledtext.ScrolledText(
             result_frame, height=20, width=70, wrap=tk.WORD)

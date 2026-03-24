@@ -41,7 +41,7 @@ class TestScenariosTab(BaseTab):
             row=1, column=0, sticky=tk.W, pady=5)
         ttk.Entry(self,
                   textvariable=self.context.get_var('issue_var'),
-                  width=50).grid(row=1, column=1, pady=5, sticky=(tk.W, tk.E))
+                  width=50).grid(row=1, column=1, pady=5, sticky="we")
         ttk.Label(self, text="(Auto-populated from Home tab)",
                   font=('Arial', 8), foreground='gray').grid(
             row=1, column=2, sticky=tk.W, padx=5)
@@ -61,7 +61,7 @@ class TestScenariosTab(BaseTab):
         # Row 4 — result display
         result_frame = ttk.LabelFrame(self, text="Test Scenarios", padding="10")
         result_frame.grid(row=4, column=0, columnspan=3,
-                          sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+                          sticky="nesw", pady=5)
 
         self.test_result_text = scrolledtext.ScrolledText(
             result_frame, height=18, width=70, wrap=tk.WORD)

@@ -19,7 +19,7 @@ class HomeTab(BaseTab):
 
         # ── Configuration Section ──────────────────────────────────────────
         config_frame = ttk.LabelFrame(self, text="Configuration", padding="10")
-        config_frame.grid(row=0, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+        config_frame.grid(row=0, column=0, columnspan=3, sticky="we", pady=5)
 
         # JIRA URL
         ttk.Label(config_frame, text="JIRA URL:").grid(row=0, column=0, sticky=tk.W, pady=2)
@@ -82,7 +82,7 @@ class HomeTab(BaseTab):
 
         # ── Credentials Section ────────────────────────────────────────────
         cred_frame = ttk.LabelFrame(self, text="Credentials (Encrypted)", padding="10")
-        cred_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+        cred_frame.grid(row=1, column=0, columnspan=3, sticky="we", pady=5)
 
         # Email
         ttk.Label(cred_frame, text="Email:").grid(row=0, column=0, sticky=tk.W, pady=2)
@@ -137,7 +137,7 @@ class HomeTab(BaseTab):
 
         # ── Task / Workflow Section ────────────────────────────────────────
         task_frame = ttk.LabelFrame(self, text="Task Details - Full Workflow", padding="10")
-        task_frame.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+        task_frame.grid(row=2, column=0, columnspan=3, sticky="we", pady=5)
 
         # JIRA Issue
         ttk.Label(task_frame, text="JIRA Issue:").grid(row=0, column=0, sticky=tk.W, pady=2)
