@@ -10,10 +10,14 @@ Responsibilities:
   - Exposes GUI-callback methods that controllers call to update display
     (mirrors gui.CrtGui in the C.A.T. project)
 
-Phase 2 tabs:
-  - HomeTab        : JIRA / Bitbucket configuration
-  - CompileTab     : Phase 1 compilation trigger + status badges
-  - CheckoutTab    : Phase 2 Auto Start Checkout automation  [NEW]
+Phase 2 tabs (in workflow order):
+  - HomeTab           : JIRA / Bitbucket configuration
+  - FetchIssueTab     : Fetch JIRA issue data [NEW]
+  - AnalyzeJiraTab    : AI-powered JIRA analysis [NEW]
+  - RepositoryTab     : Clone repo & create branch [NEW]
+  - TestScenariosTab  : Generate test scenarios [NEW]
+  - CompileTab        : Phase 1 compilation trigger + status badges
+  - CheckoutTab       : Phase 2 Auto Start Checkout automation
 """
 
 import tkinter as tk
@@ -22,9 +26,14 @@ import logging
 
 from view.tabs.base_tab import BaseTab
 from view.tabs.home_tab import HomeTab
+from view.tabs.fetch_issue_tab import FetchIssueTab
+from view.tabs.analyze_jira_tab import AnalyzeJiraTab
+from view.tabs.repository_tab import RepositoryTab
+from view.tabs.test_scenarios_tab import TestScenariosTab
+from view.tabs.validation_tab import ValidationTab
 from view.tabs.compile_tab import CompileTab
 from view.tabs.checkout_tab import CheckoutTab
-from context import AppContext
+from context import AppContext  # ✅ FIXED: Import from root context.py
 
 logger = logging.getLogger("bento_app")
 
@@ -108,9 +117,17 @@ class BentoApp:
 
     def _build_tabs(self):
         """Instantiate and add all tab views to the notebook."""
-        self.home_tab     = HomeTab(self.notebook, self.context)
-        self.compile_tab  = CompileTab(self.notebook, self.context)
-        self.checkout_tab = CheckoutTab(self.notebook, self.context)
+        # Phase 2 tabs in workflow order
+        self.home_tab           = HomeTab(self.notebook, self.context)
+        self.fetch_issue_tab    = FetchIssueTab(self.notebook, self.context)
+        self.analyze_jira_tab   = AnalyzeJiraTab(self.notebook, self.context)
+        self.repository_tab     = RepositoryTab(self.notebook, self.context)
+        # Implementation tab still in gui/app.py (not migrated yet)
+        self.test_scenarios_tab = TestScenariosTab(self.notebook, self.context)
+        # Phase 3B: Validation tab
+        self.validation_tab     = ValidationTab(self.notebook, self.context)
+        self.compile_tab        = CompileTab(self.notebook, self.context)
+        self.checkout_tab       = CheckoutTab(self.notebook, self.context)
 
     # ──────────────────────────────────────────────────────────────────────
     # LOG PANEL

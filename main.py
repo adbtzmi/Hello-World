@@ -1,22 +1,43 @@
 #!/usr/bin/env python3
 """
 BENTO - Build, Evaluate, Navigate, Test & Orchestrate
-Entry Point
+Entry Point — Phase 2 MVC
 
-Phase 1: Launches existing SimpleGUI (gui/app.py) — completely unchanged.
-Phase 2: Injects the Checkout sub-tab into the Implementation tab's sub-notebook,
-         right after the existing TP Compilation & Health sub-tab.
+Wiring order (critical):
+  1. Load config
+  2. Create Tk root
+  3. Launch existing SimpleGUI (gui/app.py) — Phase 1 unchanged
+  4. Remove legacy top-level Compile/Checkout tabs
+  5. Build AppContext using existing analyzer from SimpleGUI
+  6. Create BentoController(config) — NO context yet
+  7. Create BentoApp view (builds tabs, each tab gets context)
+  8. controller.set_view(view) — wires context into all controllers
+  9. Inject Checkout into Implementation sub-notebook
 """
 
 import sys
 import os
+import json
 import tkinter as tk
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
+def _remove_top_level_tabs(notebook, names_to_remove):
+    """Remove top-level tabs whose label contains any of names_to_remove."""
+    removed = []
+    for tab_id in reversed(notebook.tabs()):
+        tab_text = notebook.tab(tab_id, "text")
+        for name in names_to_remove:
+            if name.lower() in tab_text.lower():
+                notebook.forget(tab_id)
+                removed.append(tab_text)
+                break
+    return removed
+
+
 def main():
-    # ── High-DPI fix for Windows ──────────────────────────────────────────
+    # ── High-DPI fix ──────────────────────────────────────────────────────
     try:
         from ctypes import windll
         windll.shcore.SetProcessDpiAwareness(1)
@@ -25,24 +46,29 @@ def main():
 
     root = tk.Tk()
 
-    # ── Phase 1: Launch existing GUI (completely unchanged) ───────────────
+    # ── Step 1: Load config ───────────────────────────────────────────────
+    config = {}
+    try:
+        if os.path.exists('settings.json'):
+            with open('settings.json', 'r') as f:
+                config = json.load(f)
+    except Exception as e:
+        print(f"⚠ Could not load settings.json: {e}")
+
+    # ── Step 2: Launch existing SimpleGUI (Phase 1 — completely unchanged) ─
     from gui.app import SimpleGUI
     app = SimpleGUI(root)
 
-    # ── Phase 2: Inject Checkout sub-tab into Implementation tab ──────────
-    try:
-        import json
-        from controller.bento_controller import BentoController
-        from context import AppContext
-        from view.tabs.checkout_tab import CheckoutTab
+    # ── Step 3: Remove legacy top-level Compile and Checkout tabs ─────────
+    removed = _remove_top_level_tabs(app.notebook, ["Compile", "Checkout"])
+    for name in removed:
+        print(f"✓ Removed legacy top-level tab: {name}")
 
-        # Load settings.json
-        config = {}
-        try:
-            with open('settings.json', 'r') as f:
-                config = json.load(f)
-        except Exception:
-            pass
+    # ── Step 4: Wire Phase 2 MVC ──────────────────────────────────────────
+    try:
+        from context import AppContext
+        from controller.bento_controller import BentoController
+        from view.tabs.checkout_tab import CheckoutTab
 
         # Shared log callback — pipes into existing GUI log panel
         def log_to_gui(msg):
@@ -51,7 +77,7 @@ def main():
             except Exception:
                 print(msg)
 
-        # AppContext — shared state for new tabs
+        # AppContext — uses existing analyzer from SimpleGUI
         context = AppContext(
             root=root,
             analyzer=app.analyzer,
@@ -59,17 +85,15 @@ def main():
             log_callback=log_to_gui,
         )
 
-        # Get the Implementation sub-notebook (stored by app.py as self.impl_notebook)
-        impl_notebook = app.impl_notebook
-
-        # Master controller
+        # BentoController — pass config only (context wired via set_view)
         controller = BentoController(config=config)
         context.controller = controller
 
-        # Add Checkout as SUB-TAB 3 inside Implementation
-        checkout_tab = CheckoutTab(impl_notebook, context)
+        # Inject Checkout as sub-tab inside Implementation tab
+        impl_notebook = app.impl_notebook
+        checkout_tab  = CheckoutTab(impl_notebook, context)
 
-        # Minimal view adapter — lets controller call back into the checkout tab
+        # Minimal view adapter for checkout callbacks
         class _MinimalView:
             def __init__(self):
                 self.root         = root
@@ -94,13 +118,14 @@ def main():
             def jira_analysis_completed(self, result):
                 pass   # handled by existing SimpleGUI
 
-        controller.set_view(_MinimalView())
+        view = _MinimalView()
+        controller.set_view(view)
 
-        print("✓ Phase 2: Checkout sub-tab injected into Implementation tab")
+        print("✓ Phase 2: 🧪 Checkout tab injected into Implementation")
+        print("  Tab order: 🧠 AI Plan Generator | 📦 TP Compilation & Health | 🧪 Checkout")
 
     except Exception as e:
-        # If Phase 2 fails, existing GUI still works perfectly
-        print(f"⚠ Phase 2 Checkout tab could not load (existing GUI still works): {e}")
+        print(f"⚠ Phase 2 MVC could not load (existing GUI still works): {e}")
         import traceback
         traceback.print_exc()
 
@@ -109,3 +134,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

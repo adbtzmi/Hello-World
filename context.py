@@ -32,6 +32,18 @@ class AppContext:
         self.repos    = []
         self.branches = []
         self.gui_locked = False
+        
+        # Phase 2 additions
+        self.chat_window = None  # active chat window reference
+        self.current_chat_messages = []  # chat history
+        
+        # Observers for syncing (replaces trace_add callbacks)
+        self._issue_observers = []
+        self._repo_observers = []
+        self._branch_observers = []
+        
+        # File logger reference (set by main app)
+        self.file_logger = None
 
     # ── Shared variable store ─────────────────────────────────────────────
 
@@ -42,6 +54,59 @@ class AppContext:
     def set_var(self, name, tk_var):
         """Store a shared Tkinter variable by name."""
         self.vars[name] = tk_var
+    
+    # ── Observer Pattern for Syncing ──────────────────────────────────────
+    
+    def register_issue_observer(self, callback):
+        """Register callback for issue key changes"""
+        self._issue_observers.append(callback)
+    
+    def register_repo_observer(self, callback):
+        """Register callback for repo changes"""
+        self._repo_observers.append(callback)
+    
+    def register_branch_observer(self, callback):
+        """Register callback for branch changes"""
+        self._branch_observers.append(callback)
+    
+    def get_issue_key(self) -> str:
+        """Return current JIRA issue key from vars"""
+        issue_var = self.vars.get('issue_key')
+        return issue_var.get() if issue_var else ""
+    
+    def set_issue_key(self, key: str):
+        """Set issue key and notify all observers"""
+        issue_var = self.vars.get('issue_key')
+        if issue_var:
+            issue_var.set(key)
+        for observer in self._issue_observers:
+            observer(key)
+    
+    def get_repo(self) -> str:
+        """Return current repo name"""
+        repo_var = self.vars.get('repo')
+        return repo_var.get() if repo_var else ""
+    
+    def set_repo(self, repo: str):
+        """Set repo and notify all observers"""
+        repo_var = self.vars.get('repo')
+        if repo_var:
+            repo_var.set(repo)
+        for observer in self._repo_observers:
+            observer(repo)
+    
+    def get_branch(self) -> str:
+        """Return current branch name"""
+        branch_var = self.vars.get('branch')
+        return branch_var.get() if branch_var else ""
+    
+    def set_branch(self, branch: str):
+        """Set branch and notify all observers"""
+        branch_var = self.vars.get('branch')
+        if branch_var:
+            branch_var.set(branch)
+        for observer in self._branch_observers:
+            observer(branch)
 
     # ── Configuration management ──────────────────────────────────────────
 

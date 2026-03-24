@@ -2,130 +2,186 @@
 """
 controller/bento_controller.py
 ================================
-BENTO Master Controller
+BENTO Master Controller — Phase 2
 
-Mirrors the top-level wiring role of CAT.py in the C.A.T. project:
-  - Owns all sub-controllers (CompileController, CheckoutController, JiraController)
-  - Holds a reference to the View (set by main.py after construction)
-  - Provides the two-way bridge between View and Model layers
-  - Exposes has_active_tasks() for the View's smart-close guard
+Key fix vs agent-generated version:
+  - __init__ takes config only (NOT context)
+  - context is injected via set_view() AFTER AppContext exists
+  - This eliminates the chicken-and-egg problem where
+    BentoController was created before BentoApp/AppContext
 
-Sub-controllers are instantiated here so main.py stays a clean entry point
-(exactly as CatSAP / CatDB / CATFWMig are instantiated in app.py then passed
-to CatGUI.SetController()).
+Sub-controllers that need context receive it in set_view().
+Sub-controllers that need config receive it in __init__.
 """
 
 import logging
 from singleton_meta import SingletonMeta
 from controller.compile_controller  import CompileController
 from controller.checkout_controller import CheckoutController
-from controller.jira_controller     import JiraController
 
 logger = logging.getLogger("bento_app")
 
 
 class BentoController(metaclass=SingletonMeta):
     """
-    Master controller.  One instance per application lifetime (Singleton).
-
-    Attributes:
-        compile_controller  : CompileController
-        checkout_controller : CheckoutController
-        jira_controller     : JiraController
-        _view               : BentoApp  (set after construction via set_view())
+    Master controller. One instance per application lifetime (Singleton).
     """
 
     def __init__(self, config: dict, logger_instance=None):
         _logger = logger_instance or logger
         _logger.info("BentoController initialising.")
 
-        self.config = config
-        self._view  = None   # wired in main.py after BentoApp is constructed
+        self.config  = config
+        self._view   = None
+        self._context = None
 
-        # ── Sub-controllers (mirrors CAT.py class instantiation pattern) ──
+        # Compile and Checkout controllers are config-based
+        # (they receive context via set_view)
         self.compile_controller  = CompileController(master=self, config=config)
         self.checkout_controller = CheckoutController(master=self, config=config)
-        self.jira_controller     = JiraController(master=self, config=config)
 
-        _logger.info("BentoController ready.")
+        # Phase 2 controllers — created in set_view() once context exists
+        self.workflow_controller = None
+        self.chat_controller     = None
+        self.jira_controller     = None
+        self.repo_controller     = None
+        self.test_controller     = None
+
+        _logger.info("BentoController ready (Phase 2 controllers pending set_view).")
 
     # ──────────────────────────────────────────────────────────────────────
-    # WIRING
+    # WIRING — called by main.py after AppContext exists
     # ──────────────────────────────────────────────────────────────────────
 
     def set_view(self, view):
         """
-        Two-way wire: give every sub-controller a reference to the View.
-        Mirrors GUI_ctrl.SetController() in C.A.T.
+        Wire view AND context into all sub-controllers.
+        Phase 2 controllers are instantiated here (after context exists).
         """
-        self._view = view
+        self._view    = view
+        self._context = view.context
 
-        # Inject view reference + controller reference into AppContext
-        # so tabs can call self.context.controller.<sub_controller>.<method>()
+        # Wire context.controller so tabs can reach us
         view.context.controller = self
-        view.context.analyzer   = self.jira_controller.analyzer
 
-        # Propagate view down to sub-controllers
+        # ── Instantiate Phase 2 controllers in dependency order ───────────
+        from controller.workflow_controller import WorkflowController
+        from controller.chat_controller     import ChatController
+        from controller.jira_controller     import JiraController
+        from controller.repo_controller     import RepoController
+        from controller.test_controller     import TestController
+        from controller.config_controller   import ConfigController
+        from controller.credential_controller import CredentialController
+        from controller.validation_controller import ValidationController
+
+        # No dependencies
+        self.workflow_controller = WorkflowController(view.context)
+        self.chat_controller     = ChatController(view.context)
+        self.config_controller   = ConfigController(view.context)
+        self.credential_controller = CredentialController(view.context)
+
+        # Depends on workflow + chat
+        self.jira_controller = JiraController(
+            view.context,
+            self.workflow_controller,
+            self.chat_controller
+        )
+
+        # Depends on workflow
+        self.repo_controller = RepoController(
+            view.context,
+            self.workflow_controller
+        )
+
+        # Depends on workflow + chat
+        self.test_controller = TestController(
+            view.context,
+            self.workflow_controller,
+            self.chat_controller
+        )
+
+        # Depends on workflow + chat
+        self.validation_controller = ValidationController(
+            view.context,
+            self.workflow_controller,
+            self.chat_controller
+        )
+
+        # Phase 3C: Implementation controller
+        from controller.implementation_controller import ImplementationController
+        self.implementation_controller = ImplementationController(
+            view.context,
+            self.workflow_controller,
+            self.chat_controller
+        )
+
+        # Phase 3D: Full workflow orchestrator
+        from controller.full_workflow_controller import FullWorkflowController
+        self.full_workflow_controller = FullWorkflowController(
+            view.context,
+            self.workflow_controller,
+            self.chat_controller,
+            self.jira_controller,
+            self.repo_controller,
+            self.test_controller,
+            self.implementation_controller,
+            self.validation_controller
+        )
+
+        # Wire view into compile/checkout controllers
         self.compile_controller.set_view(view)
         self.checkout_controller.set_view(view)
-        self.jira_controller.set_view(view)
 
-        logger.info("BentoController: View wired.")
+        logger.info("BentoController: all controllers wired (Phase 3C/3D complete).")
 
     # ──────────────────────────────────────────────────────────────────────
-    # ACTIVE TASK GUARD (used by BentoApp._on_close)
+    # ACTIVE TASK GUARD
     # ──────────────────────────────────────────────────────────────────────
 
     def has_active_tasks(self) -> bool:
-        """
-        Returns True if any background task is currently running.
-        Checked by the View before allowing the window to close.
-        Mirrors C.A.T.'s background-task-management guard.
-        """
-        return (
-            self.compile_controller.is_running()
-            or self.checkout_controller.is_running()
-            or self.jira_controller.is_running()
-        )
+        checks = [
+            self.compile_controller.is_running(),
+            self.checkout_controller.is_running(),
+        ]
+        if self.jira_controller:
+            checks.append(self.jira_controller.is_running())
+        if self.repo_controller:
+            checks.append(self.repo_controller.is_running())
+        if self.test_controller:
+            checks.append(self.test_controller.is_running())
+        if self.validation_controller:
+            checks.append(self.validation_controller.is_running())
+        if hasattr(self, 'implementation_controller') and self.implementation_controller:
+            checks.append(self.implementation_controller.is_running())
+        if hasattr(self, 'full_workflow_controller') and self.full_workflow_controller:
+            checks.append(self.full_workflow_controller.is_running())
+        return any(checks)
 
     # ──────────────────────────────────────────────────────────────────────
-    # COMPILE CALLBACKS (called by CompileController → forwarded to View)
+    # COMPILE CALLBACKS
     # ──────────────────────────────────────────────────────────────────────
 
     def on_compile_started(self, hostname: str, env: str):
-        """Relay compile-started event from model up to the View."""
         if self._view:
             self._view.compile_started(hostname, env)
 
     def on_compile_completed(self, hostname: str, env: str, result: dict):
-        """Relay compile-completed event from model up to the View."""
         if self._view:
             self._view.compile_completed(hostname, env, result)
 
     # ──────────────────────────────────────────────────────────────────────
-    # CHECKOUT CALLBACKS (called by CheckoutController → forwarded to View)
+    # CHECKOUT CALLBACKS
     # ──────────────────────────────────────────────────────────────────────
 
     def on_checkout_started(self, hostname: str):
-        """Relay checkout-started event from model up to the View."""
         if self._view:
             self._view.checkout_started(hostname)
 
     def on_checkout_progress(self, hostname: str, phase: str):
-        """Relay mid-run phase update from model up to the View."""
         if self._view:
             self._view.checkout_progress(hostname, phase)
 
     def on_checkout_completed(self, hostname: str, result: dict):
-        """Relay checkout-completed event from model up to the View."""
         if self._view:
             self._view.checkout_completed(hostname, result)
 
-    # ──────────────────────────────────────────────────────────────────────
-    # JIRA CALLBACKS (called by JiraController → forwarded to View)
-    # ──────────────────────────────────────────────────────────────────────
-
-    def on_jira_analysis_completed(self, result: dict):
-        """Relay JIRA analysis result from model up to the View."""
-        if self._view:
-            self._view.jira_analysis_completed(result)
