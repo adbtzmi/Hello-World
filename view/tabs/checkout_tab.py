@@ -53,7 +53,45 @@ class CheckoutTab(BaseTab):
         self._tester_vars               = {}
         self._tester_frame: Any         = None
         self._tester_row                = 1
+        self._init_vars()
         self._build_ui()
+
+    # ──────────────────────────────────────────────────────────────────────
+    # VARIABLE INITIALISATION  (must run before _build_ui)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _init_vars(self):
+        """Register every checkout tk.*Var in context so get_var() never returns None."""
+        ctx = self.context
+        _sv = lambda name, val="": ctx.set_var(name, tk.StringVar(value=val)) \
+              if ctx.get_var(name) is None else None
+        _bv = lambda name, val=False: ctx.set_var(name, tk.BooleanVar(value=val)) \
+              if ctx.get_var(name) is None else None
+        _iv = lambda name, val=0: ctx.set_var(name, tk.IntVar(value=val)) \
+              if ctx.get_var(name) is None else None
+
+        _sv('checkout_mid')
+        _sv('checkout_cfgpn')
+        _sv('checkout_fw_ver')
+        _sv('checkout_tgz_path')
+        _sv('checkout_hot_folder')
+        _sv('checkout_lot_prefix')
+        _sv('checkout_dut_locations')
+        _sv('checkout_detect_method', "AUTO")
+        _sv('checkout_tc_passing_label', "passing")
+        _sv('checkout_tc_fail_label', "force_fail_1")
+        _sv('checkout_tc_fail_desc')
+        _sv('checkout_cfgpn_filter')
+        _sv('checkout_excel_path',
+            ctx.config.get('cat', {}).get(
+                'crt_excel_path',
+                r'\\sifsmodtestrep\modtestrep\crab\crt_from_sap.xlsx'
+            ))
+        _iv('checkout_dut_slots', 1)
+        _iv('checkout_timeout_min', 60)
+        _bv('checkout_tc_passing', True)
+        _bv('checkout_tc_force_fail', False)
+        _bv('checkout_notify_teams', True)
 
     # ──────────────────────────────────────────────────────────────────────
     # BUILD UI
@@ -67,13 +105,6 @@ class CheckoutTab(BaseTab):
         excel_frame.grid(row=0, column=0, sticky="we", pady=2)
         excel_frame.columnconfigure(1, weight=1)
 
-        # Confirmed path from CheckoutPlan.md
-        self.context.set_var('checkout_excel_path', tk.StringVar(
-            value=self.context.config.get('cat', {}).get(
-                'crt_excel_path',
-                r'\\sifsmodtestrep\modtestrep\crab\crt_from_sap.xlsx'
-            )
-        ))
         ttk.Label(excel_frame, text="Excel File:").grid(row=0, column=0, sticky=tk.W, padx=(0, 6))
         ttk.Entry(excel_frame,
                   textvariable=self.context.get_var('checkout_excel_path'),
@@ -83,7 +114,6 @@ class CheckoutTab(BaseTab):
 
         ttk.Label(excel_frame, text="Filter CFGPN:").grid(
             row=1, column=0, sticky=tk.W, padx=(0, 6), pady=(2, 0))
-        self.context.set_var('checkout_cfgpn_filter', tk.StringVar())
         ttk.Entry(excel_frame,
                   textvariable=self.context.get_var('checkout_cfgpn_filter'),
                   width=20).grid(row=1, column=1, sticky=tk.W, pady=(2, 0))

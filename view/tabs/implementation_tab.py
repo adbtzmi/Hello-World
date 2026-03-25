@@ -5,6 +5,7 @@ view/tabs/implementation_tab.py
 Implementation Tab (View) — matches gui/app.py create_implementation_tab()
 """
 
+import os
 import tkinter as tk
 from tkinter import ttk, scrolledtext, filedialog
 import logging
@@ -214,7 +215,7 @@ class ImplementationTab(BaseTab):
 
         recent_frame = ttk.Frame(self.health_wrapper)
         recent_frame.pack(fill=tk.X, pady=(2, 1))
-        ttk.Label(recent_frame, text="📊 Recent Builds:", width=28, anchor="w", font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, anchor=tk.N)
+        ttk.Label(recent_frame, text="📊 Recent Builds:", width=28, anchor="w", font=("Arial", 9, "bold")).pack(side=tk.LEFT, anchor=tk.N)
         
         self.builds_text = tk.Text(recent_frame, height=3, width=65, bg="white", relief="flat", font=("Segoe UI", 9))
         self.builds_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -482,8 +483,6 @@ class ImplementationTab(BaseTab):
             self.log("✓ Tester registry updated.")
         except Exception as e:
             self.show_error("Registry Error", f"Could not save registry:\n{e}")
-        except Exception as e:
-            self.show_error("Registry Error", f"Could not save registry:\n{e}")
 
     def _get_selected_hostnames(self):
         selection = self._tester_listbox.curselection()
@@ -721,12 +720,18 @@ class ImplementationTab(BaseTab):
                         k, v = line.split(":", 1)
                         data[k.strip()] = v.strip()
             
+            # Key names written by watcher_copier.py write_build_info():
+            #   "Tester"    -> hostname
+            #   "JIRA Key"  -> jira_key   (NOT "JIRA")
+            #   "Env"       -> env        (NOT "ENV")
+            #   "Label"     -> label
+            #   "Timestamp" -> timestamp
             # Original cols: ("Timestamp", "JIRA", "Tester", "ENV", "Label", "Output TGZ")
             return (
                 data.get("Timestamp", "N/A"),
-                data.get("JIRA", "N/A"),
+                data.get("JIRA Key", "N/A"),
                 data.get("Tester", "N/A"),
-                data.get("ENV", "N/A"),
+                data.get("Env", "N/A"),
                 data.get("Label", "N/A"),
                 os.path.basename(fpath).replace("build_info_", "").replace(".txt", ".tgz")
             )
@@ -804,30 +809,28 @@ class AddTesterDialog:
             row=3, column=0, columnspan=2, sticky="we", pady=8)
 
         # ── Tester Details ──
-        pad = {"padx": 10, "pady": 4}
-        
-        ttk.Label(self.main_frame, text="Tester Hostname:").grid(row=4, column=0, sticky="w", **pad)
+        ttk.Label(self.main_frame, text="Tester Hostname:").grid(row=4, column=0, sticky="w", padx=10, pady=4)
         self.hostname_var = tk.StringVar()
         self.hostname_entry = ttk.Entry(self.main_frame, textvariable=self.hostname_var, width=30)
-        self.hostname_entry.grid(row=4, column=1, sticky="w", **pad)
+        self.hostname_entry.grid(row=4, column=1, sticky="w", padx=10, pady=4)
         ttk.Label(self.main_frame, text="e.g.  IBIR-0999", font=("Arial", 8), foreground="gray").grid(row=5, column=1, sticky="w", padx=10, pady=0)
 
-        ttk.Label(self.main_frame, text="Environment:").grid(row=6, column=0, sticky="w", **pad)
+        ttk.Label(self.main_frame, text="Environment:").grid(row=6, column=0, sticky="w", padx=10, pady=4)
         self.env_var = tk.StringVar(value="ABIT")
         env_combo = ttk.Combobox(self.main_frame, textvariable=self.env_var, values=["ABIT", "SFN2", "CNFG"], state="readonly", width=12)
-        env_combo.grid(row=6, column=1, sticky="w", **pad)
+        env_combo.grid(row=6, column=1, sticky="w", padx=10, pady=4)
 
-        ttk.Label(self.main_frame, text="Repo Path:").grid(row=7, column=0, sticky="w", **pad)
+        ttk.Label(self.main_frame, text="Repo Path:").grid(row=7, column=0, sticky="w", padx=10, pady=4)
         self.repo_dir_var = tk.StringVar(value=r"C:\BENTO\adv_ibir_master")
         repo_frame = ttk.Frame(self.main_frame)
-        repo_frame.grid(row=7, column=1, sticky="w", **pad)
+        repo_frame.grid(row=7, column=1, sticky="w", padx=10, pady=4)
         ttk.Entry(repo_frame, textvariable=self.repo_dir_var, width=32).pack(side=tk.LEFT)
         ttk.Button(repo_frame, text="📁", width=3, command=lambda: self.parent_tab._browse_directory(self.repo_dir_var, "Select TP Repository")).pack(side=tk.LEFT, padx=(2, 0))
 
-        ttk.Label(self.main_frame, text="Build Command:").grid(row=8, column=0, sticky="w", **pad)
+        ttk.Label(self.main_frame, text="Build Command:").grid(row=8, column=0, sticky="w", padx=10, pady=4)
         self.build_cmd_var = tk.StringVar(value="make release")
         build_combo = ttk.Combobox(self.main_frame, textvariable=self.build_cmd_var, values=["make release", "make release_supermicro"], width=28)
-        build_combo.grid(row=8, column=1, sticky="w", **pad)
+        build_combo.grid(row=8, column=1, sticky="w", padx=10, pady=4)
 
         ttk.Separator(self.main_frame, orient="horizontal").grid(row=9, column=0, columnspan=2, sticky="we", pady=8)
 
