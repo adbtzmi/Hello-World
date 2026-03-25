@@ -1,3 +1,4 @@
+import os
 import tkinter as tk
 from tkinter import ttk, filedialog
 from typing import Any
@@ -35,15 +36,16 @@ class CheckoutTab(BaseTab):
     # Exact CRT column names from crt_excel_template.json [24]
     # "Product  Name" has DOUBLE SPACE — intentional
     _CRT_GRID_COLUMNS = [
-        ("Material description",  200),
-        ("CFGPN",                  80),
-        ("FW Wave ID",             80),
-        ("FIDB_ASIC_FW_REV",      110),
-        ("Product  Name",         100),   # DOUBLE SPACE [24]
-        ("CRT Customer",          100),
-        ("SSD Drive Type",         90),
-        ("ABIT Release (Yes/No)",  90),
-        ("SFN2 Release (Yes/No)",  90),
+        ("Material description",   200),
+        ("CFGPN",                   80),
+        ("FW Wave ID",              80),
+        ("FIDB_ASIC_FW_REV",       110),
+        ("Product  Name",          100),   # DOUBLE SPACE [24]
+        ("CRT Customer",           100),
+        ("SSD Drive Type",          90),
+        ("ABIT Release (Yes/No)",   90),
+        ("SFN2 Release (Yes/No)",   90),
+        ("CRT Checkout (Yes/No)",   90),   # Fix #1: added missing column
     ]
 
     def __init__(self, notebook, context):
@@ -73,8 +75,11 @@ class CheckoutTab(BaseTab):
         _sv('checkout_mid')
         _sv('checkout_cfgpn')
         _sv('checkout_fw_ver')
+        _sv('checkout_env', 'ABIT')                          # Fix #2: ENV field
         _sv('checkout_tgz_path')
-        _sv('checkout_hot_folder')
+        _sv('checkout_hot_folder',
+            ctx.config.get('checkout', {}).get(
+                'hot_folder', r'C:\test_program\playground_queue'))
         _sv('checkout_lot_prefix')
         _sv('checkout_dut_locations')
         _sv('checkout_detect_method', "AUTO")
@@ -85,8 +90,10 @@ class CheckoutTab(BaseTab):
         _sv('checkout_excel_path',
             ctx.config.get('cat', {}).get(
                 'crt_excel_path',
-                r'\\sifsmodtestrep\modtestrep\crab\crt_from_sap.xlsx'
+                r'\\sifsmodtestrep\ModTestRep\crab\crt_from_sap.xlsx'
             ))
+        _sv('checkout_webhook_url',                          # Fix #4: Teams webhook
+            ctx.config.get('teams', {}).get('webhook_url', ''))
         _iv('checkout_dut_slots', 1)
         _iv('checkout_timeout_min', 60)
         _bv('checkout_tc_passing', True)
@@ -157,7 +164,7 @@ class CheckoutTab(BaseTab):
         dut_frame.columnconfigure(1, weight=1)
         dut_frame.columnconfigure(3, weight=1)
 
-        # Row 0: JIRA Key, MID, CFGPN, FW Wave
+        # Row 0: JIRA Key, MID, CFGPN, FW Wave, ENV
         ttk.Label(dut_frame, text="JIRA:").grid(row=0, column=0, sticky=tk.W, pady=0)
         ttk.Entry(dut_frame, textvariable=self.context.get_var('issue_var'),
                   width=15).grid(row=0, column=1, sticky=tk.W, pady=0)
@@ -166,10 +173,16 @@ class CheckoutTab(BaseTab):
                   width=15).grid(row=0, column=3, sticky="we", pady=0)
         ttk.Label(dut_frame, text="CFGPN:").grid(row=0, column=4, sticky=tk.W, pady=0, padx=(5, 0))
         ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_cfgpn'),
-                  width=15).grid(row=0, column=5, sticky="we", pady=0)
+                  width=12).grid(row=0, column=5, sticky="we", pady=0)
         ttk.Label(dut_frame, text="Wave:").grid(row=0, column=6, sticky=tk.W, pady=0, padx=(5, 0))
         ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_fw_ver'),
-                  width=10).grid(row=0, column=7, sticky="we", pady=0)
+                  width=8).grid(row=0, column=7, sticky="we", pady=0)
+        ttk.Label(dut_frame, text="ENV:").grid(row=0, column=8, sticky=tk.W, pady=0, padx=(5, 0))
+        ttk.Combobox(dut_frame,                              # Fix #2: ENV combobox
+                     textvariable=self.context.get_var('checkout_env'),
+                     values=["ABIT", "SFN2", "CNFG"],
+                     state="readonly", width=6
+                     ).grid(row=0, column=9, sticky=tk.W, pady=0)
 
         # Row 1: Slots, Lot Prefix, Locations
         ttk.Label(dut_frame, text="Slots:").grid(row=1, column=0, sticky=tk.W, pady=0)
@@ -182,16 +195,30 @@ class CheckoutTab(BaseTab):
         ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_dut_locations'),
                   width=35).grid(row=1, column=5, columnspan=3, sticky="we", pady=0)
 
-        # Row 2: TGZ Source
-        ttk.Label(dut_frame, text="TGZ:").grid(row=2, column=0, sticky=tk.W, pady=0)
-        ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_tgz_path'),
-                  width=60).grid(row=2, column=1, columnspan=6, sticky="we", pady=0)
-        ttk.Button(dut_frame, text="…", width=3,
-                   command=self._browse_tgz).grid(row=2, column=7, padx=(2, 0), pady=0)
+        # Row 2: Hint labels for Lot prefix and DUT Locations
+        ttk.Label(dut_frame, text="").grid(row=2, column=0, sticky=tk.W)          # spacer under "Slots:"
+        ttk.Label(dut_frame, text="").grid(row=2, column=1, sticky=tk.W)          # spacer under slots spinbox
+        ttk.Label(dut_frame, text="").grid(row=2, column=2, sticky=tk.W)          # spacer under "Lot:"
+        ttk.Label(dut_frame,
+                  text="e.g. JAANTJB → JAANTJB001…",
+                  foreground="#888888", font=("Segoe UI", 7)
+                  ).grid(row=2, column=3, sticky=tk.W, pady=(0, 2))
+        ttk.Label(dut_frame, text="").grid(row=2, column=4, sticky=tk.W)          # spacer under "Loc:"
+        ttk.Label(dut_frame,
+                  text="Space-separated slot coords, e.g.  0,0  0,1  1,0",
+                  foreground="#888888", font=("Segoe UI", 7)
+                  ).grid(row=2, column=5, columnspan=3, sticky=tk.W, pady=(0, 2))
 
-        # Row 3: Test Cases (PASS/FAIL)
+        # Row 3: TGZ Source
+        ttk.Label(dut_frame, text="TGZ:").grid(row=3, column=0, sticky=tk.W, pady=0)
+        ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_tgz_path'),
+                  width=60).grid(row=3, column=1, columnspan=6, sticky="we", pady=0)
+        ttk.Button(dut_frame, text="…", width=3,
+                   command=self._browse_tgz).grid(row=3, column=7, padx=(2, 0), pady=0)
+
+        # Row 4: Test Cases (PASS/FAIL)
         test_case_frame = ttk.Frame(dut_frame)
-        test_case_frame.grid(row=3, column=0, columnspan=8, sticky="we", pady=0)
+        test_case_frame.grid(row=4, column=0, columnspan=8, sticky="we", pady=0)
         ttk.Label(test_case_frame, text="TC:").pack(side=tk.LEFT)
         ttk.Checkbutton(test_case_frame, text="PASS", variable=self.context.get_var('checkout_tc_passing')).pack(side=tk.LEFT, padx=2)
         ttk.Entry(test_case_frame, textvariable=self.context.get_var('checkout_tc_passing_label'), width=10).pack(side=tk.LEFT, padx=2)
@@ -199,10 +226,10 @@ class CheckoutTab(BaseTab):
         ttk.Entry(test_case_frame, textvariable=self.context.get_var('checkout_tc_fail_label'), width=10).pack(side=tk.LEFT, padx=2)
         ttk.Entry(test_case_frame, textvariable=self.context.get_var('checkout_tc_fail_desc'), width=30).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
 
-        # Row 4: Hot folder
-        ttk.Label(dut_frame, text="Hot Folder:").grid(row=4, column=0, sticky=tk.W, pady=0)
+        # Row 5: Hot folder
+        ttk.Label(dut_frame, text="Hot Folder:").grid(row=5, column=0, sticky=tk.W, pady=0)
         ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_hot_folder'),
-                  width=70).grid(row=4, column=1, columnspan=7, sticky="we", pady=0)
+                  width=70).grid(row=5, column=1, columnspan=7, sticky="we", pady=0)
 
         # ── Section 4: Side-by-Side Detection & Testers ──────────────────
         side_frame = ttk.Frame(self)
@@ -228,6 +255,12 @@ class CheckoutTab(BaseTab):
                         variable=self.context.get_var('checkout_notify_teams')).grid(
             row=1, column=2, padx=2, sticky=tk.W)
 
+        # Fix #4: Webhook URL field (shown when Teams notify is on)
+        ttk.Label(detect_frame, text="Webhook:").grid(row=2, column=0, sticky=tk.W, pady=(2, 0))
+        ttk.Entry(detect_frame,
+                  textvariable=self.context.get_var('checkout_webhook_url'),
+                  width=40).grid(row=2, column=1, columnspan=3, sticky="we", pady=(2, 0))
+
         tester_outer = ttk.LabelFrame(side_frame, text="Tester Selection", padding="2")
         tester_outer.grid(row=0, column=1, sticky="nsew", padx=(2, 0))
         ttk.Button(tester_outer, text="↻ Refresh", width=10,
@@ -250,14 +283,24 @@ class CheckoutTab(BaseTab):
         self.context.lockable_buttons.append(self.checkout_btn)
         ttk.Button(btn_frame, text="Generate XML Only", width=18,
                    command=self._generate_xml_only).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_frame, text="📥 Import XML", width=14,
+                   command=self._import_xml).pack(side=tk.LEFT, padx=3)
         ttk.Button(btn_frame, text="Select All", width=10,
                    command=self._select_all).pack(side=tk.LEFT, padx=3)
         ttk.Button(btn_frame, text="Deselect All", width=12,
                    command=self._deselect_all).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_frame, text="📂 Queue Folder", width=15,   # Fix #7
+                   command=self._open_queue_folder).pack(side=tk.LEFT, padx=3)
 
         # ── Section 7: Results ────────────────────────────────────────────
         results_frame = ttk.LabelFrame(self, text="Checkout Results", padding="2")
         results_frame.grid(row=6, column=0, sticky="we", pady=1)
+
+        results_btn_bar = ttk.Frame(results_frame)                # Fix #6: Clear button bar
+        results_btn_bar.pack(side=tk.TOP, fill=tk.X)
+        ttk.Button(results_btn_bar, text="Clear", width=6,
+                   command=self._clear_results).pack(side=tk.RIGHT)
+
         self.results_text = tk.Text(results_frame, height=3, state=tk.DISABLED,
                                     font=("Consolas", 9), wrap=tk.WORD)
         results_scroll = ttk.Scrollbar(results_frame, orient=tk.VERTICAL,
@@ -271,12 +314,9 @@ class CheckoutTab(BaseTab):
     # ──────────────────────────────────────────────────────────────────────
 
     def _refresh_testers(self):
-        for widget in self._tester_frame.grid_slaves():
-            try:
-                if int(widget.grid_info().get("row", 0)) >= self._tester_row:
-                    widget.destroy()
-            except Exception:
-                pass
+        # Fix #3: destroy ALL children cleanly instead of fragile grid_slaves() row check
+        for widget in self._tester_frame.winfo_children():
+            widget.destroy()
 
         self._tester_vars  = {}
         self._badge_labels = {}
@@ -317,8 +357,15 @@ class CheckoutTab(BaseTab):
             self.context.get_var('checkout_excel_path').set(path)
 
     def _browse_tgz(self):
+        # Default browse location — confirmed path from Phase 1 compile output
+        _DEFAULT_TGZ_DIR = r"P:\temp\BENTO\RELEASE_TGZ"
+
+        # Fall back gracefully if P: drive is not mapped
+        initial_dir = _DEFAULT_TGZ_DIR if os.path.isdir(_DEFAULT_TGZ_DIR) else "/"
+
         path = filedialog.askopenfilename(
             title="Select compiled TGZ",
+            initialdir=initial_dir,
             filetypes=[("TGZ archives", "*.tgz"), ("All files", "*.*")])
         if path:
             self.context.get_var('checkout_tgz_path').set(path)
@@ -345,6 +392,15 @@ class CheckoutTab(BaseTab):
         self.context.get_var('checkout_mid').set(mid)
         self.context.get_var('checkout_cfgpn').set(cfgpn)
         self.context.get_var('checkout_fw_ver').set(fw_wave)
+
+        # Fix #2: Auto-set ENV from ABIT/SFN2 Release columns
+        abit_rel = _get("ABIT Release (Yes/No)")
+        sfn2_rel = _get("SFN2 Release (Yes/No)")
+        if abit_rel.strip().lower() == "yes":
+            self.context.get_var('checkout_env').set("ABIT")
+        elif sfn2_rel.strip().lower() == "yes":
+            self.context.get_var('checkout_env').set("SFN2")
+
         self._grid_selection_label.configure(
             text=f"Selected: {mid}  |  CFGPN: {cfgpn}  |  FW: {fw_wave}",
             foreground="#0078d4")
@@ -356,6 +412,14 @@ class CheckoutTab(BaseTab):
     def _deselect_all(self):
         for var in self._tester_vars.values():
             var.set(False)
+
+    def _import_xml(self):
+        """Browse for an existing SLATE XML and autofill form fields from it."""
+        path = filedialog.askopenfilename(
+            title="Select SLATE Profile XML",
+            filetypes=[("XML files", "*.xml"), ("All files", "*.*")])
+        if path:
+            self.context.controller.checkout_controller.load_from_xml(path)
 
     def _generate_xml_only(self):
         params = self._collect_params()
@@ -383,6 +447,8 @@ class CheckoutTab(BaseTab):
         timeout_m     = self.context.get_var('checkout_timeout_min').get()
         notify        = self.context.get_var('checkout_notify_teams').get()
         hostnames     = [h for h, v in self._tester_vars.items() if v.get()]
+        env           = self.context.get_var('checkout_env').get().strip()   # Fix #2
+        webhook_url   = self.context.get_var('checkout_webhook_url').get().strip()  # Fix #4
 
         # New fields
         lot_prefix    = self.context.get_var('checkout_lot_prefix').get().strip()
@@ -397,6 +463,12 @@ class CheckoutTab(BaseTab):
         # Validation
         if not jira_key or jira_key.endswith("-"):
             self.show_error("Input Error", "Enter a valid JIRA key (e.g. TSESSD-1234).")
+            return None
+        if not env:
+            self.show_error("Input Error", "Select an ENV (ABIT / SFN2 / CNFG).")
+            return None
+        if not tgz_path:                                             # Fix #3: tgz_path validation
+            self.show_error("Input Error", "Enter the TGZ path.")
             return None
         if not hot_folder:
             self.show_error("Input Error", "Enter the hot folder path.")
@@ -424,6 +496,7 @@ class CheckoutTab(BaseTab):
 
         return {
             "jira_key":        jira_key,
+            "env":             env,             # Fix #2: included in params
             "tgz_path":        tgz_path,
             "hot_folder":      hot_folder,
             "mid":             mid,
@@ -436,6 +509,7 @@ class CheckoutTab(BaseTab):
             "detect_method":   method,
             "timeout_seconds": timeout_m * 60,
             "notify_teams":    notify,
+            "webhook_url":     webhook_url,     # Fix #4: included in params
             "hostnames":       hostnames,
         }
 
@@ -454,6 +528,20 @@ class CheckoutTab(BaseTab):
         lbl = self._phase_labels.get(hostname)
         if lbl:
             lbl.configure(text=phase)
+
+    def _clear_results(self):                                     # Fix #6
+        self.results_text.configure(state=tk.NORMAL)
+        self.results_text.delete("1.0", tk.END)
+        self.results_text.configure(state=tk.DISABLED)
+
+    def _open_queue_folder(self):                                 # Fix #7
+        queue_path = r"P:\temp\BENTO\CHECKOUT_QUEUE"
+        if os.path.isdir(queue_path):
+            os.startfile(queue_path)
+        else:
+            self.show_error("Folder Not Found",
+                            f"Queue folder not found:\n{queue_path}\n\n"
+                            "Ensure P: drive is mapped.")
 
     def _append_result(self, text):
         self.results_text.configure(state=tk.NORMAL)
@@ -483,6 +571,40 @@ class CheckoutTab(BaseTab):
         self.context.get_var('checkout_cfgpn').set(cfgpn)
         self.context.get_var('checkout_fw_ver').set(fw_ver)
         self.log(f"✓ Auto-filled: MID={mid}  CFGPN={cfgpn}  FW={fw_ver}")
+
+    def on_xml_imported(self, data: dict):
+        """
+        Populate form fields from a parsed SLATE Profile XML.
+
+        data keys (all optional / may be empty):
+          tgz_path, env, mid, lot_prefix, dut_locations (list[str]), dut_slots (int)
+        """
+        if data.get("tgz_path"):
+            self.context.get_var('checkout_tgz_path').set(data["tgz_path"])
+
+        if data.get("env") and data["env"] in ("ABIT", "SFN2", "CNFG"):
+            self.context.get_var('checkout_env').set(data["env"])
+
+        if data.get("mid"):
+            self.context.get_var('checkout_mid').set(data["mid"])
+
+        if data.get("lot_prefix"):
+            self.context.get_var('checkout_lot_prefix').set(data["lot_prefix"])
+
+        locs = data.get("dut_locations", [])
+        if locs:
+            self.context.get_var('checkout_dut_locations').set(" ".join(locs))
+            self.context.get_var('checkout_dut_slots').set(len(locs))
+
+        filled = []
+        if data.get("tgz_path"):   filled.append("TGZ")
+        if data.get("env"):        filled.append(f"ENV={data['env']}")
+        if data.get("mid"):        filled.append(f"MID={data['mid']}")
+        if data.get("lot_prefix"): filled.append(f"Lot={data['lot_prefix']}")
+        if locs:                   filled.append(f"{len(locs)} DUT(s)")
+
+        summary = "  ".join(filled) if filled else "(nothing recognised)"
+        self.log(f"✓ XML imported: {summary}")
 
     def on_checkout_started(self, hostname):
         self._set_badge(hostname, "PENDING")

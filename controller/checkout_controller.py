@@ -27,8 +27,9 @@ from typing import Any
 logger = logging.getLogger("bento_app")
 
 # ── CONFIRMED PATHS ───────────────────────────────────────────────────────────
+# N: = \\sifsmodtestrep\ModTestRep  (confirmed via `net use`)
 _REGISTRY_PATH      = r"P:\temp\BENTO\bento_testers.json"
-_CRT_EXCEL_DEFAULT  = r"\\sifsmodtestrep\modtestrep\crab\crt_from_sap.xlsx"
+_CRT_EXCEL_DEFAULT  = r"\\sifsmodtestrep\ModTestRep\crab\crt_from_sap.xlsx"
 _DEFAULT_HOT_FOLDER = r"C:\test_program\playground_queue"
 _CHECKOUT_QUEUE     = r"P:\temp\BENTO\CHECKOUT_QUEUE"
 
@@ -124,7 +125,7 @@ class CheckoutController(object):
     def load_from_crt_excel(self, cfgpn="", excel_path=""):
         r"""
         Read CRT Excel and return structured data for the grid.
-        Confirmed path: \\sifsmodtestrep\modtestrep\crab\crt_from_sap.xlsx
+        Confirmed path: \\sifsmodtestrep\ModTestRep\crab\crt_from_sap.xlsx
         Column names from crt_excel_template.json.
         """
         import pandas as pd
@@ -225,6 +226,42 @@ class CheckoutController(object):
 
         threading.Thread(
             target=_run, daemon=True, name="bento-crt-load"
+        ).start()
+
+    def load_from_xml(self, xml_path: str):
+        """
+        Parse an existing SLATE Profile XML and push autofill values to the tab.
+
+        Runs in a background thread so the UI stays responsive.
+        Calls checkout_tab.on_xml_imported(data) on the main thread when done.
+        """
+        def _run():
+            try:
+                from model.orchestrators.checkout_orchestrator import parse_slate_xml
+                data = parse_slate_xml(xml_path)
+                logger.info(
+                    "load_from_xml: parsed "
+                    + xml_path
+                    + " -> " + str(data)
+                )
+                if self._view:
+                    self._view.root.after(
+                        0,
+                        lambda: self._view.checkout_tab.on_xml_imported(data)
+                    )
+            except FileNotFoundError as e:
+                logger.warning("load_from_xml: " + str(e))
+                if self._view:
+                    self._view.context.log("[WARN] XML not found: " + str(e))
+            except Exception as e:
+                logger.error("load_from_xml: " + str(e))
+                if self._view:
+                    self._view.context.log(
+                        "[FAIL] XML import error: " + str(e)
+                    )
+
+        threading.Thread(
+            target=_run, daemon=True, name="bento-xml-import"
         ).start()
 
     def autofill_from_cat_db(self, cfgpn):

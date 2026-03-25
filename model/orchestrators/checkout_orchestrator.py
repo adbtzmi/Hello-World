@@ -5,7 +5,7 @@ model/orchestrators/checkout_orchestrator.py
 BENTO Checkout Orchestrator — Phase 2 Auto Start Checkout
 
 Runs on the LOCAL PC. Full flow:
-1. Read CRT Excel from \\sifsmodtestrep\modtestrep\crab\crt_from_sap.xlsx
+1. Read CRT Excel from \\sifsmodtestrep\ModTestRep\crab\crt_from_sap.xlsx
 2. Generate SLATE XML (correct Profile schema with AutoStart=True)
 3. Drop XML to P:\temp\BENTO\CHECKOUT_QUEUE\   <- FIXED: was HOT_DROP
 4. Poll .checkout_status sidecar (mirrors wait_for_build() exactly)
@@ -34,10 +34,10 @@ from datetime import datetime
 from typing import Optional, Dict, List
 
 # ── CONFIRMED PATHS ───────────────────────────────────────────────────────────
-# N: drive = \\sifsmodtestrep\modtestrep  (confirmed from screenshot)
-CAT_CRAB_FOLDER         = r"\\sifsmodtestrep\modtestrep\crab"
-CRT_EXCEL_PATH          = r"\\sifsmodtestrep\modtestrep\crab\crt_from_sap.xlsx"
-CRT_DB_PATH             = r"\\sifsmodtestrep\modtestrep\crab\closed_crt_jira_info.db"
+# N: = \\sifsmodtestrep\ModTestRep  (confirmed via `net use` output)
+CAT_CRAB_FOLDER         = r"\\sifsmodtestrep\ModTestRep\crab"
+CRT_EXCEL_PATH          = r"\\sifsmodtestrep\ModTestRep\crab\crt_from_sap.xlsx"
+CRT_DB_PATH             = r"\\sifsmodtestrep\ModTestRep\crab\closed_crt_jira_info.db"
 
 # ── P: drive — BENTO shared folders ──────────────────────────────────────────
 # XML is staged here first, then checkout_watcher.py picks it up [24]
@@ -132,8 +132,8 @@ def load_dut_info_from_crt(
     log_callback        = None,
 ) -> list:
     r"""
-    Read CRT Excel from \\sifsmodtestrep\modtestrep\crab\crt_from_sap.xlsx
-    Confirmed location from Windows Explorer screenshot (N: drive).
+    Read CRT Excel from \\sifsmodtestrep\ModTestRep\crab\crt_from_sap.xlsx
+    Confirmed location from `net use` output (N: = \\sifsmodtestrep\ModTestRep).
 
     Mirrors CatDB.update_db_with_crt_excel() in CAT.py [33] exactly:
         df = pd.read_excel(filepath, engine="openpyxl", dtype=str)
@@ -240,8 +240,10 @@ def generate_slate_xml(
         logger = _get_logger()
 
     timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Filename includes hostname + label for tester-specific routing [8]
-    parts      = [p for p in [jira_key, hostname, timestamp, label] if p]
+    # Filename includes hostname + env + label for tester-specific routing [8]
+    # Both hostname AND env tag are required so checkout_watcher.py ENV filter matches.
+    # e.g. checkout_TSESSD-14270_IBIR-0383_ABIT_20260325_094809_passing.xml
+    parts      = [p for p in [jira_key, hostname, env.upper() if env else None, timestamp, label] if p]
     xml_name   = "checkout_" + "_".join(parts) + ".xml"
     out_dir    = output_dir or CHECKOUT_QUEUE_FOLDER
     recipe     = RECIPE_MAP.get(env.upper(),
@@ -317,6 +319,90 @@ def generate_slate_xml(
         _log(logger, f"✗ XML generation failed: {e}",
              log_callback, "error")
         return None
+
+
+# ── PARSE EXISTING SLATE XML ─────────────────────────────────────────────────
+def parse_slate_xml(xml_path: str) -> dict:
+    """
+    Parse an existing SLATE Profile XML and return a dict of autofill values.
+
+    Reads:
+      <TestJobArchive>   -> tgz_path
+      <RecipeFile>       -> env (reverse-mapped via RECIPE_MAP)
+      <TempTraveler>/<Attribute Section="MAM" Name="STEP"> -> env
+      <MaterialInfo>/<Attribute Lot="..." MID="..." DutLocation="...">
+                         -> lot_prefix (strip trailing digits), mid,
+                            dut_locations list
+      <AutoStart>        -> (informational)
+
+    Returns dict with keys:
+      tgz_path, env, mid, lot_prefix, dut_locations (list[str]), dut_slots (int)
+    Raises FileNotFoundError / ET.ParseError on bad input.
+    """
+    if not os.path.exists(xml_path):
+        raise FileNotFoundError(f"XML not found: {xml_path}")
+
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+
+    result: dict = {
+        "tgz_path":      "",
+        "env":           "",
+        "mid":           "",
+        "lot_prefix":    "",
+        "dut_locations": [],
+        "dut_slots":     1,
+    }
+
+    # TestJobArchive
+    tja = root.find("TestJobArchive")
+    if tja is not None and tja.text:
+        result["tgz_path"] = tja.text.strip()
+
+    # RecipeFile -> reverse-map to ENV
+    rf = root.find("RecipeFile")
+    if rf is not None and rf.text:
+        recipe_text = rf.text.strip().upper()
+        for env_key, recipe_val in RECIPE_MAP.items():
+            if recipe_val.upper() in recipe_text or env_key in recipe_text:
+                result["env"] = env_key
+                break
+
+    # TempTraveler -> MAM/STEP overrides env if present
+    tt = root.find("TempTraveler")
+    if tt is not None:
+        for attr in tt.findall("Attribute"):
+            if (attr.get("Section", "").upper() == "MAM"
+                    and attr.get("Name", "").upper() == "STEP"):
+                val = attr.get("Value", "").strip().upper()
+                if val in ("ABIT", "SFN2", "CNFG"):
+                    result["env"] = val
+                break
+
+    # MaterialInfo -> mid, lot_prefix, dut_locations
+    import re as _re
+    mat = root.find("MaterialInfo")
+    if mat is not None:
+        locs = []
+        for attr in mat.findall("Attribute"):
+            mid_val = attr.get("MID", "").strip()
+            loc_val = attr.get("DutLocation", "").strip()
+            lot_val = attr.get("Lot", "").strip()
+
+            if mid_val and not result["mid"]:
+                result["mid"] = mid_val
+
+            if loc_val:
+                locs.append(loc_val)
+
+            if lot_val and not result["lot_prefix"]:
+                m = _re.match(r"^(.*?)(\d+)$", lot_val)
+                result["lot_prefix"] = m.group(1) if m else lot_val
+
+        result["dut_locations"] = locs
+        result["dut_slots"]     = len(locs) if locs else 1
+
+    return result
 
 
 # ── STATUS FILE HELPERS ───────────────────────────────────────────────────────
