@@ -537,7 +537,7 @@ class CheckoutController(object):
         try:
             from model.orchestrators.checkout_orchestrator import run_checkout
 
-            webhook_url    = self._config.get(
+            webhook_url    = params.get("webhook_url", "") or self._config.get(
                 "notifications", {}
             ).get("teams_webhook_url", "")
             log_callback   = self._make_log_callback(hostname)

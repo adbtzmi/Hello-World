@@ -93,7 +93,7 @@ class CheckoutTab(BaseTab):
                 r'\\sifsmodtestrep\ModTestRep\crab\crt_from_sap.xlsx'
             ))
         _sv('checkout_webhook_url',                          # Fix #4: Teams webhook
-            ctx.config.get('teams', {}).get('webhook_url', ''))
+            ctx.config.get('notifications', {}).get('teams_webhook_url', ''))
         _iv('checkout_dut_slots', 1)
         _iv('checkout_timeout_min', 60)
         _bv('checkout_tc_passing', True)
