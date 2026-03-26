@@ -107,38 +107,34 @@ class CheckoutTab(BaseTab):
     def _build_ui(self):
         self.columnconfigure(0, weight=1)
 
-        # Common paddings for internal elements
-        P_PADX = 5
-        P_PADY = 3
-
         # ── Section 1: CRT Excel File Selection ──────────────────────────
-        excel_frame = ttk.LabelFrame(self, text="CRT Excel File Selection", padding="10")
-        excel_frame.grid(row=0, column=0, sticky="we", padx=10, pady=(10, 5))
+        excel_frame = ttk.LabelFrame(self, text="CRT Excel File Selection", padding="5")
+        excel_frame.grid(row=0, column=0, sticky="we", pady=2)
         excel_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(excel_frame, text="Excel File:").grid(row=0, column=0, sticky=tk.W, padx=(0, P_PADX), pady=P_PADY)
+        ttk.Label(excel_frame, text="Excel File:").grid(row=0, column=0, sticky=tk.W, padx=(0, 6))
         ttk.Entry(excel_frame,
                   textvariable=self.context.get_var('checkout_excel_path'),
-                  width=70).grid(row=0, column=1, sticky="we", pady=P_PADY)
+                  width=70).grid(row=0, column=1, sticky="we")
         ttk.Button(excel_frame, text="Browse Excel File",
-                   command=self._browse_excel).grid(row=0, column=2, padx=(P_PADX, 0), pady=P_PADY)
+                   command=self._browse_excel).grid(row=0, column=2, padx=(6, 0))
 
         ttk.Label(excel_frame, text="Filter CFGPN:").grid(
-            row=1, column=0, sticky=tk.W, padx=(0, P_PADX), pady=P_PADY)
+            row=1, column=0, sticky=tk.W, padx=(0, 6), pady=(2, 0))
         ttk.Entry(excel_frame,
                   textvariable=self.context.get_var('checkout_cfgpn_filter'),
-                  width=20).grid(row=1, column=1, sticky=tk.W, pady=P_PADY)
+                  width=20).grid(row=1, column=1, sticky=tk.W, pady=(2, 0))
         ttk.Button(excel_frame, text="Load CRT Data",
-                   command=self._load_crt_data).grid(row=1, column=2, padx=(P_PADX, 0), pady=P_PADY)
+                   command=self._load_crt_data).grid(row=1, column=2, padx=(6, 0), pady=(2, 0))
 
         # ── Section 2: CRT Data Preview Grid ─────────────────────────────
-        grid_frame = ttk.LabelFrame(self, text="CRT Data Preview", padding="10")
-        grid_frame.grid(row=1, column=0, sticky="we", padx=10, pady=5)
+        grid_frame = ttk.LabelFrame(self, text="CRT Data Preview", padding="4")
+        grid_frame.grid(row=1, column=0, sticky="we", pady=2)
         grid_frame.columnconfigure(0, weight=1)
 
         cols = [c for c, _ in self._CRT_GRID_COLUMNS]
         self._grid = ttk.Treeview(grid_frame, columns=cols, show="headings",
-                                   height=3, selectmode="browse")
+                                   height=2, selectmode="browse")
         for col_name, col_width in self._CRT_GRID_COLUMNS:
             self._grid.heading(col_name, text=col_name)
             self._grid.column(col_name, width=col_width, minwidth=40, stretch=False)
@@ -153,105 +149,122 @@ class CheckoutTab(BaseTab):
         self._grid.bind("<<TreeviewSelect>>", self._on_grid_row_select)
 
         grid_status_frame = ttk.Frame(self)
-        grid_status_frame.grid(row=2, column=0, sticky="we", padx=10, pady=(0, 5))
+        grid_status_frame.grid(row=2, column=0, sticky="we", pady=(0, 2))
         self._grid_selection_label = ttk.Label(
             grid_status_frame,
             text="No selection — click a row to auto-fill DUT fields",
-            foreground="#0078d4", font=("Segoe UI", 9, "bold"))
+            foreground="#cc6600", font=("Segoe UI", 8))
         self._grid_selection_label.pack(side=tk.LEFT)
         self._grid_row_count_label = ttk.Label(grid_status_frame, text="", foreground="#555555", font=("Segoe UI", 8))
         self._grid_row_count_label.pack(side=tk.RIGHT)
 
         # ── Section 3: DUT Identity ───────────────────────────────────────
-        dut_frame = ttk.LabelFrame(self, text="DUT Identity", padding="10")
-        dut_frame.grid(row=3, column=0, sticky="we", padx=10, pady=5)
+        dut_frame = ttk.LabelFrame(self, text="DUT Identity", padding="5")
+        dut_frame.grid(row=3, column=0, sticky="we", pady=2)
         dut_frame.columnconfigure(1, weight=1)
         dut_frame.columnconfigure(3, weight=1)
-        dut_frame.columnconfigure(5, weight=1)
-        dut_frame.columnconfigure(7, weight=1)
 
-        # Row 0: JIRA Key, MID, CFGPN, FW Wave
-        ttk.Label(dut_frame, text="JIRA:").grid(row=0, column=0, sticky=tk.W, pady=P_PADY, padx=(0, P_PADX))
+        # Row 0: JIRA Key, MID, CFGPN, FW Wave, ENV
+        ttk.Label(dut_frame, text="JIRA:").grid(row=0, column=0, sticky=tk.W, pady=0)
         ttk.Entry(dut_frame, textvariable=self.context.get_var('issue_var'),
-                  width=15).grid(row=0, column=1, sticky="we", pady=P_PADY, padx=(0, 15))
-        ttk.Label(dut_frame, text="MID:").grid(row=0, column=2, sticky=tk.W, pady=P_PADY, padx=(0, P_PADX))
+                  width=15).grid(row=0, column=1, sticky=tk.W, pady=0)
+        ttk.Label(dut_frame, text="MID:").grid(row=0, column=2, sticky=tk.W, pady=0, padx=(5, 0))
         ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_mid'),
-                  width=25).grid(row=0, column=3, sticky="we", pady=P_PADY, padx=(0, 15))
-        ttk.Label(dut_frame, text="CFGPN:").grid(row=0, column=4, sticky=tk.W, pady=P_PADY, padx=(0, P_PADX))
+                  width=15).grid(row=0, column=3, sticky="we", pady=0)
+        ttk.Label(dut_frame, text="CFGPN:").grid(row=0, column=4, sticky=tk.W, pady=0, padx=(5, 0))
         ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_cfgpn'),
-                  width=15).grid(row=0, column=5, sticky="we", pady=P_PADY, padx=(0, 15))
-        ttk.Label(dut_frame, text="Wave:").grid(row=0, column=6, sticky=tk.W, pady=P_PADY, padx=(0, P_PADX))
+                  width=12).grid(row=0, column=5, sticky="we", pady=0)
+        ttk.Label(dut_frame, text="Wave:").grid(row=0, column=6, sticky=tk.W, pady=0, padx=(5, 0))
         ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_fw_ver'),
-                  width=10).grid(row=0, column=7, sticky="we", pady=P_PADY)
+                  width=8).grid(row=0, column=7, sticky="we", pady=0)
+        ttk.Label(dut_frame, text="ENV:").grid(row=0, column=8, sticky=tk.W, pady=0, padx=(5, 0))
+        ttk.Combobox(dut_frame,                              # Fix #2: ENV combobox
+                     textvariable=self.context.get_var('checkout_env'),
+                     values=["ABIT", "SFN2", "CNFG"],
+                     state="readonly", width=6
+                     ).grid(row=0, column=9, sticky=tk.W, pady=0)
 
         # Row 1: Slots, Lot Prefix, Locations
-        ttk.Label(dut_frame, text="Slots:").grid(row=1, column=0, sticky=tk.W, pady=P_PADY, padx=(0, P_PADX))
+        ttk.Label(dut_frame, text="Slots:").grid(row=1, column=0, sticky=tk.W, pady=0)
         ttk.Spinbox(dut_frame, textvariable=self.context.get_var('checkout_dut_slots'),
-                    from_=1, to=32, width=6).grid(row=1, column=1, sticky=tk.W, pady=P_PADY)
-        ttk.Label(dut_frame, text="Lot:").grid(row=1, column=2, sticky=tk.W, pady=P_PADY, padx=(0, P_PADX))
+                    from_=1, to=32, width=4).grid(row=1, column=1, sticky=tk.W, pady=0)
+        ttk.Label(dut_frame, text="Lot:").grid(row=1, column=2, sticky=tk.W, pady=0, padx=(5, 0))
         ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_lot_prefix'),
-                  width=15).grid(row=1, column=3, sticky="we", pady=P_PADY, padx=(0, 15))
-        ttk.Label(dut_frame, text="Loc:").grid(row=1, column=4, sticky=tk.W, pady=P_PADY, padx=(0, P_PADX))
+                  width=12).grid(row=1, column=3, sticky=tk.W, pady=0)
+        ttk.Label(dut_frame, text="Loc:").grid(row=1, column=4, sticky=tk.W, pady=0, padx=(5, 0))
         ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_dut_locations'),
-                  width=35).grid(row=1, column=5, columnspan=3, sticky="we", pady=P_PADY)
+                  width=35).grid(row=1, column=5, columnspan=3, sticky="we", pady=0)
 
-        # Row 2: TGZ Source
-        ttk.Label(dut_frame, text="TGZ:").grid(row=2, column=0, sticky=tk.W, pady=P_PADY, padx=(0, P_PADX))
+        # Row 2: Hint labels for Lot prefix and DUT Locations
+        ttk.Label(dut_frame, text="").grid(row=2, column=0, sticky=tk.W)          # spacer under "Slots:"
+        ttk.Label(dut_frame, text="").grid(row=2, column=1, sticky=tk.W)          # spacer under slots spinbox
+        ttk.Label(dut_frame, text="").grid(row=2, column=2, sticky=tk.W)          # spacer under "Lot:"
+        ttk.Label(dut_frame,
+                  text="e.g. JAANTJB → JAANTJB001…",
+                  foreground="#888888", font=("Segoe UI", 7)
+                  ).grid(row=2, column=3, sticky=tk.W, pady=(0, 2))
+        ttk.Label(dut_frame, text="").grid(row=2, column=4, sticky=tk.W)          # spacer under "Loc:"
+        ttk.Label(dut_frame,
+                  text="Space-separated slot coords, e.g.  0,0  0,1  1,0",
+                  foreground="#888888", font=("Segoe UI", 7)
+                  ).grid(row=2, column=5, columnspan=3, sticky=tk.W, pady=(0, 2))
+
+        # Row 3: TGZ Source
+        ttk.Label(dut_frame, text="TGZ:").grid(row=3, column=0, sticky=tk.W, pady=0)
         ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_tgz_path'),
-                  width=60).grid(row=2, column=1, columnspan=6, sticky="we", pady=P_PADY)
+                  width=60).grid(row=3, column=1, columnspan=6, sticky="we", pady=0)
         ttk.Button(dut_frame, text="…", width=3,
-                   command=self._browse_tgz).grid(row=2, column=7, sticky=tk.W, padx=(5, 0), pady=P_PADY)
+                   command=self._browse_tgz).grid(row=3, column=7, padx=(2, 0), pady=0)
 
         # Row 4: Test Cases (PASS/FAIL)
         test_case_frame = ttk.Frame(dut_frame)
-        test_case_frame.grid(row=3, column=0, columnspan=8, sticky="we", pady=P_PADY)
-        ttk.Label(test_case_frame, text="TC:").pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Checkbutton(test_case_frame, text="PASS", variable=self.context.get_var('checkout_tc_passing')).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Entry(test_case_frame, textvariable=self.context.get_var('checkout_tc_passing_label'), width=15).pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Checkbutton(test_case_frame, text="FAIL", variable=self.context.get_var('checkout_tc_force_fail')).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Entry(test_case_frame, textvariable=self.context.get_var('checkout_tc_fail_label'), width=15).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Entry(test_case_frame, textvariable=self.context.get_var('checkout_tc_fail_desc'), width=30).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 0))
+        test_case_frame.grid(row=4, column=0, columnspan=8, sticky="we", pady=0)
+        ttk.Label(test_case_frame, text="TC:").pack(side=tk.LEFT)
+        ttk.Checkbutton(test_case_frame, text="PASS", variable=self.context.get_var('checkout_tc_passing')).pack(side=tk.LEFT, padx=2)
+        ttk.Entry(test_case_frame, textvariable=self.context.get_var('checkout_tc_passing_label'), width=10).pack(side=tk.LEFT, padx=2)
+        ttk.Checkbutton(test_case_frame, text="FAIL", variable=self.context.get_var('checkout_tc_force_fail')).pack(side=tk.LEFT, padx=5)
+        ttk.Entry(test_case_frame, textvariable=self.context.get_var('checkout_tc_fail_label'), width=10).pack(side=tk.LEFT, padx=2)
+        ttk.Entry(test_case_frame, textvariable=self.context.get_var('checkout_tc_fail_desc'), width=30).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
 
-        # Row 4: Hot folder
-        ttk.Label(dut_frame, text="Hot Folder:").grid(row=4, column=0, sticky=tk.W, pady=P_PADY, padx=(0, P_PADX))
+        # Row 5: Hot folder
+        ttk.Label(dut_frame, text="Hot Folder:").grid(row=5, column=0, sticky=tk.W, pady=0)
         ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_hot_folder'),
-                  width=70).grid(row=4, column=1, columnspan=7, sticky="we", pady=P_PADY)
+                  width=70).grid(row=5, column=1, columnspan=7, sticky="we", pady=0)
 
         # ── Section 4: Side-by-Side Detection & Testers ──────────────────
         side_frame = ttk.Frame(self)
-        side_frame.grid(row=4, column=0, sticky="we", padx=10, pady=5)
+        side_frame.grid(row=4, column=0, sticky="we", pady=1)
         side_frame.columnconfigure(0, weight=1)
         side_frame.columnconfigure(1, weight=1)
 
-        detect_frame = ttk.LabelFrame(side_frame, text="SLATE Detection", padding="10")
-        detect_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        detect_frame = ttk.LabelFrame(side_frame, text="SLATE Detection", padding="2")
+        detect_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 2))
 
-        ttk.Label(detect_frame, text="Method:").grid(row=0, column=0, sticky=tk.W, pady=P_PADY)
+        ttk.Label(detect_frame, text="Method:").grid(row=0, column=0, sticky=tk.W)
         ttk.Combobox(detect_frame,
                      textvariable=self.context.get_var('checkout_detect_method'),
                      values=["AUTO", "LOG", "FOLDER", "CPU", "TIMEOUT"],
-                     state="readonly", width=12).grid(row=0, column=1, padx=10, pady=P_PADY, sticky=tk.W)
+                     state="readonly", width=8).grid(row=0, column=1, padx=2, sticky=tk.W)
 
-        ttk.Label(detect_frame, text="Time (m):").grid(row=1, column=0, sticky=tk.W, pady=P_PADY)
+        ttk.Label(detect_frame, text="Time:").grid(row=1, column=0, sticky=tk.W)
         ttk.Spinbox(detect_frame,
                     textvariable=self.context.get_var('checkout_timeout_min'),
-                    from_=5, to=480, width=6).grid(row=1, column=1, padx=10, pady=P_PADY, sticky=tk.W)
+                    from_=5, to=480, width=5).grid(row=1, column=1, sticky=tk.W)
 
-        ttk.Checkbutton(detect_frame, text="Notify Teams",
+        ttk.Checkbutton(detect_frame, text="Teams",
                         variable=self.context.get_var('checkout_notify_teams')).grid(
-            row=2, column=0, columnspan=2, pady=(10, 0), sticky=tk.W)
+            row=1, column=2, padx=2, sticky=tk.W)
 
-        tester_outer = ttk.LabelFrame(side_frame, text="Tester Selection", padding="10")
-        tester_outer.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
-        
-        tester_actions = ttk.Frame(tester_outer)
-        tester_actions.pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(tester_actions, text="↻ Refresh", width=12,
-                   command=self._refresh_testers).pack(side=tk.RIGHT)
-        ttk.Button(tester_actions, text="Select All", width=12,
-                   command=self._select_all).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(tester_actions, text="Deselect All", width=12,
-                   command=self._deselect_all).pack(side=tk.LEFT)
+        # Fix #4: Webhook URL field (shown when Teams notify is on)
+        ttk.Label(detect_frame, text="Webhook:").grid(row=2, column=0, sticky=tk.W, pady=(2, 0))
+        ttk.Entry(detect_frame,
+                  textvariable=self.context.get_var('checkout_webhook_url'),
+                  width=40).grid(row=2, column=1, columnspan=3, sticky="we", pady=(2, 0))
+
+        tester_outer = ttk.LabelFrame(side_frame, text="Tester Selection", padding="2")
+        tester_outer.grid(row=0, column=1, sticky="nsew", padx=(2, 0))
+        ttk.Button(tester_outer, text="↻ Refresh", width=10,
+                   command=self._refresh_testers).pack(side=tk.TOP, anchor=tk.E)
         
         self._tester_container = ttk.Frame(tester_outer)
         self._tester_container.pack(fill=tk.BOTH, expand=True)
@@ -261,21 +274,34 @@ class CheckoutTab(BaseTab):
 
         # ── Section 6: Action Buttons ─────────────────────────────────────
         btn_frame = ttk.Frame(self)
-        btn_frame.grid(row=5, column=0, pady=10)
+        btn_frame.grid(row=5, column=0, pady=1)
 
         self.checkout_btn = ttk.Button(btn_frame, text="▶ Start Checkout",
                                        style='Accent.TButton',
                                        command=self._start_checkout)
-        self.checkout_btn.pack(side=tk.LEFT, padx=10)
+        self.checkout_btn.pack(side=tk.LEFT, padx=3)
         self.context.lockable_buttons.append(self.checkout_btn)
-        ttk.Button(btn_frame, text="Generate XML Only", width=20,
-                   command=self._generate_xml_only).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="Generate XML Only", width=18,
+                   command=self._generate_xml_only).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_frame, text="📥 Import XML", width=14,
+                   command=self._import_xml).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_frame, text="Select All", width=10,
+                   command=self._select_all).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_frame, text="Deselect All", width=12,
+                   command=self._deselect_all).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_frame, text="📂 Queue Folder", width=15,   # Fix #7
+                   command=self._open_queue_folder).pack(side=tk.LEFT, padx=3)
 
         # ── Section 7: Results ────────────────────────────────────────────
-        results_frame = ttk.LabelFrame(self, text="Checkout Results", padding="10")
-        results_frame.grid(row=6, column=0, sticky="nsew", padx=10, pady=(5, 10))
-        self.rowconfigure(6, weight=1)
-        self.results_text = tk.Text(results_frame, height=5, state=tk.DISABLED,
+        results_frame = ttk.LabelFrame(self, text="Checkout Results", padding="2")
+        results_frame.grid(row=6, column=0, sticky="we", pady=1)
+
+        results_btn_bar = ttk.Frame(results_frame)                # Fix #6: Clear button bar
+        results_btn_bar.pack(side=tk.TOP, fill=tk.X)
+        ttk.Button(results_btn_bar, text="Clear", width=6,
+                   command=self._clear_results).pack(side=tk.RIGHT)
+
+        self.results_text = tk.Text(results_frame, height=3, state=tk.DISABLED,
                                     font=("Consolas", 9), wrap=tk.WORD)
         results_scroll = ttk.Scrollbar(results_frame, orient=tk.VERTICAL,
                                         command=self.results_text.yview)
@@ -300,7 +326,7 @@ class CheckoutTab(BaseTab):
         if not testers:
             ttk.Label(self._tester_frame, text="No testers registered.",
                       foreground="orange").grid(row=self._tester_row, column=0,
-                                                columnspan=5, sticky=tk.W, pady=5)
+                                                columnspan=5, sticky=tk.W)
             return
 
         for i, (hostname, env) in enumerate(testers):
@@ -308,15 +334,15 @@ class CheckoutTab(BaseTab):
             self._tester_vars[hostname] = var
             ttk.Checkbutton(self._tester_frame, text=f"{hostname}  ({env})",
                             variable=var).grid(row=self._tester_row + i, column=0,
-                                               sticky=tk.W, padx=(5, 20), pady=4)
+                                               sticky=tk.W, padx=(0, 20))
             badge = ttk.Label(self._tester_frame, text="IDLE", width=14,
                               anchor=tk.CENTER, relief=tk.FLAT,
                               foreground="white", background="#888888")
-            badge.grid(row=self._tester_row + i, column=1, padx=5, pady=4)
+            badge.grid(row=self._tester_row + i, column=1, padx=5)
             self._badge_labels[hostname] = badge
             phase_lbl = ttk.Label(self._tester_frame, text="",
                                   foreground="#555555", font=("Segoe UI", 8))
-            phase_lbl.grid(row=self._tester_row + i, column=2, sticky=tk.W, padx=5, pady=4)
+            phase_lbl.grid(row=self._tester_row + i, column=2, sticky=tk.W, padx=5)
             self._phase_labels[hostname] = phase_lbl
 
     # ──────────────────────────────────────────────────────────────────────
