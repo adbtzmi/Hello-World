@@ -61,6 +61,7 @@ class CheckoutController(object):
         self._config        = config
         self._view: Any     = None
         self._running       = False
+        self._cancel_event  = threading.Event()
         logger.info("CheckoutController initialised.")
 
     def set_view(self, view):
@@ -120,6 +121,14 @@ class CheckoutController(object):
 
     def is_running(self):
         return self._running
+
+    def stop_checkout(self):
+        """Signal all running checkout threads to cancel."""
+        if self._running:
+            logger.warning("CheckoutController: stopping checkout...")
+            if self._view:
+                self._view.context.log("⚠ Stop signal sent to checkout orchestrator...")
+            self._cancel_event.set()
 
     # ── CRT EXCEL READER ──────────────────────────────────────────────────────
     def load_from_crt_excel(self, cfgpn="", excel_path=""):
@@ -455,6 +464,7 @@ class CheckoutController(object):
             return
 
         self._running = True
+        self._cancel_event.clear()
         threading.Thread(
             target=self._checkout_all,
             args=(params, targets),
@@ -552,6 +562,7 @@ class CheckoutController(object):
                 webhook_url     = webhook_url,
                 log_callback    = log_callback,
                 phase_callback  = phase_callback,
+                cancel_event    = self._cancel_event,
             )
             return result
 

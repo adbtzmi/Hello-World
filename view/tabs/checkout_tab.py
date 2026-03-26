@@ -281,6 +281,12 @@ class CheckoutTab(BaseTab):
                                        command=self._start_checkout)
         self.checkout_btn.pack(side=tk.LEFT, padx=3)
         self.context.lockable_buttons.append(self.checkout_btn)
+        
+        self.stop_btn = ttk.Button(btn_frame, text="⏹ Stop Checkout",
+                                   command=self._stop_checkout)
+        self.stop_btn.pack(side=tk.LEFT, padx=3)
+        self.stop_btn.state(["disabled"])  # Initially disabled
+        
         ttk.Button(btn_frame, text="Generate XML Only", width=18,
                    command=self._generate_xml_only).pack(side=tk.LEFT, padx=3)
         ttk.Button(btn_frame, text="📥 Import XML", width=14,
@@ -432,7 +438,13 @@ class CheckoutTab(BaseTab):
         if params is None:
             return
         self.lock_gui()
+        self.stop_btn.state(["!disabled"])  # Enable Stop button
         self.context.controller.checkout_controller.start_checkout(params)
+
+    def _stop_checkout(self):
+        """Signal the controller to stop the running checkout."""
+        self.context.controller.checkout_controller.stop_checkout()
+        self.stop_btn.state(["disabled"])
 
     def _collect_params(self):
         """Gather and validate all form inputs. Returns params dict or None."""
@@ -636,4 +648,5 @@ class CheckoutTab(BaseTab):
         running = [lbl for lbl in self._badge_labels.values()
                    if lbl.cget("text") in ("PENDING", "RUNNING", "COLLECTING")]
         if not running:
+            self.stop_btn.state(["disabled"])
             self.unlock_gui()

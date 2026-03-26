@@ -483,6 +483,7 @@ def wait_for_checkout(
     log_callback     = None,
     phase_callback   = None,
     timeout_seconds: int = CHECKOUT_TIMEOUT_SECONDS,
+    cancel_event:    Optional[threading.Event] = None,
 ) -> Dict:
     """
     Poll .checkout_status sidecar every 30s.
@@ -498,6 +499,15 @@ def wait_for_checkout(
            log_callback, phase_callback)
 
     while time.time() < deadline:
+        if cancel_event and cancel_event.is_set():
+            elapsed = int(time.time() - start)
+            _log(logger, f"⚠ Checkout CANCELLED by user after {elapsed}s", log_callback, "warning")
+            return {
+                "status":  "cancelled",
+                "detail":  "User cancelled checkout",
+                "elapsed": elapsed
+            }
+
         data  = read_checkout_status(xml_path)
         state = data.get("status", "")
 
@@ -715,6 +725,7 @@ def run_checkout(
     webhook_url:     str   = "",
     log_callback           = None,
     phase_callback         = None,
+    cancel_event:    Optional[threading.Event] = None,
 ) -> Dict:
     """
     High-level entry point — Start Checkout full flow.
@@ -839,11 +850,15 @@ def run_checkout(
             log_callback    = log_callback,
             phase_callback  = phase_callback,
             timeout_seconds = timeout_seconds,
+            cancel_event    = cancel_event,
         )
         tc_result["label"]       = label
         tc_result["type"]        = tc_type
         tc_result["description"] = tc_desc
         all_tc_results.append(tc_result)
+        
+        if cancel_event and cancel_event.is_set():
+            break
 
         icon = "✓" if tc_result["status"] == "success" else "✗"
         _log(logger,
