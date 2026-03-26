@@ -193,31 +193,31 @@ class ImplementationTab(BaseTab):
 
         # 2. Watcher Health Monitor (Middle)
         self.health_wrapper = ttk.LabelFrame(f, text="🔍 Watcher Health Monitor", padding="6")
-        self.health_wrapper.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        self.health_wrapper.pack(fill=tk.X, padx=10, pady=5)
         
         row_frame1 = ttk.Frame(self.health_wrapper)
-        row_frame1.pack(fill=tk.X, pady=1)
+        row_frame1.pack(fill=tk.X, pady=2)
         ttk.Label(row_frame1, text="📂 RAW_ZIP Folder:", width=28, anchor="w", font=("Arial", 9, "bold")).pack(side=tk.LEFT)
         self.health_raw_zip_lbl = ttk.Label(row_frame1, text="Checking...", foreground="gray")
         self.health_raw_zip_lbl.pack(side=tk.LEFT)
 
         row_frame2 = ttk.Frame(self.health_wrapper)
-        row_frame2.pack(fill=tk.X, pady=1)
+        row_frame2.pack(fill=tk.X, pady=2)
         ttk.Label(row_frame2, text="📂 RELEASE_TGZ Folder:", width=28, anchor="w", font=("Arial", 9, "bold")).pack(side=tk.LEFT)
         self.health_release_lbl = ttk.Label(row_frame2, text="Checking...", foreground="gray")
         self.health_release_lbl.pack(side=tk.LEFT)
 
         row_frame3 = ttk.Frame(self.health_wrapper)
-        row_frame3.pack(fill=tk.X, pady=1)
+        row_frame3.pack(fill=tk.X, pady=2)
         ttk.Label(row_frame3, text="🤖 Watcher Process:", width=28, anchor="w", font=("Arial", 9, "bold")).pack(side=tk.LEFT)
         self.health_watcher_lbl = ttk.Label(row_frame3, text="Checking...", foreground="gray")
         self.health_watcher_lbl.pack(side=tk.LEFT)
 
         recent_frame = ttk.Frame(self.health_wrapper)
-        recent_frame.pack(fill=tk.X, pady=(2, 1))
+        recent_frame.pack(fill=tk.X, pady=(3, 2))
         ttk.Label(recent_frame, text="📊 Recent Builds:", width=28, anchor="w", font=("Arial", 9, "bold")).pack(side=tk.LEFT, anchor=tk.N)
         
-        self.builds_text = tk.Text(recent_frame, height=3, width=65, bg="white", relief="flat", font=("Segoe UI", 9))
+        self.builds_text = tk.Text(recent_frame, height=6, width=65, bg="white", relief="flat", font=("Segoe UI", 9))
         self.builds_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         self.builds_text.tag_config("success",     foreground="#28a745")
@@ -228,7 +228,7 @@ class ImplementationTab(BaseTab):
         self.builds_text.tag_config("unknown",     foreground="gray")
         self.builds_text.tag_config("default",     foreground="black")
 
-        ttk.Button(self.health_wrapper, text="🔄 Refresh Now", command=self._refresh_health).pack(anchor="e", padx=5, pady=0)
+        ttk.Button(self.health_wrapper, text="🔄 Refresh Now", command=self._refresh_health).pack(anchor="e", padx=5, pady=2)
         self._refresh_health()
 
         # 3. Compile History Section (Bottom - Fills remainder)
@@ -263,6 +263,9 @@ class ImplementationTab(BaseTab):
 
         hist_scroll = ttk.Scrollbar(history_wrapper, orient=tk.VERTICAL, command=self._history_tree.yview)
         self._history_tree.configure(yscrollcommand=hist_scroll.set)
+        
+        # Add double-click handler to open the specific folder
+        self._history_tree.bind("<Double-1>", lambda e: self._open_release_folder())
         
         self._history_tree.grid(row=1, column=0, sticky="nsew")
         hist_scroll.grid(row=1, column=1, sticky="ns")
@@ -746,11 +749,59 @@ class ImplementationTab(BaseTab):
 
     def _open_release_folder(self):
         import os
-        repo_dir = self.context.get_var("compile_release_tgz").get().strip()
-        if os.path.isdir(repo_dir):
-            os.startfile(repo_dir)
+        
+        # Get the selected item from the history tree
+        selected_items = self._history_tree.selection()
+        if not selected_items:
+            # If nothing is selected, open the general RELEASE_TGZ folder
+            repo_dir = self.context.get_var("compile_release_tgz").get().strip()
+            if os.path.isdir(repo_dir):
+                os.startfile(repo_dir)
+            else:
+                self.show_error("Error", f"Release folder not found: {repo_dir}")
+            return
+            
+        # Get the selected item's values
+        item_id = selected_items[0]
+        values = self._history_tree.item(item_id, "values")
+        
+        # Extract the tester, env, and output TGZ filename
+        tester = values[2]  # Index 2 is the "Tester" column
+        env = values[3]      # Index 3 is the "ENV" column
+        output_tgz = values[5]  # Index 5 is the "Output TGZ" column
+        
+        # Construct the folder name based on the naming pattern in the screenshot
+        # The pattern appears to be: TESTER_TSESSD-XXXX_ENV
+        jira_key = values[1]  # Index 1 is the "JIRA" column
+        folder_name = f"{tester}_{jira_key}_{env}"
+        
+        # Get the base RELEASE_TGZ directory
+        base_dir = self.context.get_var("compile_release_tgz").get().strip()
+        
+        # Look for a matching folder
+        target_dir = None
+        if os.path.isdir(base_dir):
+            # First try the exact folder name
+            potential_dir = os.path.join(base_dir, folder_name)
+            if os.path.isdir(potential_dir):
+                target_dir = potential_dir
+            else:
+                # Try to find a folder that starts with the tester name
+                for item in os.listdir(base_dir):
+                    item_path = os.path.join(base_dir, item)
+                    if os.path.isdir(item_path) and item.startswith(f"{tester}_"):
+                        if jira_key in item:
+                            target_dir = item_path
+                            break
+        
+        # Open the folder if found, otherwise show an error
+        if target_dir and os.path.isdir(target_dir):
+            os.startfile(target_dir)
         else:
-            self.show_error("Error", f"Release folder not found: {repo_dir}")
+            self.show_error("Folder Not Found", f"Could not find specific folder for {tester} {jira_key} {env}")
+            # Fall back to opening the base directory
+            if os.path.isdir(base_dir):
+                os.startfile(base_dir)
 
     def _refresh_history_from_disk(self):
         """Matches original _load() logic in gui/app.py."""
