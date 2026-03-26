@@ -108,7 +108,7 @@ class CompileController:
     # ──────────────────────────────────────────────────────────────────────
 
     def start_compile(self, source_dir: str, jira_key: str, shared_folder: str,
-                      label: str, hostnames: list):
+                      label: str, hostnames: list, labels: dict | None = None):
         """
         Called by CompileTab._start_compile().
 
@@ -120,8 +120,10 @@ class CompileController:
             source_dir    : local path to TP repo
             jira_key      : e.g. TSESSD-1234
             shared_folder : P:\\temp\\BENTO or override
-            label         : optional TGZ label (passing / force_fail_1 / …)
+            label         : default TGZ label (passing / force_fail_1 / …)
             hostnames     : list of selected hostname strings
+            labels        : optional dict mapping hostname → custom TGZ label
+                            (used for multi-tester compiles with per-tester labels)
         """
         if self._running:
             logger.warning("CompileController: compile already in progress — ignoring request.")
@@ -147,19 +149,21 @@ class CompileController:
         # Fire a background thread that fans out per-tester work
         threading.Thread(
             target=self._compile_all,
-            args=(source_dir, jira_key, raw_zip_folder, release_tgz_folder, label, targets),
+            args=(source_dir, jira_key, raw_zip_folder, release_tgz_folder, label, targets, labels),
             daemon=True,
             name="bento-compile-fanout",
         ).start()
         logger.info(f"CompileController: dispatched compile for {len(targets)} tester(s).")
 
     def _compile_all(self, source_dir, jira_key, raw_zip_folder,
-                     release_tgz_folder, label, targets):
+                     release_tgz_folder, label, targets, labels=None):
         """
         Background thread — fans out one _compile_one() per tester in parallel.
         Called on completion of all testers to reset self._running.
         """
         def _one(hostname, env):
+            # Use per-tester label if provided, otherwise fall back to default
+            tester_label = (labels or {}).get(hostname, label)
             # Notify View: compile starting for this tester
             self._master.on_compile_started(hostname, env)
             result = self._compile_one(
@@ -169,7 +173,7 @@ class CompileController:
                 hostname=hostname,
                 raw_zip_folder=raw_zip_folder,
                 release_tgz_folder=release_tgz_folder,
-                label=label,
+                label=tester_label,
             )
             result["hostname"] = hostname
             result["env"]      = env

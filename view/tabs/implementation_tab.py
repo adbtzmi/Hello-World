@@ -493,6 +493,18 @@ class ImplementationTab(BaseTab):
             hostnames.append(hostname)
         return hostnames
 
+    def _get_selected_testers(self):
+        """Return list of (hostname, env) tuples from the selected listbox items."""
+        selection = self._tester_listbox.curselection()
+        testers = []
+        for idx in selection:
+            item = self._tester_listbox.get(idx)
+            if " (" in item and item.endswith(")"):
+                hostname = item.split(" (")[0].strip()
+                env = item.split(" (")[1][:-1]
+                testers.append((hostname, env))
+        return testers
+
     def _start_compile(self):
         issue_key = self.context.get_var("issue_var").get().strip().upper()
         # Original reads source_dir from impl_repo_var
@@ -500,6 +512,7 @@ class ImplementationTab(BaseTab):
         shared_folder = self.context.get_var("compile_raw_zip").get().strip().replace("\\RAW_ZIP", "") # Hack to get parent
         label = self.context.get_var("tgz_label_var").get().strip()
         hostnames = self._get_selected_hostnames()
+        testers = self._get_selected_testers()
 
         if not source_dir:
             self.show_error("Input Error", "Select a local repo path (Implementation sub-tab).")
@@ -516,17 +529,75 @@ class ImplementationTab(BaseTab):
             self.show_error("Error", "CompileController is not initialised.")
             return
 
-        self.lock_gui()
-        self.compile_status_var.set("Running...")
-        self.log(f"[Compile] Starting compile for {issue_key} on {len(hostnames)} tester(s)…")
+        if len(testers) > 1:
+            # Multiple testers — open dialog for per-tester TGZ labels
+            self._open_multi_label_dialog(testers, ctrl, source_dir, issue_key, shared_folder, label)
+        else:
+            # Single tester — use the default label directly
+            self.lock_gui()
+            self.compile_status_var.set("Running...")
+            self.log(f"[Compile] Starting compile for {issue_key} on {len(hostnames)} tester(s)…")
 
-        ctrl.start_compile(
-            source_dir=source_dir,
-            jira_key=issue_key,
-            shared_folder=shared_folder,
-            label=label,
-            hostnames=hostnames,
-        )
+            ctrl.start_compile(
+                source_dir=source_dir,
+                jira_key=issue_key,
+                shared_folder=shared_folder,
+                label=label,
+                hostnames=hostnames,
+            )
+
+    def _open_multi_label_dialog(self, targets, ctrl, source_dir, issue_key, shared_folder, default_label):
+        """
+        Open a modal dialog to set per-tester TGZ labels before multi-compile.
+        Ported from legacy gui/app.py _open_multi_label_dialog().
+        """
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Set Custom TGZ Labels")
+        h = 180 + len(targets) * 40
+        dialog.geometry(f"500x{h}")
+        dialog.grab_set()
+        self._centre_dialog(dialog, 500, h)
+
+        ttk.Label(dialog, text="Set Custom TGZ Labels",
+                  font=("Arial", 12, "bold")).pack(pady=(15, 5))
+        ttk.Label(dialog,
+                  text="Enter a specific TGZ label for each tester (leave blank for no label):"
+                  ).pack(pady=(0, 10))
+
+        frame = ttk.Frame(dialog, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True, padx=20)
+
+        label_vars = {}
+        for i, (hostname, env) in enumerate(targets):
+            ttk.Label(frame, text=f"{hostname} ({env}):", width=25,
+                      font=('Segoe UI', 10, 'bold')).grid(row=i, column=0, pady=5, sticky=tk.W)
+            var = tk.StringVar(value=default_label)
+            label_vars[hostname] = var
+            ttk.Entry(frame, textvariable=var, width=30).grid(row=i, column=1, pady=5, sticky=tk.W)
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=15)
+
+        def on_confirm():
+            labels = {h: label_vars[h].get().strip() for h in label_vars}
+            dialog.destroy()
+            hostnames = [h for h, _ in targets]
+            self.lock_gui()
+            self.compile_status_var.set("Running...")
+            self.log(f"[Compile] Starting multi-compile for {issue_key} on {len(hostnames)} tester(s)…")
+            ctrl.start_compile(
+                source_dir=source_dir,
+                jira_key=issue_key,
+                shared_folder=shared_folder,
+                label=default_label,
+                hostnames=hostnames,
+                labels=labels,
+            )
+
+        ttk.Button(btn_frame, text="Confirm & Compile",
+                   command=on_confirm).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Cancel",
+                   command=dialog.destroy).pack(side=tk.LEFT, padx=5)
 
     def _refresh_health(self):
         import os
