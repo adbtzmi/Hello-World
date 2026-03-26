@@ -57,6 +57,7 @@ class CheckoutTab(BaseTab):
         self._tester_row                = 1
         self._init_vars()
         self._build_ui()
+        self._setup_dut_location_autofill()
 
     # ──────────────────────────────────────────────────────────────────────
     # VARIABLE INITIALISATION  (must run before _build_ui)
@@ -99,6 +100,50 @@ class CheckoutTab(BaseTab):
         _bv('checkout_tc_passing', True)
         _bv('checkout_tc_force_fail', False)
         _bv('checkout_notify_teams', True)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # DUT LOCATION AUTO-FILL
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _setup_dut_location_autofill(self):
+        """
+        Attach a trace to checkout_dut_slots so DUT locations auto-fill
+        whenever the slot count changes.  Also trigger an initial fill.
+        """
+        slots_var = self.context.get_var('checkout_dut_slots')
+        slots_var.trace_add("write", self._on_slots_changed)
+        # Initial auto-fill (only if locations field is empty)
+        self._auto_generate_dut_locations()
+
+    def _on_slots_changed(self, *_args):
+        """Callback fired when checkout_dut_slots value changes."""
+        self._auto_generate_dut_locations()
+
+    def _auto_generate_dut_locations(self):
+        """
+        Auto-generate DUT location coordinates from the current slot count.
+
+        SLATE grid layout: 4 rows (0-3) × 32 columns (0-31).
+        DutLocation format: "row,col"  e.g. "0,0  0,1  1,0"
+
+        Only overwrites the locations field if it is currently empty
+        or was previously auto-generated (no manual edits).
+        """
+        from model.orchestrators.checkout_orchestrator import generate_dut_locations
+
+        try:
+            n = self.context.get_var('checkout_dut_slots').get()
+        except (tk.TclError, ValueError):
+            return
+
+        if n < 1:
+            return
+
+        locs = generate_dut_locations(n)
+        loc_str = " ".join(locs)
+
+        # Always update — the locations field mirrors the slot count
+        self.context.get_var('checkout_dut_locations').set(loc_str)
 
     # ──────────────────────────────────────────────────────────────────────
     # BUILD UI
@@ -205,7 +250,7 @@ class CheckoutTab(BaseTab):
                   ).grid(row=2, column=3, sticky=tk.W, pady=(0, 2))
         ttk.Label(dut_frame, text="").grid(row=2, column=4, sticky=tk.W)          # spacer under "Loc:"
         ttk.Label(dut_frame,
-                  text="Space-separated slot coords, e.g.  0,0  0,1  1,0",
+                  text="Auto-filled from Slots (row,col).  Override: 0,0  0,1  1,0",
                   foreground="#888888", font=("Segoe UI", 7)
                   ).grid(row=2, column=5, columnspan=3, sticky=tk.W, pady=(0, 2))
 

@@ -252,7 +252,7 @@ class ImplementationTab(BaseTab):
         self._history_tree = ttk.Treeview(history_wrapper, columns=hist_cols, show="headings", height=4)
         
         # Column widths matching original
-        col_widths = [140, 120, 110, 70, 100, 220]
+        col_widths = [140, 120, 110, 70, 100, 300]
         for col, width in zip(hist_cols, col_widths):
             self._history_tree.heading(col, text=col)
             self._history_tree.column(col, width=width, anchor="w")
@@ -798,13 +798,18 @@ class ImplementationTab(BaseTab):
             #   "Label"     -> label
             #   "Timestamp" -> timestamp
             # Original cols: ("Timestamp", "JIRA", "Tester", "ENV", "Label", "Output TGZ")
+            # Prefer the "Output TGZ" field written by watcher_copier (full filename),
+            # fall back to deriving from the build_info filename (label only).
+            output_tgz = data.get("Output TGZ", "").strip()
+            if not output_tgz:
+                output_tgz = os.path.basename(fpath).replace("build_info_", "").replace(".txt", ".tgz")
             return (
                 data.get("Timestamp", "N/A"),
                 data.get("JIRA Key", "N/A"),
                 data.get("Tester", "N/A"),
                 data.get("Env", "N/A"),
                 data.get("Label", "N/A"),
-                os.path.basename(fpath).replace("build_info_", "").replace(".txt", ".tgz")
+                output_tgz,
             )
         except Exception:
             return None
@@ -862,17 +867,32 @@ class AddTesterDialog:
             ttk.Checkbutton(checklist_frame, text=text, variable=v).pack(anchor=tk.W, pady=1)
 
         def open_guide():
-            import os, webbrowser
+            import os, sys, webbrowser
             from tkinter import messagebox
-            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            guide_path = os.path.join(base_dir, "BENTO_Watcher_Setup_Guide.pdf")
-            if os.path.exists(guide_path):
+            pdf_name = "BENTO_Watcher_Setup_Guide.pdf"
+            # Try multiple strategies to locate the PDF
+            candidates = [
+                # 1. Relative to this source file (view/tabs/ -> project root)
+                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), pdf_name),
+                # 2. Relative to main script (e.g. main.py in project root)
+                os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), pdf_name),
+                # 3. Current working directory
+                os.path.join(os.getcwd(), pdf_name),
+            ]
+            guide_path = None
+            for path in candidates:
+                if os.path.exists(path):
+                    guide_path = path
+                    break
+            if guide_path:
                 try:
                     os.startfile(guide_path)
                 except Exception:
                     webbrowser.open("file:///" + guide_path.replace("\\", "/"))
             else:
-                messagebox.showwarning("Guide Not Found", f"Setup guide PDF not found at:\n{guide_path}")
+                messagebox.showwarning("Guide Not Found",
+                    f"Setup guide PDF not found.\n\nSearched:\n" +
+                    "\n".join(candidates))
         
         ttk.Button(checklist_frame, text="📄 Open Setup Guide (PDF)", command=open_guide).pack(anchor=tk.W, pady=(6, 0))
 
