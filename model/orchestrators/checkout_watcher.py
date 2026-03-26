@@ -910,9 +910,169 @@ def slate_gui_trigger(xml_path, timeout=60):
     else:
         log.info("  \U0001f4cb Selected XML: " + latest_xml)
 
-    # Parse the selected XML for field values used by Phase 2 buttons
+    # Parse the selected XML for field values used by autofill + Phase 2
     fields = _parse_xml_for_slate_fields(latest_xml)
-    log.info("  \u2705 Phase 1 complete — XML resolved: " + os.path.basename(latest_xml))
+
+    if fields is None:
+        log.error(
+            "  \u274c Phase 1: Could not parse XML fields from "
+            + latest_xml + " — cannot autofill"
+        )
+        return False
+
+    # ── Autofill SLATE GUI fields from parsed XML data ─────────────────
+    # Confirmed auto_ids from slate_full_controls_win32.txt:
+    #   txtLotNo           — Lot No input
+    #   txtMID             — MID input
+    #   txtTestJobArchive  — Test Job Archive path (receives the XML path)
+    #   txtRecipeFile      — Recipe File path (optional)
+    log.info("  \U0001f4dd Autofilling SLATE fields from XML data...")
+
+    # LotNo (required)
+    _set_slate_field(
+        win, auto_id="txtLotNo",
+        value=fields.get("lot_no", ""),
+        required=True
+    )
+
+    # MID (required)
+    _set_slate_field(
+        win, auto_id="txtMID",
+        value=fields.get("mid", ""),
+        required=True
+    )
+
+    # Test Job Archive — receives the XML file path so SLATE can read it
+    _set_slate_field(
+        win, auto_id="txtTestJobArchive",
+        value=fields.get("test_job_archive", latest_xml),
+        required=True
+    )
+
+    # Recipe File (optional — only set if the XML contained a RecipeFile element)
+    recipe_file = fields.get("recipe_file", "")
+    if recipe_file:
+        _set_slate_field(
+            win, auto_id="txtRecipeFile",
+            value=recipe_file,
+            required=False
+        )
+
+    # ── Temp Traveler Attributes (optional) ────────────────────────────
+    # For each attribute parsed from the XML's <TempTraveler> section,
+    # fill Section combobox + Attr Name + Attr Value, then click Add.
+    # Confirmed auto_ids from slate_full_controls_win32.txt:
+    #   cboTempTravelSection     — Section combobox
+    #   txtTempTravelAttrName    — Attr Name textbox
+    #   txtTempTravelAttrValue   — Attr Value textbox
+    #   btnTempTravelerAddAttr   — Add button
+    temp_traveler = fields.get("temp_traveler", [])
+    if temp_traveler:
+        log.info(
+            "  \U0001f4dd Filling " + str(len(temp_traveler))
+            + " Temp Traveler attribute(s)..."
+        )
+        for idx, tt_attr in enumerate(temp_traveler):
+            section = tt_attr.get("Section", "")
+            attr_name = tt_attr.get("Name", "")
+            attr_value = tt_attr.get("Value", "")
+            log.info(
+                "    [" + str(idx + 1) + "/" + str(len(temp_traveler))
+                + "] Section='" + section
+                + "' Name='" + attr_name
+                + "' Value='" + attr_value + "'"
+            )
+            try:
+                # Set Section combobox
+                _set_slate_combobox(
+                    win, auto_id="cboTempTravelSection",
+                    value=section, required=False
+                )
+                # Set Attr Name
+                _set_slate_field(
+                    win, auto_id="txtTempTravelAttrName",
+                    value=attr_name, required=False
+                )
+                # Set Attr Value
+                _set_slate_field(
+                    win, auto_id="txtTempTravelAttrValue",
+                    value=attr_value, required=False
+                )
+                # Click Add button
+                _click_slate_button(
+                    win, auto_id="btnTempTravelerAddAttr",
+                    label="Add", wait_after=0.5, required=False
+                )
+            except Exception as tt_err:
+                log.warning(
+                    "    \u26a0\ufe0f Temp Traveler attr " + str(idx + 1)
+                    + " failed: " + str(tt_err) + " — continuing"
+                )
+
+    # ── DUT Location Panel Clicks ────────────────────────────────────────
+    # Click the DUT slot panels in the SLATE grid to select/activate them.
+    # SLATE grid layout: 4 rows (prim 0-3) × 32 columns (slot 1-32)
+    # Panel auto_id pattern: pnlDUT_{rack}_{prim}_{slot}
+    #   rack  = 1 (always — single rack)
+    #   prim  = row from DutLocation (0-3)
+    #   slot  = col + 1 from DutLocation (1-indexed, 1-32)
+    # Example: DutLocation="0,0" → pnlDUT_1_0_1
+    #          DutLocation="1,5" → pnlDUT_1_1_6
+    dut_locations = fields.get("dut_locations", [])
+    if dut_locations:
+        log.info(
+            "  \U0001f4dd Clicking " + str(len(dut_locations))
+            + " DUT location panel(s) in SLATE grid..."
+        )
+        for idx, loc in enumerate(dut_locations):
+            try:
+                parts = loc.split(",")
+                if len(parts) != 2:
+                    log.warning(
+                        "    \u26a0\ufe0f Invalid DutLocation format: '"
+                        + loc + "' — expected 'row,col', skipping"
+                    )
+                    continue
+                row = int(parts[0].strip())
+                col = int(parts[1].strip())
+                # SLATE panels are 1-indexed for slot (column)
+                slot = col + 1
+                panel_id = "pnlDUT_1_" + str(row) + "_" + str(slot)
+                log.info(
+                    "    [" + str(idx + 1) + "/" + str(len(dut_locations))
+                    + "] DutLocation='" + loc
+                    + "' -> panel auto_id='" + panel_id + "'"
+                )
+                try:
+                    panel = win.child_window(auto_id=panel_id)
+                    if panel.exists(timeout=3):
+                        panel.click_input()
+                        time.sleep(0.3)
+                        log.info(
+                            "      \u2705 Clicked " + panel_id
+                        )
+                    else:
+                        log.warning(
+                            "      \u26a0\ufe0f Panel " + panel_id
+                            + " not found — skipping"
+                        )
+                except Exception as click_err:
+                    log.warning(
+                        "      \u26a0\ufe0f Click failed for " + panel_id
+                        + ": " + str(click_err) + " — continuing"
+                    )
+            except (ValueError, IndexError) as parse_err:
+                log.warning(
+                    "    \u26a0\ufe0f Cannot parse DutLocation '"
+                    + loc + "': " + str(parse_err) + " — skipping"
+                )
+    else:
+        log.info("  \u23ed No DUT locations in XML — skipping panel clicks")
+
+    log.info(
+        "  \u2705 Phase 1 complete — XML resolved & fields autofilled: "
+        + os.path.basename(latest_xml)
+    )
 
     _dismiss_slate_popups(win)
 

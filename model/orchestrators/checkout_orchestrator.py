@@ -207,6 +207,31 @@ def load_dut_info_from_crt(
     return result
 
 
+# ── DUT LOCATION AUTO-GENERATION ──────────────────────────────────────────────
+# SLATE grid layout: 4 rows (0-3) × 32 columns (0-31)
+# DutLocation format: "row,col"  e.g. "0,0", "0,1", ..., "0,31", "1,0", ...
+_SLATE_COLS_PER_ROW = 32
+_SLATE_MAX_ROWS     = 4
+
+
+def generate_dut_locations(n: int, cols_per_row: int = _SLATE_COLS_PER_ROW) -> list:
+    """
+    Auto-generate DUT location strings for *n* slots.
+
+    Maps slot index to SLATE grid coordinates:
+      slot 0  → "0,0"
+      slot 1  → "0,1"
+      ...
+      slot 31 → "0,31"
+      slot 32 → "1,0"
+      slot 33 → "1,1"
+      ...
+
+    Max capacity: 4 rows × 32 cols = 128 DUTs.
+    """
+    return [f"{i // cols_per_row},{i % cols_per_row}" for i in range(n)]
+
+
 # ── STEP 2 — Generate SLATE XML ───────────────────────────────────────────────
 def generate_slate_xml(
     jira_key:      str,
@@ -290,9 +315,7 @@ def generate_slate_xml(
 
         # ── MaterialInfo — user-provided DUT locations or auto-generate
         mat       = ET.SubElement(profile, "MaterialInfo")
-        locations = dut_locations or [
-            f"{i // 8},{i % 8}" for i in range(dut_slots)
-        ]
+        locations = dut_locations or generate_dut_locations(dut_slots)
         for idx, loc in enumerate(locations):
             lot_num = f"{lot_prefix}{str(idx + 1).zfill(3)}"
             a = ET.SubElement(mat, "Attribute")
