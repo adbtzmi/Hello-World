@@ -193,7 +193,7 @@ class ImplementationTab(BaseTab):
 
         # 2. Watcher Health Monitor (Middle)
         self.health_wrapper = ttk.LabelFrame(f, text="🔍 Watcher Health Monitor", padding="6")
-        self.health_wrapper.pack(fill=tk.X, padx=10, pady=5)
+        self.health_wrapper.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
         row_frame1 = ttk.Frame(self.health_wrapper)
         row_frame1.pack(fill=tk.X, pady=1)
