@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import tkinter as tk
 from tkinter import ttk, filedialog, simpledialog
@@ -5,27 +6,75 @@ from typing import Any, List, Dict
 from view.tabs.base_tab import BaseTab
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Tooltip helper (system-default colours)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _ToolTip:
+    """Lightweight balloon tooltip for any widget."""
+
+    def __init__(self, widget, text: str, delay: int = 500):
+        self._widget = widget
+        self._text   = text
+        self._delay  = delay
+        self._id     = None
+        self._tw     = None
+        widget.bind("<Enter>",  self._schedule, add="+")
+        widget.bind("<Leave>",  self._cancel,   add="+")
+        widget.bind("<Button>", self._cancel,   add="+")
+
+    def _schedule(self, _=None):
+        self._cancel()
+        self._id = self._widget.after(self._delay, self._show)
+
+    def _cancel(self, _=None):
+        if self._id:
+            self._widget.after_cancel(self._id)
+            self._id = None
+        if self._tw:
+            self._tw.destroy()
+            self._tw = None
+
+    def _show(self):
+        x = self._widget.winfo_rootx() + 20
+        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
+        self._tw = tw = tk.Toplevel(self._widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tw.attributes("-topmost", True)
+        tk.Label(
+            tw, text=self._text, justify=tk.LEFT,
+            relief=tk.SOLID, borderwidth=1,
+            font=("Segoe UI", 8),
+            padx=6, pady=4, wraplength=340,
+        ).pack()
+
+
+def _tip(widget, text: str):
+    _ToolTip(widget, text)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CheckoutTab
+# ─────────────────────────────────────────────────────────────────────────────
+
 class CheckoutTab(BaseTab):
     """
-    Checkout Tab (View) — Phase 2
-    ==============================
-    Auto Start Checkout automation.
+    Checkout Tab (View) — Enhanced UI/UX, default system theme.
 
     Layout:
-      1. Profile Generation Table (replaces CRT Excel File Selection)
-         - Editable grid with 11 columns matching CRT Automation Tools:
-           Auto-populated from CRT: Form_Factor, Material_Desc, CFGPN, MCTO_#1, Dummy_Lot
-           User-editable (additional): Step, MID, Tester, Primitive, Dut, ATTR_OVERWRITE
-         - All columns are editable by user (auto-populated can be overridden)
-         - Mimics CRT Automation Tools profile generation process
-      2. DUT Identity (JIRA, MID, CFGPN, FW, Slots, TGZ, Hot Folder)
-         + Dummy Lot Prefix
-         + DUT Locations
-         + Test Cases (PASSING / FORCE FAIL)
-      3. SLATE Completion Detection method
-      4. Tester Selection + status badges
-      5. Action buttons
-      6. Results panel
+      1. Profile Generation Table
+         - Toolbar: Add Row / Remove Row / Import / Export / Load from CRT
+         - CRT source row: Excel path + Browse + Filter CFGPN
+         - Editable Treeview grid (11 columns)
+         - Status bar
+      2. Checkout Paths & Test Cases
+         - TGZ path
+         - Test Cases (PASS / FAIL)
+         - Hot Folder
+      3. SLATE Detection  |  Tester Selection   (side-by-side)
+      4. Action Buttons
+      5. Checkout Results
     """
 
     _BADGE_COLOURS = {
@@ -39,10 +88,6 @@ class CheckoutTab(BaseTab):
     }
 
     # Profile Generation Table columns
-    # Mirrors CRT Automation Tools _profile_gen_headers + additional_headers_profile_gen()
-    # First 5 columns are auto-populated from CRT data (but still editable by user)
-    # Last 6 columns are user-editable (additional headers for profile generation)
-    # ATTR_OVERWRITE has a special edit dialog
     _PROFILE_GEN_COLUMNS = [
         ("Form_Factor",         120),
         ("Material_Desc",       150),
@@ -57,32 +102,46 @@ class CheckoutTab(BaseTab):
         ("ATTR_OVERWRITE",      200),
     ]
 
-    # Columns that are auto-populated from CRT data (but still user-editable)
     _AUTO_POPULATED_COLS = {"Form_Factor", "Material_Desc", "CFGPN", "MCTO_#1", "Dummy_Lot"}
 
-    # Columns that are user-editable (additional profile gen headers)
     _EDITABLE_COLS = {
         "Form_Factor", "Material_Desc", "CFGPN", "MCTO_#1", "Dummy_Lot",
         "Step", "MID", "Tester", "Primitive", "Dut", "ATTR_OVERWRITE",
     }
 
+    _CRT_TO_PROFILE_MAP = {
+        "Material description": "Material_Desc",
+        "CFGPN":                "CFGPN",
+        "MCTO_#1":              "MCTO_#1",
+        "Form_Factor":          "Form_Factor",
+        "Dummy_Lot":            "Dummy_Lot",
+        "Step Name":            "Step",
+        "Step Status":          "Step",
+        "Material_Desc":        "Material_Desc",
+        "Step":                 "Step",
+        "MID":                  "MID",
+        "Tester":               "Tester",
+        "Primitive":            "Primitive",
+        "Dut":                  "Dut",
+        "ATTR_OVERWRITE":       "ATTR_OVERWRITE",
+    }
+
     def __init__(self, notebook, context):
         super().__init__(notebook, context, "🧪 Checkout")
-        self._badge_labels              = {}
-        self._phase_labels              = {}
-        self._tester_vars               = {}
-        self._tester_frame: Any         = None
-        self._tester_row                = 1
-        self._profile_data: List[Dict]  = []   # Internal data store for profile table
+        self._badge_labels             = {}
+        self._phase_labels             = {}
+        self._tester_vars              = {}
+        self._tester_frame: Any        = None
+        self._tester_row               = 0
+        self._profile_data: List[Dict] = []
         self._init_vars()
         self._build_ui()
 
     # ──────────────────────────────────────────────────────────────────────
-    # VARIABLE INITIALISATION  (must run before _build_ui)
+    # VARIABLE INITIALISATION
     # ──────────────────────────────────────────────────────────────────────
 
     def _init_vars(self):
-        """Register every checkout tk.*Var in context so get_var() never returns None."""
         ctx = self.context
         _sv = lambda name, val="": ctx.set_var(name, tk.StringVar(value=val)) \
               if ctx.get_var(name) is None else None
@@ -103,9 +162,10 @@ class CheckoutTab(BaseTab):
         _sv('checkout_excel_path',
             ctx.config.get('cat', {}).get(
                 'crt_excel_path',
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'Documents', 'incoming_crt.xlsx')
+                os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             '..', '..', 'Documents', 'incoming_crt.xlsx')
             ))
-        _sv('checkout_webhook_url',                          # Fix #4: Teams webhook
+        _sv('checkout_webhook_url',
             ctx.config.get('notifications', {}).get('teams_webhook_url', ''))
         _iv('checkout_timeout_min', 60)
         _bv('checkout_tc_passing', True)
@@ -113,53 +173,106 @@ class CheckoutTab(BaseTab):
         _bv('checkout_notify_teams', True)
 
     # ──────────────────────────────────────────────────────────────────────
-    # BUILD UI
+    # BUILD UI — scrollable canvas wrapper
     # ──────────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
         self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
 
-        # ── Section 1: Profile Generation Table ──────────────────────────
-        # Replaces old CRT Excel File Selection + CRT Data Preview
-        profile_frame = ttk.LabelFrame(self, text="Profile Generation", padding="5")
-        profile_frame.grid(row=0, column=0, sticky="we", pady=2)
-        profile_frame.columnconfigure(0, weight=1)
+        canvas   = tk.Canvas(self, highlightthickness=0, bd=0)
+        v_scroll = ttk.Scrollbar(self, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=v_scroll.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        v_scroll.grid(row=0, column=1, sticky="ns")
 
-        # ── Workflow Actions bar ──────────────────────────────────────────
-        actions_frame = ttk.Frame(profile_frame)
-        actions_frame.grid(row=0, column=0, sticky="we", pady=(0, 4))
+        self._inner = ttk.Frame(canvas, padding=(8, 6, 8, 12))
+        self._inner.columnconfigure(0, weight=1)
+        _win = canvas.create_window((0, 0), window=self._inner, anchor="nw")
 
-        ttk.Button(actions_frame, text="Add Row",
-                   command=self._profile_add_row).pack(side=tk.LEFT, padx=2)
-        ttk.Button(actions_frame, text="Remove Row",
-                   command=self._profile_remove_row).pack(side=tk.LEFT, padx=2)
-        ttk.Button(actions_frame, text="Import from Excel",
-                   command=self._profile_import_excel).pack(side=tk.LEFT, padx=2)
-        ttk.Button(actions_frame, text="Export to Excel",
-                   command=self._profile_export_excel).pack(side=tk.LEFT, padx=2)
-        ttk.Button(actions_frame, text="Load from CRT",
-                   command=self._profile_load_from_crt).pack(side=tk.LEFT, padx=2)
+        def _on_inner_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
 
-        # ── CRT Source (Excel path + CFGPN filter for Load from CRT) ─────
-        crt_source_frame = ttk.Frame(profile_frame)
-        crt_source_frame.grid(row=1, column=0, sticky="we", pady=(0, 4))
-        crt_source_frame.columnconfigure(1, weight=1)
+        def _on_canvas_configure(event):
+            canvas.itemconfig(_win, width=event.width)
 
-        ttk.Label(crt_source_frame, text="Excel File:").grid(
-            row=0, column=0, sticky=tk.W, padx=(0, 4))
-        ttk.Entry(crt_source_frame,
-                  textvariable=self.context.get_var('checkout_excel_path'),
-                  width=60).grid(row=0, column=1, sticky="we")
-        ttk.Button(crt_source_frame, text="Browse",
-                   command=self._browse_excel).grid(row=0, column=2, padx=(4, 8))
-        ttk.Label(crt_source_frame, text="Filter CFGPN:").grid(
-            row=0, column=3, sticky=tk.W, padx=(0, 4))
-        ttk.Entry(crt_source_frame,
+        self._inner.bind("<Configure>", _on_inner_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _mousewheel)
+
+        f = self._inner
+        self._build_profile_section(f, row=0)
+        self._build_paths_section(f, row=1)
+        self._build_detection_tester_section(f, row=2)
+        self._build_action_buttons(f, row=3)
+        self._build_results_section(f, row=4)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # SECTION 1 — Profile Generation
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _build_profile_section(self, parent, row):
+        frm = ttk.LabelFrame(parent, text="  Profile Generation  ", padding=(8, 6, 8, 8))
+        frm.grid(row=row, column=0, sticky="we", pady=(0, 6))
+        frm.columnconfigure(0, weight=1)
+
+        # ── Toolbar ───────────────────────────────────────────────────────
+        toolbar = ttk.Frame(frm)
+        toolbar.grid(row=0, column=0, sticky="we", pady=(0, 6))
+
+        add_btn = ttk.Button(toolbar, text="Add Row", command=self._profile_add_row)
+        add_btn.pack(side=tk.LEFT, padx=(0, 3))
+        _tip(add_btn, "Append a new empty row to the profile table.")
+
+        rem_btn = ttk.Button(toolbar, text="Remove Row", command=self._profile_remove_row)
+        rem_btn.pack(side=tk.LEFT, padx=(0, 3))
+        _tip(rem_btn, "Delete the currently selected row from the profile table.")
+
+        imp_btn = ttk.Button(toolbar, text="Import from Excel", command=self._profile_import_excel)
+        imp_btn.pack(side=tk.LEFT, padx=(0, 3))
+        _tip(imp_btn, "Import profile rows from an Excel file (.xlsx / .xls).")
+
+        exp_btn = ttk.Button(toolbar, text="Export to Excel", command=self._profile_export_excel)
+        exp_btn.pack(side=tk.LEFT, padx=(0, 3))
+        _tip(exp_btn, "Export the current profile table to an Excel file.")
+
+        crt_btn = ttk.Button(toolbar, text="Load from CRT", command=self._profile_load_from_crt)
+        crt_btn.pack(side=tk.LEFT, padx=(0, 0))
+        _tip(crt_btn, "Read the CRT Excel file and auto-populate Form_Factor, Material_Desc,\n"
+             "CFGPN, MCTO_#1, Dummy_Lot. Editable columns (Step, MID, Tester…) remain blank.")
+
+        # ── CRT Source row ────────────────────────────────────────────────
+        src_row = ttk.Frame(frm)
+        src_row.grid(row=1, column=0, sticky="we", pady=(0, 6))
+        src_row.columnconfigure(1, weight=1)
+
+        ttk.Label(src_row, text="Excel File:").grid(
+            row=0, column=0, sticky=tk.W, padx=(0, 6))
+        excel_entry = ttk.Entry(src_row,
+                  textvariable=self.context.get_var('checkout_excel_path'))
+        excel_entry.grid(row=0, column=1, sticky="we")
+        _tip(excel_entry, "Path to the CRT Excel source file (incoming_crt.xlsx).\n"
+             "Used by 'Load from CRT' to auto-populate the profile table.")
+
+        browse_btn = ttk.Button(src_row, text="Browse",
+                    command=self._browse_excel)
+        browse_btn.grid(row=0, column=2, padx=(6, 12))
+        _tip(browse_btn, "Browse for a CRT Excel file.")
+
+        ttk.Label(src_row, text="Filter CFGPN:").grid(
+            row=0, column=3, sticky=tk.W, padx=(0, 6))
+        filter_entry = ttk.Entry(src_row,
                   textvariable=self.context.get_var('checkout_cfgpn_filter'),
-                  width=15).grid(row=0, column=4, sticky=tk.W)
+                  width=18)
+        filter_entry.grid(row=0, column=4, sticky=tk.W)
+        _tip(filter_entry, "Optional CFGPN substring filter applied when loading CRT data.\n"
+             "Leave blank to load all rows.")
 
-        # ── Profile Generation Grid ───────────────────────────────────────
-        grid_container = ttk.Frame(profile_frame)
+        # ── Profile Grid ──────────────────────────────────────────────────
+        grid_container = ttk.Frame(frm)
         grid_container.grid(row=2, column=0, sticky="nsew")
         grid_container.columnconfigure(0, weight=1)
 
@@ -168,186 +281,307 @@ class CheckoutTab(BaseTab):
             grid_container, columns=cols, show="headings",
             height=5, selectmode="browse")
         for col_name, col_width in self._PROFILE_GEN_COLUMNS:
-            self._profile_grid.heading(col_name, text=col_name)
-            self._profile_grid.column(col_name, width=col_width, minwidth=40, stretch=True)
+            self._profile_grid.heading(col_name, text=col_name, anchor=tk.W)
+            self._profile_grid.column(col_name, width=col_width, minwidth=40,
+                                      stretch=True, anchor=tk.W)
 
-        profile_scroll_y = ttk.Scrollbar(grid_container, orient=tk.VERTICAL,
-                                         command=self._profile_grid.yview)
-        profile_scroll_x = ttk.Scrollbar(grid_container, orient=tk.HORIZONTAL,
-                                         command=self._profile_grid.xview)
-        self._profile_grid.configure(yscrollcommand=profile_scroll_y.set,
-                                     xscrollcommand=profile_scroll_x.set)
+        pg_scroll_y = ttk.Scrollbar(grid_container, orient=tk.VERTICAL,
+                                    command=self._profile_grid.yview)
+        pg_scroll_x = ttk.Scrollbar(grid_container, orient=tk.HORIZONTAL,
+                                    command=self._profile_grid.xview)
+        self._profile_grid.configure(yscrollcommand=pg_scroll_y.set,
+                                     xscrollcommand=pg_scroll_x.set)
         self._profile_grid.grid(row=0, column=0, sticky="nsew")
-        profile_scroll_y.grid(row=0, column=1, sticky="ns")
-        profile_scroll_x.grid(row=1, column=0, sticky="ew")
+        pg_scroll_y.grid(row=0, column=1, sticky="ns")
+        pg_scroll_x.grid(row=1, column=0, sticky="ew")
 
-        # Double-click to edit a cell
         self._profile_grid.bind("<Double-1>", self._on_profile_cell_double_click)
-        # Single click on row to auto-fill DUT fields
         self._profile_grid.bind("<<TreeviewSelect>>", self._on_profile_row_select)
+        _tip(self._profile_grid,
+             "Double-click any cell to edit it inline.\n"
+             "Double-click ATTR_OVERWRITE to open the attribute editor dialog.")
 
-        # ── Status bar under grid ─────────────────────────────────────────
-        profile_status_frame = ttk.Frame(profile_frame)
-        profile_status_frame.grid(row=3, column=0, sticky="we", pady=(2, 0))
+        # ── Status bar ────────────────────────────────────────────────────
+        status_bar = ttk.Frame(frm)
+        status_bar.grid(row=3, column=0, sticky="we", pady=(4, 0))
+
         self._profile_status_label = ttk.Label(
-            profile_status_frame,
+            status_bar,
             text="No data — use 'Load from CRT' or 'Add Row' to populate",
             foreground="#cc6600", font=("Segoe UI", 8))
         self._profile_status_label.pack(side=tk.LEFT)
+
         self._profile_row_count_label = ttk.Label(
-            profile_status_frame, text="0 row(s)",
-            foreground="#555555", font=("Segoe UI", 8))
+            status_bar, text="0 row(s)", font=("Segoe UI", 8))
         self._profile_row_count_label.pack(side=tk.RIGHT)
 
-        # Add initial empty row with "None" in Dummy_Lot (matching the tool's default)
+        # Add initial default row
         self._profile_add_default_row()
 
-        # ── Section 3: Checkout Paths & Test Cases ────────────────────────
-        dut_frame = ttk.LabelFrame(self, text="Checkout Paths & Test Cases", padding="5")
-        dut_frame.grid(row=3, column=0, sticky="we", pady=2)
-        dut_frame.columnconfigure(1, weight=1)
+    # ──────────────────────────────────────────────────────────────────────
+    # SECTION 2 — Checkout Paths & Test Cases
+    # ──────────────────────────────────────────────────────────────────────
 
-        # Row 0: TGZ Source
-        ttk.Label(dut_frame, text="TGZ:").grid(row=0, column=0, sticky=tk.W, pady=0)
-        ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_tgz_path'),
-                  width=60).grid(row=0, column=1, columnspan=6, sticky="we", pady=0)
-        ttk.Button(dut_frame, text="…", width=3,
-                   command=self._browse_tgz).grid(row=0, column=7, padx=(2, 0), pady=0)
+    def _build_paths_section(self, parent, row):
+        frm = ttk.LabelFrame(parent, text="  Checkout Paths & Test Cases  ",
+                             padding=(8, 6, 8, 8))
+        frm.grid(row=row, column=0, sticky="we", pady=(0, 6))
+        frm.columnconfigure(1, weight=1)
 
-        # Row 1: Test Cases (PASS/FAIL)
-        test_case_frame = ttk.Frame(dut_frame)
-        test_case_frame.grid(row=1, column=0, columnspan=8, sticky="we", pady=0)
-        ttk.Label(test_case_frame, text="TC:").pack(side=tk.LEFT)
-        ttk.Checkbutton(test_case_frame, text="PASS", variable=self.context.get_var('checkout_tc_passing')).pack(side=tk.LEFT, padx=2)
-        ttk.Entry(test_case_frame, textvariable=self.context.get_var('checkout_tc_passing_label'), width=10).pack(side=tk.LEFT, padx=2)
-        ttk.Checkbutton(test_case_frame, text="FAIL", variable=self.context.get_var('checkout_tc_force_fail')).pack(side=tk.LEFT, padx=5)
-        ttk.Entry(test_case_frame, textvariable=self.context.get_var('checkout_tc_fail_label'), width=10).pack(side=tk.LEFT, padx=2)
-        ttk.Entry(test_case_frame, textvariable=self.context.get_var('checkout_tc_fail_desc'), width=30).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+        # TGZ row
+        ttk.Label(frm, text="TGZ:").grid(
+            row=0, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
+        tgz_entry = ttk.Entry(frm, textvariable=self.context.get_var('checkout_tgz_path'))
+        tgz_entry.grid(row=0, column=1, sticky="we", pady=(0, 4))
+        _tip(tgz_entry, "Path to the compiled .tgz test program archive.\n"
+             "Default browse location: P:\\temp\\BENTO\\RELEASE_TGZ")
+        tgz_btn = ttk.Button(frm, text="…", width=3, command=self._browse_tgz)
+        tgz_btn.grid(row=0, column=2, padx=(6, 0), pady=(0, 4))
+        _tip(tgz_btn, "Browse for a compiled TGZ archive.")
 
-        # Row 2: Hot folder
-        ttk.Label(dut_frame, text="Hot Folder:").grid(row=2, column=0, sticky=tk.W, pady=0)
-        ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_hot_folder'),
-                  width=70).grid(row=2, column=1, columnspan=7, sticky="we", pady=0)
+        # Separator
+        ttk.Separator(frm, orient=tk.HORIZONTAL).grid(
+            row=1, column=0, columnspan=3, sticky="we", pady=(0, 4))
 
-        # ── Section 4: Side-by-Side Detection & Testers ──────────────────
-        side_frame = ttk.Frame(self)
-        side_frame.grid(row=4, column=0, sticky="we", pady=1)
+        # Test Cases row
+        tc_frame = ttk.Frame(frm)
+        tc_frame.grid(row=2, column=0, columnspan=3, sticky="we", pady=(0, 4))
+
+        ttk.Label(tc_frame, text="TC:").pack(side=tk.LEFT, padx=(0, 8))
+
+        pass_cb = ttk.Checkbutton(tc_frame, text="PASS",
+                      variable=self.context.get_var('checkout_tc_passing'))
+        pass_cb.pack(side=tk.LEFT)
+        _tip(pass_cb, "Include a passing test case in the checkout run.")
+
+        pass_entry = ttk.Entry(tc_frame,
+                   textvariable=self.context.get_var('checkout_tc_passing_label'),
+                   width=12)
+        pass_entry.pack(side=tk.LEFT, padx=(4, 14))
+        _tip(pass_entry, "Label for the passing test case (default: passing).")
+
+        fail_cb = ttk.Checkbutton(tc_frame, text="FAIL",
+                      variable=self.context.get_var('checkout_tc_force_fail'))
+        fail_cb.pack(side=tk.LEFT)
+        _tip(fail_cb, "Include a force-fail test case in the checkout run.")
+
+        fail_lbl_entry = ttk.Entry(tc_frame,
+                   textvariable=self.context.get_var('checkout_tc_fail_label'),
+                   width=14)
+        fail_lbl_entry.pack(side=tk.LEFT, padx=(4, 4))
+        _tip(fail_lbl_entry, "Label for the force-fail test case (default: force_fail_1).")
+
+        fail_desc_entry = ttk.Entry(tc_frame,
+                   textvariable=self.context.get_var('checkout_tc_fail_desc'),
+                   width=28)
+        fail_desc_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        _tip(fail_desc_entry, "Optional description for the force-fail test case.")
+
+        # Separator
+        ttk.Separator(frm, orient=tk.HORIZONTAL).grid(
+            row=3, column=0, columnspan=3, sticky="we", pady=(0, 4))
+
+        # Hot Folder row
+        ttk.Label(frm, text="Hot Folder:").grid(
+            row=4, column=0, sticky=tk.W, padx=(0, 8))
+        hot_entry = ttk.Entry(frm, textvariable=self.context.get_var('checkout_hot_folder'))
+        hot_entry.grid(row=4, column=1, columnspan=2, sticky="we")
+        _tip(hot_entry, "Path to the SLATE hot folder where XML profiles are dropped.\n"
+             "Default: C:\\test_program\\playground_queue")
+
+    # ──────────────────────────────────────────────────────────────────────
+    # SECTION 3 — SLATE Detection + Tester Selection (side-by-side)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _build_detection_tester_section(self, parent, row):
+        side_frame = ttk.Frame(parent)
+        side_frame.grid(row=row, column=0, sticky="we", pady=(0, 6))
         side_frame.columnconfigure(0, weight=1)
-        side_frame.columnconfigure(1, weight=1)
+        side_frame.columnconfigure(1, weight=2)
 
-        detect_frame = ttk.LabelFrame(side_frame, text="SLATE Detection", padding="2")
-        detect_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 2))
+        # ── SLATE Detection ───────────────────────────────────────────────
+        detect_frame = ttk.LabelFrame(side_frame, text="  SLATE Detection  ",
+                                      padding=(8, 6, 8, 8))
+        detect_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        detect_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(detect_frame, text="Method:").grid(row=0, column=0, sticky=tk.W)
-        ttk.Combobox(detect_frame,
+        ttk.Label(detect_frame, text="Method:").grid(
+            row=0, column=0, sticky=tk.W, pady=(0, 4))
+        method_cb = ttk.Combobox(detect_frame,
                      textvariable=self.context.get_var('checkout_detect_method'),
                      values=["AUTO", "LOG", "FOLDER", "CPU", "TIMEOUT"],
-                     state="readonly", width=8).grid(row=0, column=1, padx=2, sticky=tk.W)
+                     state="readonly", width=10)
+        method_cb.grid(row=0, column=1, columnspan=2, sticky=tk.W,
+                       padx=(6, 0), pady=(0, 4))
+        _tip(method_cb,
+             "How BENTO detects SLATE completion:\n"
+             "  AUTO    – tries LOG → FOLDER → CPU\n"
+             "  LOG     – watches SLATE log file\n"
+             "  FOLDER  – watches output folder\n"
+             "  CPU     – monitors CPU idle\n"
+             "  TIMEOUT – waits fixed duration")
 
-        ttk.Label(detect_frame, text="Time:").grid(row=1, column=0, sticky=tk.W)
-        ttk.Spinbox(detect_frame,
+        ttk.Label(detect_frame, text="Time (min):").grid(
+            row=1, column=0, sticky=tk.W, pady=(0, 4))
+        timeout_spin = ttk.Spinbox(detect_frame,
                     textvariable=self.context.get_var('checkout_timeout_min'),
-                    from_=5, to=480, width=5).grid(row=1, column=1, sticky=tk.W)
+                    from_=5, to=480, width=6)
+        timeout_spin.grid(row=1, column=1, sticky=tk.W, padx=(6, 0), pady=(0, 4))
+        _tip(timeout_spin, "Maximum wait time per tester (minutes). Range: 5–480.")
 
-        ttk.Checkbutton(detect_frame, text="Teams",
-                        variable=self.context.get_var('checkout_notify_teams')).grid(
-            row=1, column=2, padx=2, sticky=tk.W)
+        teams_cb = ttk.Checkbutton(detect_frame, text="Teams",
+                        variable=self.context.get_var('checkout_notify_teams'))
+        teams_cb.grid(row=1, column=2, padx=(8, 0), sticky=tk.W, pady=(0, 4))
+        _tip(teams_cb, "Send a Microsoft Teams notification when checkout completes.")
 
-        # Fix #4: Webhook URL field (shown when Teams notify is on)
-        ttk.Label(detect_frame, text="Webhook:").grid(row=2, column=0, sticky=tk.W, pady=(2, 0))
-        ttk.Entry(detect_frame,
-                  textvariable=self.context.get_var('checkout_webhook_url'),
-                  width=40).grid(row=2, column=1, columnspan=3, sticky="we", pady=(2, 0))
+        ttk.Label(detect_frame, text="Webhook:").grid(
+            row=2, column=0, sticky=tk.W, pady=(0, 2))
+        webhook_entry = ttk.Entry(detect_frame,
+                  textvariable=self.context.get_var('checkout_webhook_url'))
+        webhook_entry.grid(row=3, column=0, columnspan=3, sticky="we", pady=(0, 2))
+        _tip(webhook_entry,
+             "Microsoft Teams incoming webhook URL.\nLeave blank to disable Teams alerts.")
 
-        tester_outer = ttk.LabelFrame(side_frame, text="Tester Selection", padding="2")
-        tester_outer.grid(row=0, column=1, sticky="nsew", padx=(2, 0))
-        ttk.Button(tester_outer, text="↻ Refresh", width=10,
-                   command=self._refresh_testers).pack(side=tk.TOP, anchor=tk.E)
-        
+        # ── Tester Selection ──────────────────────────────────────────────
+        tester_outer = ttk.LabelFrame(side_frame, text="  Tester Selection  ",
+                                      padding=(8, 6, 8, 8))
+        tester_outer.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        tester_outer.columnconfigure(0, weight=1)
+
+        # Header bar
+        hdr = ttk.Frame(tester_outer)
+        hdr.grid(row=0, column=0, sticky="we", pady=(0, 6))
+        ttk.Label(hdr, text="Select testers to include in this checkout run:",
+                  font=("Segoe UI", 8)).pack(side=tk.LEFT)
+        refresh_btn = ttk.Button(hdr, text="↻ Refresh",
+                    command=self._refresh_testers)
+        refresh_btn.pack(side=tk.RIGHT)
+        _tip(refresh_btn, "Reload the tester list from bento_testers.json.")
+
+        # Tester list
         self._tester_container = ttk.Frame(tester_outer)
-        self._tester_container.pack(fill=tk.BOTH, expand=True)
+        self._tester_container.grid(row=1, column=0, sticky="nsew")
         self._tester_frame = self._tester_container
         self._tester_row   = 0
         self._refresh_testers()
 
-        # ── Section 6: Action Buttons ─────────────────────────────────────
-        btn_frame = ttk.Frame(self)
-        btn_frame.grid(row=5, column=0, pady=1)
+    # ──────────────────────────────────────────────────────────────────────
+    # SECTION 4 — Action Buttons
+    # ──────────────────────────────────────────────────────────────────────
 
-        self.checkout_btn = ttk.Button(btn_frame, text="▶ Start Checkout",
-                                       style='Accent.TButton',
-                                       command=self._start_checkout)
-        self.checkout_btn.pack(side=tk.LEFT, padx=3)
+    def _build_action_buttons(self, parent, row):
+        btn_frame = ttk.Frame(parent)
+        btn_frame.grid(row=row, column=0, pady=(0, 6))
+
+        # Primary: Start
+        self.checkout_btn = ttk.Button(
+            btn_frame, text="▶ Start Checkout",
+            style='Accent.TButton',
+            command=self._start_checkout)
+        self.checkout_btn.pack(side=tk.LEFT, padx=(0, 3))
         self.context.lockable_buttons.append(self.checkout_btn)
-        
-        self.stop_btn = ttk.Button(btn_frame, text="⏹ Stop Checkout",
-                                   command=self._stop_checkout)
-        self.stop_btn.pack(side=tk.LEFT, padx=3)
-        self.stop_btn.state(["disabled"])  # Initially disabled
-        
-        ttk.Button(btn_frame, text="Generate XML Only", width=18,
-                   command=self._generate_xml_only).pack(side=tk.LEFT, padx=3)
-        ttk.Button(btn_frame, text="📥 Import XML", width=14,
-                   command=self._import_xml).pack(side=tk.LEFT, padx=3)
-        ttk.Button(btn_frame, text="Select All", width=10,
-                   command=self._select_all).pack(side=tk.LEFT, padx=3)
-        ttk.Button(btn_frame, text="Deselect All", width=12,
-                   command=self._deselect_all).pack(side=tk.LEFT, padx=3)
-        ttk.Button(btn_frame, text="📂 Queue Folder", width=15,   # Fix #7
-                   command=self._open_queue_folder).pack(side=tk.LEFT, padx=3)
+        _tip(self.checkout_btn,
+             "Generate XML profiles and start the checkout run on all selected testers.")
 
-        # ── Section 7: Results ────────────────────────────────────────────
-        results_frame = ttk.LabelFrame(self, text="Checkout Results", padding="2")
-        results_frame.grid(row=6, column=0, sticky="we", pady=1)
+        # Stop
+        self.stop_btn = ttk.Button(
+            btn_frame, text="⏹ Stop Checkout",
+            command=self._stop_checkout)
+        self.stop_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self.stop_btn.state(["disabled"])
+        _tip(self.stop_btn, "Abort the running checkout on all testers.")
 
-        results_btn_bar = ttk.Frame(results_frame)                # Fix #6: Clear button bar
-        results_btn_bar.pack(side=tk.TOP, fill=tk.X)
-        ttk.Button(results_btn_bar, text="Clear", width=6,
-                   command=self._clear_results).pack(side=tk.RIGHT)
+        ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(
+            side=tk.LEFT, fill=tk.Y, padx=(0, 10), pady=4)
 
-        self.results_text = tk.Text(results_frame, height=3, state=tk.DISABLED,
-                                    font=("Consolas", 9), wrap=tk.WORD)
-        results_scroll = ttk.Scrollbar(results_frame, orient=tk.VERTICAL,
-                                        command=self.results_text.yview)
-        self.results_text.configure(yscrollcommand=results_scroll.set)
-        self.results_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        results_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        gen_btn = ttk.Button(btn_frame, text="Generate XML Only", width=18,
+                   command=self._generate_xml_only)
+        gen_btn.pack(side=tk.LEFT, padx=(0, 3))
+        _tip(gen_btn, "Build SLATE XML profile(s) without starting a checkout run.")
+
+        imp_btn = ttk.Button(btn_frame, text="📥 Import XML", width=14,
+                   command=self._import_xml)
+        imp_btn.pack(side=tk.LEFT, padx=(0, 3))
+        _tip(imp_btn, "Load an existing SLATE XML profile and auto-fill TGZ path from it.")
+
+        ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(
+            side=tk.LEFT, fill=tk.Y, padx=(4, 10), pady=4)
+
+        sel_btn = ttk.Button(btn_frame, text="Select All", width=10,
+                   command=self._select_all)
+        sel_btn.pack(side=tk.LEFT, padx=(0, 3))
+        _tip(sel_btn, "Select all testers.")
+
+        desel_btn = ttk.Button(btn_frame, text="Deselect All", width=12,
+                   command=self._deselect_all)
+        desel_btn.pack(side=tk.LEFT, padx=(0, 3))
+        _tip(desel_btn, "Deselect all testers.")
+
+        ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(
+            side=tk.LEFT, fill=tk.Y, padx=(4, 10), pady=4)
+
+        queue_btn = ttk.Button(btn_frame, text="📂 Queue Folder", width=15,
+                   command=self._open_queue_folder)
+        queue_btn.pack(side=tk.LEFT)
+        _tip(queue_btn, "Open the BENTO checkout queue folder in Windows Explorer.")
 
     # ──────────────────────────────────────────────────────────────────────
-    # PROFILE GENERATION TABLE — DATA MANAGEMENT
+    # SECTION 5 — Checkout Results
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _build_results_section(self, parent, row):
+        frm = ttk.LabelFrame(parent, text="  Checkout Results  ",
+                             padding=(8, 6, 8, 8))
+        frm.grid(row=row, column=0, sticky="we", pady=(0, 0))
+        frm.columnconfigure(0, weight=1)
+
+        # Toolbar
+        toolbar = ttk.Frame(frm)
+        toolbar.grid(row=0, column=0, sticky="we", pady=(0, 4))
+        ttk.Label(toolbar, text="Live output from checkout runs:",
+                  font=("Segoe UI", 8)).pack(side=tk.LEFT)
+        clear_btn = ttk.Button(toolbar, text="Clear", width=6,
+                    command=self._clear_results)
+        clear_btn.pack(side=tk.RIGHT)
+        _tip(clear_btn, "Clear the results log.")
+
+        # Text area
+        result_container = ttk.Frame(frm)
+        result_container.grid(row=1, column=0, sticky="nsew")
+        result_container.columnconfigure(0, weight=1)
+
+        self.results_text = tk.Text(
+            result_container,
+            height=5,
+            state=tk.DISABLED,
+            font=("Consolas", 9),
+            wrap=tk.WORD,
+        )
+        results_scroll = ttk.Scrollbar(result_container, orient=tk.VERTICAL,
+                                        command=self.results_text.yview)
+        self.results_text.configure(yscrollcommand=results_scroll.set)
+        self.results_text.grid(row=0, column=0, sticky="nsew")
+        results_scroll.grid(row=0, column=1, sticky="ns")
+
+    # ──────────────────────────────────────────────────────────────────────
+    # PROFILE TABLE — DATA MANAGEMENT
     # ──────────────────────────────────────────────────────────────────────
 
     def _profile_add_default_row(self):
-        """Add the default initial row with 'None' in Dummy_Lot."""
         row_data = {
-            "Form_Factor": "",
-            "Material_Desc": "",
-            "CFGPN": "",
-            "MCTO_#1": "",
-            "Dummy_Lot": "None",
-            "Step": "",
-            "MID": "",
-            "Tester": "",
-            "Primitive": "",
-            "Dut": "",
+            "Form_Factor": "", "Material_Desc": "", "CFGPN": "",
+            "MCTO_#1": "", "Dummy_Lot": "None", "Step": "",
+            "MID": "", "Tester": "", "Primitive": "", "Dut": "",
             "ATTR_OVERWRITE": "",
         }
         self._profile_data.append(row_data)
         self._refresh_profile_grid()
 
     def _profile_add_row(self):
-        """Add a new empty row to the profile generation table."""
         row_data = {
-            "Form_Factor": "",
-            "Material_Desc": "",
-            "CFGPN": "",
-            "MCTO_#1": "",
-            "Dummy_Lot": "",
-            "Step": "",
-            "MID": "",
-            "Tester": "",
-            "Primitive": "",
-            "Dut": "",
+            "Form_Factor": "", "Material_Desc": "", "CFGPN": "",
+            "MCTO_#1": "", "Dummy_Lot": "", "Step": "",
+            "MID": "", "Tester": "", "Primitive": "", "Dut": "",
             "ATTR_OVERWRITE": "",
         }
         self._profile_data.append(row_data)
@@ -355,21 +589,17 @@ class CheckoutTab(BaseTab):
         self._update_profile_status()
 
     def _profile_remove_row(self):
-        """Remove the selected row from the profile generation table."""
         sel = self._profile_grid.selection()
         if not sel:
             self.show_error("No Selection", "Select a row to remove.")
             return
-        # Find the index of the selected item
-        item_id = sel[0]
-        idx = self._profile_grid.index(item_id)
+        idx = self._profile_grid.index(sel[0])
         if 0 <= idx < len(self._profile_data):
             self._profile_data.pop(idx)
         self._refresh_profile_grid()
         self._update_profile_status()
 
     def _refresh_profile_grid(self):
-        """Refresh the Treeview grid from internal _profile_data."""
         for row in self._profile_grid.get_children():
             self._profile_grid.delete(row)
         cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
@@ -380,7 +610,6 @@ class CheckoutTab(BaseTab):
             text=f"{len(self._profile_data)} row(s)")
 
     def _update_profile_status(self):
-        """Update the status label under the profile grid."""
         count = len(self._profile_data)
         if count == 0:
             self._profile_status_label.configure(
@@ -391,29 +620,11 @@ class CheckoutTab(BaseTab):
                 text=f"{count} row(s) loaded — double-click a cell to edit",
                 foreground="#0078d4")
 
-    # Mapping from CRT Excel column names → profile grid column names
-    _CRT_TO_PROFILE_MAP = {
-        "Material description": "Material_Desc",
-        "CFGPN":                "CFGPN",
-        "MCTO_#1":              "MCTO_#1",
-        "Form_Factor":          "Form_Factor",
-        "Dummy_Lot":            "Dummy_Lot",
-        "Step Name":            "Step",
-        "Step Status":          "Step",
-        # Direct grid column names (pass-through)
-        "Material_Desc":        "Material_Desc",
-        "Step":                 "Step",
-        "MID":                  "MID",
-        "Tester":               "Tester",
-        "Primitive":            "Primitive",
-        "Dut":                  "Dut",
-        "ATTR_OVERWRITE":       "ATTR_OVERWRITE",
-    }
-
     def _profile_import_excel(self):
-        """Import profile generation data from an Excel file."""
         excel_path = self.context.get_var('checkout_excel_path').get().strip()
-        initial_dir = os.path.dirname(excel_path) if excel_path and os.path.isdir(os.path.dirname(excel_path)) else "/"
+        initial_dir = (os.path.dirname(excel_path)
+                       if excel_path and os.path.isdir(os.path.dirname(excel_path))
+                       else "/")
         path = filedialog.askopenfilename(
             title="Import Profile Table from Excel",
             initialdir=initial_dir,
@@ -422,29 +633,21 @@ class CheckoutTab(BaseTab):
             return
         try:
             import pandas as pd
-            if path.endswith(".xlsx"):
-                df = pd.read_excel(path, engine="openpyxl", dtype=str)
-            else:
-                df = pd.read_excel(path, engine="xlrd", dtype=str)
-            df = df.fillna("")
-
+            engine = "openpyxl" if path.endswith(".xlsx") else "xlrd"
+            df = pd.read_excel(path, engine=engine, dtype=str).fillna("")
             cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
-            # Build reverse lookup: for each grid col, find matching Excel col
             excel_to_grid = {}
             for excel_col in df.columns:
                 grid_col = self._CRT_TO_PROFILE_MAP.get(excel_col)
                 if grid_col and grid_col in cols:
                     excel_to_grid[excel_col] = grid_col
-
             self._profile_data = []
             for _, row in df.iterrows():
                 row_dict = {col: "" for col in cols}
-                # Map Excel columns to grid columns
                 for excel_col, grid_col in excel_to_grid.items():
                     val = str(row.get(excel_col, "")).strip()
                     if val and val.lower() != "none":
                         row_dict[grid_col] = val
-                # Also try direct column name match for any unmapped columns
                 for col in cols:
                     if not row_dict.get(col) and col in df.columns:
                         val = str(row.get(col, "")).strip()
@@ -453,12 +656,12 @@ class CheckoutTab(BaseTab):
                 self._profile_data.append(row_dict)
             self._refresh_profile_grid()
             self._update_profile_status()
-            self.log(f"✓ Profile table imported: {len(self._profile_data)} row(s) from {os.path.basename(path)}")
+            self.log(f"✓ Profile table imported: {len(self._profile_data)} row(s) "
+                     f"from {os.path.basename(path)}")
         except Exception as e:
             self.show_error("Import Error", f"Cannot import file:\n{path}\n\n{e}")
 
     def _profile_export_excel(self):
-        """Export profile generation data to an Excel file."""
         if not self._profile_data:
             self.show_error("No Data", "No profile data to export.")
             return
@@ -470,23 +673,15 @@ class CheckoutTab(BaseTab):
             return
         try:
             import pandas as pd
-            df = pd.DataFrame(self._profile_data)
-            df.to_excel(path, index=False, engine="openpyxl")
+            pd.DataFrame(self._profile_data).to_excel(
+                path, index=False, engine="openpyxl")
             self.log(f"✓ Profile table exported to {os.path.basename(path)}")
         except Exception as e:
             self.show_error("Export Error", f"Cannot export file:\n{path}\n\n{e}")
 
     def _profile_load_from_crt(self):
-        """
-        Load CRT data and auto-populate the profile generation table.
-        Reads from the CRT Excel file, auto-fills Form_Factor, Material_Desc,
-        CFGPN, MCTO_#1, Dummy_Lot from CRT data, and leaves Step, MID, Tester,
-        Primitive, Dut, ATTR_OVERWRITE for user input. All columns remain editable.
-        """
         excel_path = self.context.get_var('checkout_excel_path').get().strip()
         cfgpn_flt  = self.context.get_var('checkout_cfgpn_filter').get().strip()
-
-        # Delegate to controller which loads CRT data in background
         self.context.controller.checkout_controller.load_crt_for_profile(
             excel_path=excel_path, cfgpn_filter=cfgpn_flt)
 
@@ -495,115 +690,95 @@ class CheckoutTab(BaseTab):
     # ──────────────────────────────────────────────────────────────────────
 
     def _on_profile_cell_double_click(self, event):
-        """Handle double-click on a profile grid cell for inline editing."""
         region = self._profile_grid.identify_region(event.x, event.y)
         if region != "cell":
             return
-
-        col_id = self._profile_grid.identify_column(event.x)
+        col_id  = self._profile_grid.identify_column(event.x)
         item_id = self._profile_grid.identify_row(event.y)
         if not item_id or not col_id:
             return
-
-        # Convert column identifier (#1, #2, ...) to column name
-        col_idx = int(col_id.replace("#", "")) - 1
-        cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
+        col_idx  = int(col_id.replace("#", "")) - 1
+        cols     = [c for c, _ in self._PROFILE_GEN_COLUMNS]
         if col_idx < 0 or col_idx >= len(cols):
             return
         col_name = cols[col_idx]
-
-        # All columns are editable — auto-populated columns can be overridden by user
-        row_idx = self._profile_grid.index(item_id)
+        row_idx  = self._profile_grid.index(item_id)
         if row_idx < 0 or row_idx >= len(self._profile_data):
             return
-
         current_value = self._profile_data[row_idx].get(col_name, "")
-
-        # Special handling for ATTR_OVERWRITE — open dialog
         if col_name == "ATTR_OVERWRITE":
             self._show_attr_overwrite_dialog(row_idx)
             return
-
-        # For other editable columns, use inline entry editing
         self._start_inline_edit(item_id, col_id, col_idx, row_idx, col_name, current_value)
 
     def _start_inline_edit(self, item_id, col_id, col_idx, row_idx, col_name, current_value):
-        """Create an inline Entry widget over the cell for editing."""
-        # Get cell bounding box
         bbox = self._profile_grid.bbox(item_id, col_id)
         if not bbox:
             return
         x, y, w, h = bbox
-
-        # Create entry widget
         edit_entry = ttk.Entry(self._profile_grid, width=w // 8)
         edit_entry.insert(0, current_value)
         edit_entry.select_range(0, tk.END)
         edit_entry.place(x=x, y=y, width=w, height=h)
         edit_entry.focus_set()
 
-        def _save_edit(event=None):
-            new_value = edit_entry.get().strip()
-            self._profile_data[row_idx][col_name] = new_value
+        def _save(event=None):
+            self._profile_data[row_idx][col_name] = edit_entry.get().strip()
             self._refresh_profile_grid()
             edit_entry.destroy()
 
-        def _cancel_edit(event=None):
+        def _cancel(event=None):
             edit_entry.destroy()
 
-        edit_entry.bind("<Return>", _save_edit)
-        edit_entry.bind("<Escape>", _cancel_edit)
-        edit_entry.bind("<FocusOut>", _save_edit)
+        edit_entry.bind("<Return>",   _save)
+        edit_entry.bind("<Escape>",   _cancel)
+        edit_entry.bind("<FocusOut>", _save)
 
     def _show_attr_overwrite_dialog(self, row_idx):
-        """
-        Show the ATTR_OVERWRITE edit dialog, mimicking the CRT Automation Tools.
-        Format: Section;AttrName;AttrValue;Section;AttrName;AttrValue;...
-        """
         current_value = self._profile_data[row_idx].get("ATTR_OVERWRITE", "")
 
         dialog = tk.Toplevel(self.winfo_toplevel())
         dialog.title("ATTR_OVERWRITE Editor")
-        dialog.geometry("600x450")
+        dialog.geometry("620x460")
         dialog.transient(self.winfo_toplevel())
         dialog.grab_set()
 
-        # ── Input fields ──────────────────────────────────────────────────
-        input_frame = ttk.LabelFrame(dialog, text="Add Attribute Override", padding="5")
-        input_frame.pack(fill=tk.X, padx=10, pady=5)
-
-        ttk.Label(input_frame, text="Section:").grid(row=0, column=0, sticky=tk.W, padx=2)
-        section_var = tk.StringVar()
-        section_combo = ttk.Combobox(input_frame, textvariable=section_var,
-                                     values=["MAM", "MCTO", "CFGPN", "EQUIPMENT"],
-                                     width=15)
-        section_combo.grid(row=0, column=1, sticky="we", padx=2)
-
-        ttk.Label(input_frame, text="Attr Name:").grid(row=1, column=0, sticky=tk.W, padx=2)
-        attr_name_var = tk.StringVar()
-        ttk.Entry(input_frame, textvariable=attr_name_var, width=20).grid(
-            row=1, column=1, sticky="we", padx=2)
-
-        ttk.Label(input_frame, text="Attr Value:").grid(row=2, column=0, sticky=tk.W, padx=2)
-        attr_value_var = tk.StringVar()
-        ttk.Entry(input_frame, textvariable=attr_value_var, width=20).grid(
-            row=2, column=1, sticky="we", padx=2)
-
+        # Input fields
+        input_frame = ttk.LabelFrame(dialog, text="Add Attribute Override", padding="8")
+        input_frame.pack(fill=tk.X, padx=10, pady=(10, 4))
         input_frame.columnconfigure(1, weight=1)
 
-        # ── Entries grid ──────────────────────────────────────────────────
-        entries_frame = ttk.LabelFrame(dialog, text="Current Overrides", padding="5")
-        entries_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        ttk.Label(input_frame, text="Section:").grid(
+            row=0, column=0, sticky=tk.W, padx=(0, 6), pady=2)
+        section_var = tk.StringVar()
+        ttk.Combobox(input_frame, textvariable=section_var,
+                     values=["MAM", "MCTO", "CFGPN", "EQUIPMENT"],
+                     width=16).grid(row=0, column=1, sticky="we", pady=2)
+
+        ttk.Label(input_frame, text="Attr Name:").grid(
+            row=1, column=0, sticky=tk.W, padx=(0, 6), pady=2)
+        attr_name_var = tk.StringVar()
+        ttk.Entry(input_frame, textvariable=attr_name_var).grid(
+            row=1, column=1, sticky="we", pady=2)
+
+        ttk.Label(input_frame, text="Attr Value:").grid(
+            row=2, column=0, sticky=tk.W, padx=(0, 6), pady=2)
+        attr_value_var = tk.StringVar()
+        ttk.Entry(input_frame, textvariable=attr_value_var).grid(
+            row=2, column=1, sticky="we", pady=2)
+
+        # Entries grid
+        entries_frame = ttk.LabelFrame(dialog, text="Current Overrides", padding="8")
+        entries_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
 
         entry_cols = ["Section", "Attr Name", "Attr Value"]
         entries_tree = ttk.Treeview(entries_frame, columns=entry_cols,
-                                    show="headings", height=6, selectmode="browse")
+                                    show="headings", height=7, selectmode="browse")
         for col in entry_cols:
-            entries_tree.heading(col, text=col)
-            entries_tree.column(col, width=150, stretch=True)
+            entries_tree.heading(col, text=col, anchor=tk.W)
+            entries_tree.column(col, width=160, stretch=True, anchor=tk.W)
         entries_tree.pack(fill=tk.BOTH, expand=True)
 
-        # Populate from existing value
         if current_value:
             parts = current_value.split(";")
             for i in range(0, len(parts), 3):
@@ -611,9 +786,9 @@ class CheckoutTab(BaseTab):
                     entries_tree.insert("", tk.END,
                                         values=(parts[i], parts[i+1], parts[i+2]))
 
-        # ── Buttons ───────────────────────────────────────────────────────
+        # Buttons
         btn_frame = ttk.Frame(dialog)
-        btn_frame.pack(fill=tk.X, padx=10, pady=5)
+        btn_frame.pack(fill=tk.X, padx=10, pady=(4, 10))
 
         def _add_entry():
             s = section_var.get().strip().upper()
@@ -621,7 +796,6 @@ class CheckoutTab(BaseTab):
             v = attr_value_var.get().strip().upper()
             if not s or not n or not v:
                 return
-            # Check for duplicate
             for child in entries_tree.get_children():
                 vals = entries_tree.item(child, "values")
                 if vals[0] == s and vals[1] == n and vals[2] == v:
@@ -649,32 +823,28 @@ class CheckoutTab(BaseTab):
             self._refresh_profile_grid()
             dialog.destroy()
 
-        def _cancel():
-            dialog.destroy()
-
-        ttk.Button(btn_frame, text="Add", command=_add_entry).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="Remove", command=_remove_entry).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="Remove All", command=_remove_all).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="Save", command=_save).pack(side=tk.RIGHT, padx=2)
-        ttk.Button(btn_frame, text="Cancel", command=_cancel).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(btn_frame, text="Add",        command=_add_entry).pack(side=tk.LEFT, padx=(0, 3))
+        ttk.Button(btn_frame, text="Remove",     command=_remove_entry).pack(side=tk.LEFT, padx=(0, 3))
+        ttk.Button(btn_frame, text="Remove All", command=_remove_all).pack(side=tk.LEFT, padx=(0, 3))
+        ttk.Button(btn_frame, text="Save",       command=_save).pack(side=tk.RIGHT, padx=(3, 0))
+        ttk.Button(btn_frame, text="Cancel",     command=dialog.destroy).pack(side=tk.RIGHT, padx=(0, 3))
 
     def _on_profile_row_select(self, event):
-        """When a profile row is selected, update the status bar with details."""
         sel = self._profile_grid.selection()
         if not sel:
             return
         values = self._profile_grid.item(sel[0], "values")
-        cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
+        cols   = [c for c, _ in self._PROFILE_GEN_COLUMNS]
 
         def _get(col_name):
             idx = cols.index(col_name) if col_name in cols else -1
             return values[idx] if 0 <= idx < len(values) else ""
 
-        cfgpn = _get("CFGPN")
+        cfgpn     = _get("CFGPN")
         dummy_lot = _get("Dummy_Lot")
-        mid = _get("MID")
-        step = _get("Step")
-        tester = _get("Tester")
+        mid       = _get("MID")
+        step      = _get("Step")
+        tester    = _get("Tester")
 
         self._profile_status_label.configure(
             text=(f"Selected: CFGPN={cfgpn}  Lot={dummy_lot}  "
@@ -686,7 +856,6 @@ class CheckoutTab(BaseTab):
     # ──────────────────────────────────────────────────────────────────────
 
     def _refresh_testers(self):
-        # Fix #3: destroy ALL children cleanly instead of fragile grid_slaves() row check
         for widget in self._tester_frame.winfo_children():
             widget.destroy()
 
@@ -696,25 +865,30 @@ class CheckoutTab(BaseTab):
 
         testers = self.context.controller.checkout_controller.get_available_testers()
         if not testers:
-            ttk.Label(self._tester_frame, text="No testers registered.",
-                      foreground="orange").grid(row=self._tester_row, column=0,
-                                                columnspan=5, sticky=tk.W)
+            ttk.Label(self._tester_frame,
+                      text="No testers registered.",
+                      foreground="orange").grid(
+                row=0, column=0, columnspan=5, sticky=tk.W, pady=4)
             return
 
         for i, (hostname, env) in enumerate(testers):
             var = tk.BooleanVar(value=True)
             self._tester_vars[hostname] = var
-            ttk.Checkbutton(self._tester_frame, text=f"{hostname}  ({env})",
-                            variable=var).grid(row=self._tester_row + i, column=0,
-                                               sticky=tk.W, padx=(0, 20))
+
+            ttk.Checkbutton(self._tester_frame,
+                             text=f"{hostname}  ({env})",
+                             variable=var).grid(
+                row=i, column=0, sticky=tk.W, padx=(0, 16), pady=2)
+
             badge = ttk.Label(self._tester_frame, text="IDLE", width=14,
-                              anchor=tk.CENTER, relief=tk.FLAT,
-                              foreground="white", background="#888888")
-            badge.grid(row=self._tester_row + i, column=1, padx=5)
+                               anchor=tk.CENTER, relief=tk.FLAT,
+                               foreground="white", background="#888888")
+            badge.grid(row=i, column=1, padx=(0, 8), pady=2)
             self._badge_labels[hostname] = badge
+
             phase_lbl = ttk.Label(self._tester_frame, text="",
-                                  foreground="#555555", font=("Segoe UI", 8))
-            phase_lbl.grid(row=self._tester_row + i, column=2, sticky=tk.W, padx=5)
+                                   foreground="#555555", font=("Segoe UI", 8))
+            phase_lbl.grid(row=i, column=2, sticky=tk.W, pady=2)
             self._phase_labels[hostname] = phase_lbl
 
     # ──────────────────────────────────────────────────────────────────────
@@ -722,12 +896,8 @@ class CheckoutTab(BaseTab):
     # ──────────────────────────────────────────────────────────────────────
 
     def _browse_tgz(self):
-        # Default browse location — confirmed path from Phase 1 compile output
         _DEFAULT_TGZ_DIR = r"P:\temp\BENTO\RELEASE_TGZ"
-
-        # Fall back gracefully if P: drive is not mapped
         initial_dir = _DEFAULT_TGZ_DIR if os.path.isdir(_DEFAULT_TGZ_DIR) else "/"
-
         path = filedialog.askopenfilename(
             title="Select compiled TGZ",
             initialdir=initial_dir,
@@ -736,7 +906,6 @@ class CheckoutTab(BaseTab):
             self.context.get_var('checkout_tgz_path').set(path)
 
     def _browse_excel(self):
-        """Browse for a CRT Excel file to use as profile generation source."""
         path = filedialog.askopenfilename(
             title="Select CRT Excel File",
             filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")])
@@ -752,7 +921,6 @@ class CheckoutTab(BaseTab):
             var.set(False)
 
     def _import_xml(self):
-        """Browse for an existing SLATE XML and autofill form fields from it."""
         path = filedialog.askopenfilename(
             title="Select SLATE Profile XML",
             filetypes=[("XML files", "*.xml"), ("All files", "*.*")])
@@ -770,24 +938,21 @@ class CheckoutTab(BaseTab):
         if params is None:
             return
         self.lock_gui()
-        self.stop_btn.state(["!disabled"])  # Enable Stop button
+        self.stop_btn.state(["!disabled"])
         self.context.controller.checkout_controller.start_checkout(params)
 
     def _stop_checkout(self):
-        """Signal the controller to stop the running checkout."""
         self.context.controller.checkout_controller.stop_checkout()
         self.stop_btn.state(["disabled"])
 
     def _collect_params(self):
-        """Gather and validate all form inputs. Returns params dict or None."""
-        # Paths & test case fields (still in UI)
-        tgz_path      = self.context.get_var('checkout_tgz_path').get().strip()
-        hot_folder    = self.context.get_var('checkout_hot_folder').get().strip()
-        method        = self.context.get_var('checkout_detect_method').get()
-        timeout_m     = self.context.get_var('checkout_timeout_min').get()
-        notify        = self.context.get_var('checkout_notify_teams').get()
-        hostnames     = [h for h, v in self._tester_vars.items() if v.get()]
-        webhook_url   = self.context.get_var('checkout_webhook_url').get().strip()
+        tgz_path    = self.context.get_var('checkout_tgz_path').get().strip()
+        hot_folder  = self.context.get_var('checkout_hot_folder').get().strip()
+        method      = self.context.get_var('checkout_detect_method').get()
+        timeout_m   = self.context.get_var('checkout_timeout_min').get()
+        notify      = self.context.get_var('checkout_notify_teams').get()
+        hostnames   = [h for h, v in self._tester_vars.items() if v.get()]
+        webhook_url = self.context.get_var('checkout_webhook_url').get().strip()
 
         tc_passing    = self.context.get_var('checkout_tc_passing').get()
         tc_fail       = self.context.get_var('checkout_tc_force_fail').get()
@@ -795,10 +960,8 @@ class CheckoutTab(BaseTab):
         fail_label    = self.context.get_var('checkout_tc_fail_label').get().strip()
         fail_desc     = self.context.get_var('checkout_tc_fail_desc').get().strip()
 
-        # Collect profile generation table data (replaces old DUT Identity fields)
         profile_table = self._profile_data.copy() if self._profile_data else []
 
-        # Validation
         if not tgz_path:
             self.show_error("Input Error", "Enter the TGZ path.")
             return None
@@ -817,7 +980,6 @@ class CheckoutTab(BaseTab):
                             "Select at least one test case (PASSING or FORCE FAIL).")
             return None
 
-        # Build test cases list
         test_cases = []
         if tc_passing:
             test_cases.append({"type": "passing",    "label": passing_label or "passing"})
@@ -846,19 +1008,19 @@ class CheckoutTab(BaseTab):
         if not badge:
             return
         fg, bg = self._BADGE_COLOURS.get(state.upper(), ("#888888", "white"))
-        badge.configure(text=state.upper(), foreground=fg, background=bg)
+        badge.configure(text=state.upper(), foreground=bg, background=fg)
 
     def _set_phase(self, hostname, phase):
         lbl = self._phase_labels.get(hostname)
         if lbl:
             lbl.configure(text=phase)
 
-    def _clear_results(self):                                     # Fix #6
+    def _clear_results(self):
         self.results_text.configure(state=tk.NORMAL)
         self.results_text.delete("1.0", tk.END)
         self.results_text.configure(state=tk.DISABLED)
 
-    def _open_queue_folder(self):                                 # Fix #7
+    def _open_queue_folder(self):
         queue_path = r"P:\temp\BENTO\CHECKOUT_QUEUE"
         if os.path.isdir(queue_path):
             os.startfile(queue_path)
@@ -867,7 +1029,7 @@ class CheckoutTab(BaseTab):
                             f"Queue folder not found:\n{queue_path}\n\n"
                             "Ensure P: drive is mapped.")
 
-    def _append_result(self, text):
+    def _append_result(self, text: str):
         self.results_text.configure(state=tk.NORMAL)
         self.results_text.insert(tk.END, text + "\n")
         self.results_text.see(tk.END)
@@ -878,74 +1040,44 @@ class CheckoutTab(BaseTab):
     # ──────────────────────────────────────────────────────────────────────
 
     def on_profile_data_loaded(self, profile_rows: List[Dict]):
-        """
-        Callback when CRT data is loaded for profile generation.
-        Populates the profile generation table with auto-filled CRT columns
-        (Form_Factor, Material_Desc, CFGPN, MCTO_#1, Dummy_Lot) and empty
-        editable columns (Step, MID, Tester, Primitive, Dut, ATTR_OVERWRITE).
-        All columns remain user-editable.
-        """
         self._profile_data = profile_rows
         self._refresh_profile_grid()
         self._update_profile_status()
-        count = len(profile_rows)
-        self.log(f"✓ Profile table loaded: {count} row(s) from CRT data")
+        self.log(f"✓ Profile table loaded: {len(profile_rows)} row(s) from CRT data")
 
     def on_crt_grid_loaded(self, crt_data):
-        """
-        Legacy callback — converts CRT grid data into profile generation rows.
-        Auto-populates Form_Factor, Material_Desc, CFGPN, MCTO_#1, Dummy_Lot
-        from CRT data. Leaves Step, MID, Tester, Primitive, Dut, ATTR_OVERWRITE
-        for user input.
-        """
         rows = crt_data.get("rows", [])
         self._profile_data = []
         for row_dict in rows:
             material_desc = str(row_dict.get("Material description", "")).strip()
             cfgpn = str(row_dict.get("CFGPN", "")).strip()
-            profile_row = {
-                "Form_Factor": str(row_dict.get("Form_Factor", "")).strip(),
-                "Material_Desc": material_desc,
-                "CFGPN": cfgpn,
-                "MCTO_#1": str(row_dict.get("MCTO_#1", "")).strip(),
-                "Dummy_Lot": str(row_dict.get("Dummy_Lot", material_desc or "None")).strip(),
-                "Step": "",
-                "MID": "",
-                "Tester": "",
-                "Primitive": "",
-                "Dut": "",
-                "ATTR_OVERWRITE": "",
-            }
-            self._profile_data.append(profile_row)
-
+            self._profile_data.append({
+                "Form_Factor":    str(row_dict.get("Form_Factor", "")).strip(),
+                "Material_Desc":  material_desc,
+                "CFGPN":          cfgpn,
+                "MCTO_#1":        str(row_dict.get("MCTO_#1", "")).strip(),
+                "Dummy_Lot":      str(row_dict.get("Dummy_Lot",
+                                                   material_desc or "None")).strip(),
+                "Step": "", "MID": "", "Tester": "",
+                "Primitive": "", "Dut": "", "ATTR_OVERWRITE": "",
+            })
         if not self._profile_data:
             self._profile_add_default_row()
-
         self._refresh_profile_grid()
         self._update_profile_status()
-        count = crt_data.get("count", 0)
-        self.log(f"✓ Profile table loaded from CRT: {count} row(s)")
+        self.log(f"✓ Profile table loaded from CRT: {crt_data.get('count', 0)} row(s)")
 
     def on_autofill_completed(self, mid, cfgpn, fw_ver):
-        """Log auto-fill results. DUT Identity fields are now in the profile table."""
         self.log(f"✓ Auto-filled: MID={mid}  CFGPN={cfgpn}  FW={fw_ver}")
 
     def on_xml_imported(self, data: dict):
-        """
-        Populate form fields from a parsed SLATE Profile XML.
-
-        data keys (all optional / may be empty):
-          tgz_path, env, mid, lot_prefix, dut_locations (list[str]), dut_slots (int)
-        """
         if data.get("tgz_path"):
             self.context.get_var('checkout_tgz_path').set(data["tgz_path"])
-
         filled = []
         if data.get("tgz_path"):   filled.append("TGZ")
         if data.get("env"):        filled.append(f"ENV={data['env']}")
         if data.get("mid"):        filled.append(f"MID={data['mid']}")
         if data.get("lot_prefix"): filled.append(f"Lot={data['lot_prefix']}")
-
         summary = "  ".join(filled) if filled else "(nothing recognised)"
         self.log(f"✓ XML imported: {summary}")
 
@@ -961,14 +1093,13 @@ class CheckoutTab(BaseTab):
         self._set_phase(hostname, phase)
 
     def on_checkout_completed(self, hostname, result):
-        status = result.get("status", "failed").upper()
-        self._set_badge(hostname, status)
-        self._set_phase(hostname, "")
-
+        status     = result.get("status", "failed").upper()
         elapsed    = result.get("elapsed", 0)
         detail     = result.get("detail", "")
         test_cases = result.get("test_cases", [])
 
+        self._set_badge(hostname, status)
+        self._set_phase(hostname, "")
         self._append_result(f"[{hostname}] {status}  ({elapsed}s)  {detail}")
         for tc in test_cases:
             icon = "✓" if tc.get("status") == "success" else "✗"
@@ -983,5 +1114,4 @@ class CheckoutTab(BaseTab):
             self.unlock_gui()
 
     def get_profile_table_data(self) -> List[Dict]:
-        """Return the current profile generation table data."""
         return self._profile_data.copy()
