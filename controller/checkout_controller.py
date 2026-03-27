@@ -29,7 +29,7 @@ logger = logging.getLogger("bento_app")
 # ── CONFIRMED PATHS ───────────────────────────────────────────────────────────
 # N: = \\sifsmodtestrep\ModTestRep  (confirmed via `net use`)
 _REGISTRY_PATH      = r"P:\temp\BENTO\bento_testers.json"
-_CRT_EXCEL_DEFAULT  = r"\\sifsmodtestrep\ModTestRep\crab\crt_from_sap.xlsx"
+_CRT_EXCEL_DEFAULT  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Documents", "incoming_crt.xlsx")
 _DEFAULT_HOT_FOLDER = r"C:\test_program\playground_queue"
 _CHECKOUT_QUEUE     = r"P:\temp\BENTO\CHECKOUT_QUEUE"
 
@@ -134,7 +134,7 @@ class CheckoutController(object):
     def load_from_crt_excel(self, cfgpn="", excel_path=""):
         r"""
         Read CRT Excel and return structured data for the grid.
-        Confirmed path: \\sifsmodtestrep\ModTestRep\crab\crt_from_sap.xlsx
+        Confirmed path: ../Documents/incoming_crt.xlsx
         Column names from crt_excel_template.json.
         """
         import pandas as pd
@@ -146,7 +146,7 @@ class CheckoutController(object):
         if not os.path.exists(path):
             raise FileNotFoundError(
                 "CRT Excel not found:\n  " + path + "\n"
-                "Ensure N: drive (\\\\sifsmodtestrep) is mapped."
+                "Ensure ../Documents/incoming_crt.xlsx exists."
             )
 
         # Mirrors C.A.T. exactly
@@ -180,6 +180,10 @@ class CheckoutController(object):
                 _COL_SSD_DRIVE_TYPE: str(row.get(_COL_SSD_DRIVE_TYPE, "") or "").strip(),
                 _COL_ABIT_RELEASE:   str(row.get(_COL_ABIT_RELEASE,   "") or "").strip(),
                 _COL_SFN2_RELEASE:   str(row.get(_COL_SFN2_RELEASE,   "") or "").strip(),
+                # Profile gen columns (may not exist in CRT Excel)
+                "Form_Factor":       str(row.get("Form_Factor",       "") or "").strip(),
+                "MCTO_#1":           str(row.get("MCTO_#1",           "") or "").strip(),
+                "Dummy_Lot":         str(row.get("Dummy_Lot",         "") or "").strip(),
             })
 
         fw_wave_id = rows[0].get(_COL_FW_WAVE_ID, "") if rows else ""
@@ -235,6 +239,104 @@ class CheckoutController(object):
 
         threading.Thread(
             target=_run, daemon=True, name="bento-crt-load"
+        ).start()
+
+    def load_crt_for_profile(self, excel_path="", cfgpn_filter=""):
+        """
+        Load CRT Excel in background and convert to profile generation rows.
+
+        Reads CRT data, extracts Dummy_Lot (from Material description),
+        and creates profile table rows with empty editable columns
+        (Step, MID, Tester, Primitive, Dut, ATTR_OVERWRITE).
+
+        Mimics the CRT Automation Tools profile generation process.
+        """
+        def _run():
+            try:
+                crt_data = self.load_from_crt_excel(
+                    cfgpn=cfgpn_filter,
+                    excel_path=excel_path,
+                )
+                # Convert CRT rows to profile generation format
+                # Auto-populate: Form_Factor, Material_Desc, CFGPN, MCTO_#1, Dummy_Lot
+                # User-editable: Step, MID, Tester, Primitive, Dut, ATTR_OVERWRITE
+                profile_rows = []
+                for row_dict in crt_data.get("rows", []):
+                    material_desc = str(
+                        row_dict.get(_COL_MATERIAL_DESC, "")
+                    ).strip()
+                    cfgpn = str(
+                        row_dict.get(_COL_CFGPN, "")
+                    ).strip()
+                    form_factor = str(
+                        row_dict.get("Form_Factor", "")
+                    ).strip()
+                    mcto = str(
+                        row_dict.get("MCTO_#1", "")
+                    ).strip()
+                    dummy_lot = str(
+                        row_dict.get("Dummy_Lot", "")
+                    ).strip() or material_desc or "None"
+                    profile_rows.append({
+                        "Form_Factor": form_factor,
+                        "Material_Desc": material_desc,
+                        "CFGPN": cfgpn,
+                        "MCTO_#1": mcto,
+                        "Dummy_Lot": dummy_lot,
+                        "Step": "",
+                        "MID": "",
+                        "Tester": "",
+                        "Primitive": "",
+                        "Dut": "",
+                        "ATTR_OVERWRITE": "",
+                    })
+
+                if not profile_rows:
+                    profile_rows.append({
+                        "Form_Factor": "",
+                        "Material_Desc": "",
+                        "CFGPN": "",
+                        "MCTO_#1": "",
+                        "Dummy_Lot": "None",
+                        "Step": "",
+                        "MID": "",
+                        "Tester": "",
+                        "Primitive": "",
+                        "Dut": "",
+                        "ATTR_OVERWRITE": "",
+                    })
+
+                if self._view:
+                    self._view.root.after(
+                        0,
+                        lambda: self._view.checkout_tab.on_profile_data_loaded(
+                            profile_rows
+                        )
+                    )
+                if self._view:
+                    self._view.context.log(
+                        "[OK] Profile table loaded: "
+                        + str(len(profile_rows)) + " row(s)"
+                    )
+            except FileNotFoundError as e:
+                if self._view:
+                    self._view.context.log(
+                        "[FAIL] CRT Excel not found: " + str(e)
+                    )
+            except ValueError as e:
+                if self._view:
+                    self._view.context.log(
+                        "[FAIL] CRT column mismatch: " + str(e)
+                    )
+            except Exception as e:
+                logger.error("load_crt_for_profile: " + str(e))
+                if self._view:
+                    self._view.context.log(
+                        "[FAIL] CRT load error: " + str(e)
+                    )
+
+        threading.Thread(
+            target=_run, daemon=True, name="bento-crt-profile-load"
         ).start()
 
     def load_from_xml(self, xml_path: str):

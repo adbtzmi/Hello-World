@@ -21,16 +21,18 @@
     "cat": {
         "_comment":           "N: = \\\\sifsmodtestrep\\ModTestRep  |  Q: = \\\\sifsmodauto\\modauto  |  P: = \\\\pgfsmodauto\\modauto",
         "db_path":            "\\\\sifsmodauto\\modauto\\temp\\cat\\CRT_Automation.db",
-        "crt_excel_path":     "\\\\sifsmodtestrep\\ModTestRep\\crab\\crt_from_sap.xlsx",
+        "crt_excel_path":     "..\\Documents\\incoming_crt.xlsx",
         "incoming_crt_excel": "\\\\sifsmodtestrep\\ModTestRep\\crab\\incoming_crt.xlsx",
         "profile_gen_excel":  "\\\\sifsmodtestrep\\ModTestRep\\crab\\for_profile_gen.xlsx"
     },
     "checkout": {
-        "hot_folder":         "C:\\test_program\\playground_queue",
-        "slate_log_path":     "C:\\test_program\\logs\\slate_system.log",
-        "output_folder":      "C:\\test_program\\results",
-        "memory_collect_exe": "C:\\tools\\memory_collect.exe",
-        "timeout_hours":      8
+        "hot_folder":             "C:\\test_program\\playground_queue",
+        "slate_log_path":         "C:\\test_program\\logs\\slate_system.log",
+        "playground_folder":      "C:\\test_program\\playground",
+        "output_folder":          "C:\\test_program\\results",
+        "memory_collect_exe":     "C:\\tools\\memory_collect.exe",
+        "memory_collect_timeout": 600,
+        "timeout_minutes":        30
     },
     "notifications": {
         "teams_webhook_url":  "",

@@ -5,7 +5,7 @@ model/orchestrators/checkout_orchestrator.py
 BENTO Checkout Orchestrator — Phase 2 Auto Start Checkout
 
 Runs on the LOCAL PC. Full flow:
-1. Read CRT Excel from \\sifsmodtestrep\ModTestRep\crab\crt_from_sap.xlsx
+1. Read CRT Excel from ../Documents/incoming_crt.xlsx
 2. Generate SLATE XML (correct Profile schema with AutoStart=True)
 3. Drop XML to P:\temp\BENTO\CHECKOUT_QUEUE\   <- FIXED: was HOT_DROP
 4. Poll .checkout_status sidecar (mirrors wait_for_build() exactly)
@@ -29,6 +29,7 @@ import logging
 import argparse
 import threading
 import shutil
+import subprocess
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Optional, Dict, List
@@ -36,7 +37,7 @@ from typing import Optional, Dict, List
 # ── CONFIRMED PATHS ───────────────────────────────────────────────────────────
 # N: = \\sifsmodtestrep\ModTestRep  (confirmed via `net use` output)
 CAT_CRAB_FOLDER         = r"\\sifsmodtestrep\ModTestRep\crab"
-CRT_EXCEL_PATH          = r"\\sifsmodtestrep\ModTestRep\crab\crt_from_sap.xlsx"
+CRT_EXCEL_PATH          = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "Documents", "incoming_crt.xlsx")
 CRT_DB_PATH             = r"\\sifsmodtestrep\ModTestRep\crab\closed_crt_jira_info.db"
 
 # ── P: drive — BENTO shared folders ──────────────────────────────────────────
@@ -59,6 +60,27 @@ CHECKOUT_TIMEOUT_SECONDS = 3600    # 60 min default
 
 # ── Teams webhook — override via settings.json or env var ────────────────────
 TEAMS_WEBHOOK_URL = ""
+
+# ── MEMORY COLLECTION ─────────────────────────────────────────────────────────
+# Default path — overridden by settings.json "checkout.memory_collect_exe"
+MEMORY_COLLECT_EXE      = r"C:\tools\memory_collect.exe"
+MEMORY_COLLECT_TIMEOUT  = 600   # seconds per slot — 10 min safety limit
+
+# Try to load from settings.json if available
+try:
+    _settings_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "settings.json"
+    )
+    if os.path.exists(_settings_path):
+        with open(_settings_path, "r") as _sf:
+            _settings = json.load(_sf)
+        _checkout_cfg = _settings.get("checkout", {})
+        if _checkout_cfg.get("memory_collect_exe"):
+            MEMORY_COLLECT_EXE = _checkout_cfg["memory_collect_exe"]
+        if _checkout_cfg.get("memory_collect_timeout"):
+            MEMORY_COLLECT_TIMEOUT = int(_checkout_cfg["memory_collect_timeout"])
+except Exception:
+    pass  # Use defaults if settings.json is missing or malformed
 
 # ── CONFIRMED COLUMN NAMES from crt_excel_template.json [26] ─────────────────
 # ⚠️  "Product  Name" = DOUBLE SPACE — confirmed in CAT.py [33]
@@ -132,8 +154,8 @@ def load_dut_info_from_crt(
     log_callback        = None,
 ) -> list:
     r"""
-    Read CRT Excel from \\sifsmodtestrep\ModTestRep\crab\crt_from_sap.xlsx
-    Confirmed location from `net use` output (N: = \\sifsmodtestrep\ModTestRep).
+    Read CRT Excel from ../Documents/incoming_crt.xlsx
+    (Previously: \\sifsmodtestrep\ModTestRep\crab\crt_from_sap.xlsx)
 
     Mirrors CatDB.update_db_with_crt_excel() in CAT.py [33] exactly:
         df = pd.read_excel(filepath, engine="openpyxl", dtype=str)
@@ -584,10 +606,14 @@ def collect_dut_memory(
     phase_callback = None,
 ) -> Dict:
     """
-    Trigger memory collection for all DUT slots after SLATE completes.
+    Trigger memory collection for all DUT slots after playground creation.
     Results saved to P:\\temp\\BENTO\\CHECKOUT_RESULTS\\ [24]
 
-    Replace the placeholder block with your actual tool call.
+    Calls MEMORY_COLLECT_EXE (configured via settings.json) with:
+      --slot <slot_number> --jira <jira_key> --hostname <hostname>
+      --output <output_folder>
+
+    Falls back to writing a diagnostic info file if the exe is not found.
     """
     if logger is None:
         logger = _get_logger()
@@ -602,40 +628,90 @@ def collect_dut_memory(
              f"⚠ Cannot create memory output folder: {e}",
              log_callback, "warning")
 
+    exe_available = os.path.isfile(MEMORY_COLLECT_EXE)
+    if not exe_available:
+        _log(logger,
+             f"⚠ memory_collect.exe not found at: {MEMORY_COLLECT_EXE} "
+             f"— will write diagnostic info files instead",
+             log_callback, "warning")
+
     collected = []
     failed    = []
 
     for slot in range(1, dut_slots + 1):
         try:
-            # ── INSERT YOUR REAL MEMORY COLLECTION CALL HERE ──────────
-            # Option A: subprocess to memory_collect.exe on tester
-            # import subprocess
-            # cmd = [r"C:\test_program\tools\memory_collect.exe",
-            #        "--slot", str(slot), "--output", output_folder]
-            # proc = subprocess.run(cmd, capture_output=True, timeout=300)
-            # if proc.returncode != 0:
-            #     raise RuntimeError(proc.stderr.decode())
-            # ─────────────────────────────────────────────────────────
+            if exe_available:
+                # ── REAL MEMORY COLLECTION via memory_collect.exe ──────
+                cmd = [
+                    MEMORY_COLLECT_EXE,
+                    "--slot", str(slot),
+                    "--jira", jira_key,
+                    "--hostname", hostname,
+                    "--output", output_folder,
+                ]
+                _log(logger,
+                     f"  [RUN] {' '.join(cmd)}",
+                     log_callback)
 
-            # Placeholder — writes a stub file until real tool wired up
-            mem_file = os.path.join(
-                output_folder, f"{jira_key}_slot{slot}_memory.txt"
-            )
-            with open(mem_file, 'w') as f:
-                f.write(f"Memory collection placeholder\n")
-                f.write(f"JIRA Key : {jira_key}\n")
-                f.write(f"Hostname : {hostname}\n")
-                f.write(f"Slot     : {slot}\n")
-                f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                try:
+                    stdout, stderr = proc.communicate(
+                        timeout=MEMORY_COLLECT_TIMEOUT
+                    )
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.communicate()
+                    raise RuntimeError(
+                        f"memory_collect.exe timed out after "
+                        f"{MEMORY_COLLECT_TIMEOUT}s"
+                    )
 
-            collected.append(slot)
-            _log(logger,
-                 f"  ✓ Slot {slot} → {os.path.basename(mem_file)}",
-                 log_callback)
+                # Write stdout/stderr to log files for diagnostics
+                slot_dir = os.path.join(output_folder, f"slot{slot}")
+                os.makedirs(slot_dir, exist_ok=True)
+                if stdout:
+                    with open(os.path.join(slot_dir, "stdout.log"), "wb") as f:
+                        f.write(stdout)
+                if stderr:
+                    with open(os.path.join(slot_dir, "stderr.log"), "wb") as f:
+                        f.write(stderr)
+
+                if proc.returncode != 0:
+                    err_msg = stderr.decode("utf-8", errors="replace").strip()
+                    raise RuntimeError(
+                        f"memory_collect.exe returned code "
+                        f"{proc.returncode}: {err_msg}"
+                    )
+
+                collected.append(slot)
+                _log(logger,
+                     f"  ✓ Slot {slot} — memory collected via exe",
+                     log_callback)
+            else:
+                # ── FALLBACK: write diagnostic info file ──────────────
+                mem_file = os.path.join(
+                    output_folder, f"{jira_key}_slot{slot}_memory.txt"
+                )
+                with open(mem_file, 'w') as f:
+                    f.write(f"Memory collection — exe not found\n")
+                    f.write(f"JIRA Key : {jira_key}\n")
+                    f.write(f"Hostname : {hostname}\n")
+                    f.write(f"Slot     : {slot}\n")
+                    f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+                    f.write(f"Expected : {MEMORY_COLLECT_EXE}\n")
+
+                collected.append(slot)
+                _log(logger,
+                     f"  ✓ Slot {slot} → {os.path.basename(mem_file)} "
+                     f"(diagnostic fallback)",
+                     log_callback)
 
         except Exception as e:
             failed.append(slot)
-            # ✅ Log failure per DUT — don't silently swallow [24]
             _log(logger,
                  f"  ✗ Slot {slot} memory collection failed: {e}",
                  log_callback, "warning")

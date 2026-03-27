@@ -132,6 +132,28 @@ CHECKOUT_RESULTS_FOLDER = r"P:\temp\BENTO\CHECKOUT_RESULTS"
 SLATE_HOT_FOLDER        = r"C:\test_program\playground_queue"
 SLATE_LOG_PATH          = r"C:\test_program\logs\slate_system.log"
 SLATE_RESULTS_FOLDER    = r"C:\test_program\results"
+SLATE_PLAYGROUND_FOLDER = r"C:\test_program\playground"
+
+# ── MEMORY COLLECTION ─────────────────────────────────────────────────────────
+# Default path — overridden by settings.json "checkout.memory_collect_exe"
+MEMORY_COLLECT_EXE      = r"C:\tools\memory_collect.exe"
+MEMORY_COLLECT_TIMEOUT  = 600   # seconds per DUT — 10 min safety limit
+
+# Try to load from settings.json if available
+try:
+    _settings_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "settings.json"
+    )
+    if os.path.exists(_settings_path):
+        with open(_settings_path, "r") as _sf:
+            _settings = json.load(_sf)
+        _checkout_cfg = _settings.get("checkout", {})
+        if _checkout_cfg.get("memory_collect_exe"):
+            MEMORY_COLLECT_EXE = _checkout_cfg["memory_collect_exe"]
+        if _checkout_cfg.get("memory_collect_timeout"):
+            MEMORY_COLLECT_TIMEOUT = int(_checkout_cfg["memory_collect_timeout"])
+except Exception:
+    pass  # Use defaults if settings.json is missing or malformed
 
 MAX_RETRIES        = 20
 MAX_PROCESSED_SIZE = 500
@@ -771,12 +793,16 @@ def _log_all_visible_windows(logger=None):
 
 def slate_gui_trigger(xml_path, timeout=60):
     """
-    Drive SLATE (SSD Tester Engineering GUI) through the complete
-    'Playground Setup / Start Test' workflow via pywinauto GUI automation.
+    Drive SLATE (SSD Tester Engineering GUI) through the checkout workflow
+    up to Create Playground via pywinauto GUI automation.
+
+    The checkout process ends at Create Playground — there is NO Load Recipe
+    or Run Test step. Memory collection is triggered separately after this
+    function returns True.
 
     This function is called in process_checkout_xml() AFTER the XML has
     been copied to C:\\test_program\\playground_queue and BEFORE
-    SlateCompletionMonitor.wait() is called.
+    PlaygroundCompletionMonitor.wait() is called.
 
     ════════════════════════════════════════════════════════
     PHASE 1 — AUTOFILL FIELDS FROM XML
@@ -787,15 +813,16 @@ def slate_gui_trigger(xml_path, timeout=60):
       • path   → txtTestJobArchive (auto_id confirmed)
 
     ════════════════════════════════════════════════════════
-    PHASE 2 — BUTTON WORKFLOW (exact UI order, left→right)
+    PHASE 2 — BUTTON WORKFLOW (ends at Create Playground)
     ════════════════════════════════════════════════════════
     All auto_ids confirmed from slate_full_controls_win32.txt:
       Step 1: btnRunRecipeSelect  "Run Recipe Selection" (optional)
       Step 2: btnGetManuData      "Get Manudata"          (optional)
       Step 3: btnCreateTempTravel "Create Temp Traveler"  (optional)
-      Step 4: btnCreatePlayground "Create Playground"     (REQUIRED)
-      Step 5: btnLoadRecipe       "Load Recipe"           (REQUIRED)
-      Step 6: btnRunTest          "Run Test"              (REQUIRED)
+      Step 4: btnCreatePlayground "Create Playground"     (REQUIRED — FINAL)
+
+    NOTE: btnLoadRecipe and btnRunTest exist in SLATE but are NOT used
+    during checkout. Checkout ends at playground creation.
 
     Args:
         xml_path : str or Path — full path to XML already in playground_queue
@@ -803,7 +830,7 @@ def slate_gui_trigger(xml_path, timeout=60):
                           (used for element waits; connect uses CONNECT_TIMEOUT)
 
     Returns:
-        True  — Run Test was clicked; SlateCompletionMonitor can now watch
+        True  — Playground created; PlaygroundCompletionMonitor can confirm
         False — a REQUIRED step failed; caller should retry or mark failed
 
     Raises:
@@ -1078,12 +1105,14 @@ def slate_gui_trigger(xml_path, timeout=60):
 
     # ════════════════════════════════════════════════════════
     # PHASE 2 — BUTTON WORKFLOW
-    # Exact left-to-right order as shown in SLATE UI
+    # Checkout ends at Create Playground — NO Load Recipe / Run Test.
+    # Steps: Recipe Selection → Get Manudata → Create Temp Traveler
+    #        → Create Playground → DONE
     # ════════════════════════════════════════════════════════
-    log.info("  \U0001f4cb Phase 2: Button workflow")
+    log.info("  \U0001f4cb Phase 2: Button workflow (up to Create Playground)")
 
     # ── Step 1: Run Recipe Selection (optional) ───────────────────────────
-    log.info("  \u2500\u2500 Step 1/6: Run Recipe Selection")
+    log.info("  \u2500\u2500 Step 1/4: Run Recipe Selection")
     ok = _click_slate_button(
         win,
         auto_id    = "btnRunRecipeSelect",
@@ -1096,7 +1125,7 @@ def slate_gui_trigger(xml_path, timeout=60):
     _dismiss_slate_popups(win)
 
     # ── Step 2: Get Manudata (optional) ──────────────────────────────────
-    log.info("  \u2500\u2500 Step 2/6: Get Manudata")
+    log.info("  \u2500\u2500 Step 2/4: Get Manudata")
     ok = _click_slate_button(
         win,
         auto_id    = "btnGetManuData",
@@ -1109,7 +1138,7 @@ def slate_gui_trigger(xml_path, timeout=60):
     _dismiss_slate_popups(win)
 
     # ── Step 3: Create Temp Traveler (optional) ───────────────────────────
-    log.info("  \u2500\u2500 Step 3/6: Create Temp Traveler")
+    log.info("  \u2500\u2500 Step 3/4: Create Temp Traveler")
     ok = _click_slate_button(
         win,
         auto_id    = "btnCreateTempTravel",
@@ -1121,8 +1150,8 @@ def slate_gui_trigger(xml_path, timeout=60):
         log.warning("    \u26a0\ufe0f Create Temp Traveler failed — continuing")
     _dismiss_slate_popups(win)
 
-    # ── Step 4: Create Playground (REQUIRED) ─────────────────────────────
-    log.info("  \u2500\u2500 Step 4/6: Create Playground  [REQUIRED]")
+    # ── Step 4: Create Playground (REQUIRED — FINAL STEP) ─────────────────
+    log.info("  \u2500\u2500 Step 4/4: Create Playground  [REQUIRED — FINAL STEP]")
     if not _click_slate_button(
         win,
         auto_id    = "btnCreatePlayground",
@@ -1134,60 +1163,52 @@ def slate_gui_trigger(xml_path, timeout=60):
         return False
     _dismiss_slate_popups(win)
 
-    # ── Step 4.5: Set Recipe File (optional) ─────────────────────────────
-    # SLATE allows typing the Recipe path before loading it
-    if fields and "recipe_file" in fields and fields["recipe_file"]:
-        log.info("  \u2500\u2500 Step 4.5: Set Recipe File")
-        _set_slate_field(
-            win,
-            auto_id  = "txtRecipeFile",  # using presumed standard auto_id
-            value    = fields["recipe_file"],
-            required = False
-        )
-        _dismiss_slate_popups(win)
+    # ════════════════════════════════════════════════════════
+    # CHECKOUT ENDS HERE — no Load Recipe / Run Test.
+    # The checkout process on the tester ends at Create Playground.
+    # Memory collection will be triggered separately after this returns.
+    # ════════════════════════════════════════════════════════
 
-    # ── Step 5: Load Recipe (REQUIRED) ───────────────────────────────────
-    log.info("  \u2500\u2500 Step 5/6: Load Recipe  [REQUIRED]")
-    if not _click_slate_button(
-        win,
-        auto_id    = "btnLoadRecipe",
-        label      = "Load Recipe",
-        wait_after = T_LOAD_RECIPE,
-        required   = True
-    ):
-        log.error("  \u274c Load Recipe FAILED — aborting workflow")
-        return False
-    _dismiss_slate_popups(win)
-
-    # ── Step 6: Run Test (REQUIRED — FINAL TRIGGER) ───────────────────────
-    log.info("  \u2500\u2500 Step 6/6: Run Test  [FINAL TRIGGER]")
-    if not _click_slate_button(
-        win,
-        auto_id    = "btnRunTest",
-        label      = "Run Test",
-        wait_after = T_RUN_TEST,
-        required   = True
-    ):
-        log.error("  \u274c Run Test FAILED — test did not start")
-        return False
-
-    log.info("  \u2705 \u2705 \u2705 slate_gui_trigger COMPLETE — SLATE test is RUNNING!")
+    log.info("  \u2705 \u2705 \u2705 slate_gui_trigger COMPLETE — Playground CREATED!")
     log.info("      XML: " + xml_name)
     return True
 
 
-# ── SLATE COMPLETION MONITOR ──────────────────────────────────────────────────
-class SlateCompletionMonitor(object):
+# ── PLAYGROUND COMPLETION MONITOR ─────────────────────────────────────────────
+class PlaygroundCompletionMonitor(object):
     """
-    3 parallel detection methods + timeout watchdog.
-    Uses threading.Event - thread-safe, race-condition free.
-    No f-strings - Python 2/3 compatible.
+    Detects playground creation completion (NOT test completion).
+
+    The checkout process ends at "Create Playground" — there is no Load Recipe
+    or Run Test step. This monitor confirms the playground was actually created
+    by checking:
+
+      METHOD 1 — SLATE log keywords: watches for "Playground Created",
+                 "Playground Ready", or "Playground Setup Complete" in the
+                 SLATE system log.
+
+      METHOD 2 — Playground folder: watches SLATE_PLAYGROUND_FOLDER for new
+                 files/folders appearing after the button click (indicates
+                 SLATE has written playground data to disk).
+
+      SAFETY  — Timeout watchdog (default 30 min — playground creation should
+                take seconds, not hours).
+
+      SAFETY  — Popup watchdog: catches fatal error popups from SLATE.
+
+    Since slate_gui_trigger() already waits for the btnCreatePlayground click
+    to return (pywinauto blocks until the button operation completes), this
+    monitor serves as a SECONDARY confirmation that the playground was
+    actually created on disk / in SLATE's internal state.
+
+    Uses threading.Event — thread-safe, race-condition free.
+    No f-strings — Python 2/3 compatible.
     """
 
-    def __init__(self, xml_path, logger, timeout_hours=8):
+    def __init__(self, xml_path, logger, timeout_minutes=30):
         self.xml_path          = xml_path
         self.logger            = logger
-        self.timeout_seconds   = timeout_hours * 3600
+        self.timeout_seconds   = timeout_minutes * 60
         self.start_time        = time.time()
         self._complete_event   = threading.Event()
         self._error_event      = threading.Event()
@@ -1203,14 +1224,25 @@ class SlateCompletionMonitor(object):
                     self._error_event.set()
                 self._complete_event.set()
                 self.logger.info(
-                    "[SlateMonitor] Completion via: " + method_name
+                    "[PlaygroundMonitor] Completion via: " + method_name
                 )
 
     def _monitor_log(self):
-        """METHOD 1: Watch SLATE log file for completion keywords."""
-        success_words = ["Test Complete", "Job Complete", "ALL PASS"]
-        error_words   = ["FATAL ERROR", "ABORTED", "FAILED"]
-        last_size     = 0
+        """METHOD 1: Watch SLATE log for playground creation keywords."""
+        success_words = [
+            "Playground Created",
+            "Playground Ready",
+            "Playground Setup Complete",
+            "Playground created successfully",
+            "CreatePlayground completed",
+        ]
+        error_words = [
+            "FATAL ERROR",
+            "ABORTED",
+            "Playground creation failed",
+            "CreatePlayground failed",
+        ]
+        last_size = 0
 
         while not self._complete_event.is_set():
             try:
@@ -1221,92 +1253,113 @@ class SlateCompletionMonitor(object):
                             lf.seek(last_size)
                             new_text = lf.read()
                         last_size = size
+                        # Check errors first (higher priority)
                         for w in error_words:
                             if w in new_text:
+                                self.logger.error(
+                                    "[PlaygroundMonitor] Error keyword in log: " + w
+                                )
                                 self._signal_complete(
-                                    "LOG_KEYWORD", is_error=True
+                                    "LOG_KEYWORD_ERROR", is_error=True
                                 )
                                 return
+                        # Check success keywords
                         for w in success_words:
                             if w in new_text:
-                                self._signal_complete("LOG_KEYWORD")
+                                self.logger.info(
+                                    "[PlaygroundMonitor] Success keyword in log: " + w
+                                )
+                                self._signal_complete("LOG_KEYWORD_PLAYGROUND")
                                 return
             except Exception as e:
                 self.logger.warning(
-                    "[Monitor1] Log error: " + str(e)
+                    "[PlaygroundMonitor-Log] Error: " + str(e)
                 )
-            time.sleep(10)
+            time.sleep(5)
 
-    def _monitor_output_folder(self):
-        """METHOD 2: Watch output folder for stable result files."""
+    def _monitor_playground_folder(self):
+        """METHOD 2: Watch playground folder for new files appearing."""
+        # Snapshot existing files BEFORE playground creation
+        initial_files = set()
+        try:
+            if os.path.isdir(SLATE_PLAYGROUND_FOLDER):
+                initial_files = set(os.listdir(SLATE_PLAYGROUND_FOLDER))
+        except Exception:
+            pass
+
         stable_count    = 0
-        required_stable = 3
+        required_stable = 2   # 2 consecutive checks with new stable files
 
         while not self._complete_event.is_set():
             try:
-                if os.path.isdir(SLATE_RESULTS_FOLDER):
-                    files = [
-                        f for f in os.listdir(SLATE_RESULTS_FOLDER)
-                        if f.endswith((".csv", ".log", ".bin"))
-                    ]
-                    if files:
+                if os.path.isdir(SLATE_PLAYGROUND_FOLDER):
+                    current_files = set(os.listdir(SLATE_PLAYGROUND_FOLDER))
+                    new_files = current_files - initial_files
+                    if new_files:
+                        # New files appeared — check if they're stable (not still being written)
                         sizes_now = {}
-                        for f in files:
-                            sizes_now[f] = os.path.getsize(
-                                os.path.join(SLATE_RESULTS_FOLDER, f)
-                            )
-                        time.sleep(5)
+                        for f in new_files:
+                            fp = os.path.join(SLATE_PLAYGROUND_FOLDER, f)
+                            try:
+                                sizes_now[f] = os.path.getsize(fp)
+                            except OSError:
+                                pass
+                        time.sleep(3)
                         sizes_later = {}
-                        for f in files:
-                            fp = os.path.join(SLATE_RESULTS_FOLDER, f)
-                            if os.path.exists(fp):
-                                sizes_later[f] = os.path.getsize(fp)
-                        if sizes_now == sizes_later:
+                        for f in new_files:
+                            fp = os.path.join(SLATE_PLAYGROUND_FOLDER, f)
+                            try:
+                                if os.path.exists(fp):
+                                    sizes_later[f] = os.path.getsize(fp)
+                            except OSError:
+                                pass
+                        if sizes_now == sizes_later and sizes_now:
                             stable_count += 1
                             if stable_count >= required_stable:
-                                self._signal_complete("OUTPUT_FILES")
+                                self.logger.info(
+                                    "[PlaygroundMonitor] New stable files in playground: "
+                                    + ", ".join(sorted(new_files)[:5])
+                                )
+                                self._signal_complete("PLAYGROUND_FOLDER")
                                 return
                         else:
                             stable_count = 0
             except Exception as e:
                 self.logger.warning(
-                    "[Monitor2] Folder error: " + str(e)
+                    "[PlaygroundMonitor-Folder] Error: " + str(e)
                 )
-            time.sleep(15)
+            time.sleep(5)
 
     def _timeout_watchdog(self):
-        """SAFETY: Hard timeout watchdog."""
+        """SAFETY: Hard timeout watchdog (default 30 min for playground creation)."""
         deadline = self.start_time + self.timeout_seconds
         while not self._complete_event.is_set():
             if time.time() > deadline:
                 self.logger.error(
-                    "[TIMEOUT] Checkout exceeded "
-                    + str(self.timeout_seconds // 3600) + "h limit!"
+                    "[TIMEOUT] Playground creation exceeded "
+                    + str(self.timeout_seconds // 60) + " min limit!"
                 )
                 self._signal_complete("TIMEOUT", is_error=True)
                 return
-            time.sleep(60)
+            time.sleep(30)
 
     def _popup_watchdog(self):
-        """METHOD 4: Watch for blocking error popups during execution and abort."""
+        """SAFETY: Watch for blocking error popups during playground creation."""
         if not _PYWINAUTO_AVAILABLE:
             return
-            
+
         dismiss_title_keywords = ["Error", "Fatal", "Abort", "Exception", "Fail"]
-        
+
         while not self._complete_event.is_set():
             try:
-                # Use win32 backend to catch WinForms dialogs
                 all_windows = Desktop(backend="win32").windows()  # type: ignore[operator]
                 for w in all_windows:
                     try:
                         title = w.window_text().strip()
                         if not title or "SSD Tester Engineering GUI" in title:
                             continue
-                            
-                        # If the popup title contains an error keyword
+
                         if any(kw.lower() in title.lower() for kw in dismiss_title_keywords):
-                            # Try to extract the error message
                             err_text = title
                             try:
                                 for c in w.children():
@@ -1316,60 +1369,60 @@ class SlateCompletionMonitor(object):
                                             err_text += " - " + txt
                             except Exception:
                                 pass
-                                
+
                             self.logger.error(
-                                "[PopupWatchdog] Fatal popup detected blocking execution: " + err_text
+                                "[PopupWatchdog] Fatal popup during playground creation: "
+                                + err_text
                             )
-                            
-                            # Try to dismiss it so SLATE doesn't hang forever
+
                             for btn_text in ["OK", "Close", "Yes", "Continue"]:
                                 try:
-                                    btn = w.child_window(title=btn_text, class_name="Button")
+                                    btn = w.child_window(
+                                        title=btn_text, class_name="Button"
+                                    )
                                     if btn.exists(timeout=1) and btn.is_enabled():
                                         btn.click_input()
                                         time.sleep(0.3)
                                         break
                                 except Exception:
                                     pass
-                                    
+
                             self._signal_complete("FATAL_POPUP", is_error=True)
                             return
                     except Exception:
                         continue
             except Exception as e:
                 self.logger.debug("[PopupWatchdog] Scan error: " + str(e))
-                
+
             time.sleep(10)
 
     def wait_for_completion(self):
         """
-        Launch all detection methods + watchdog as daemon threads.
+        Launch playground detection methods + watchdogs as daemon threads.
         Blocks with heartbeat until any method signals completion.
         Returns True on success, False on error/timeout.
         """
-        # Python 2/3 compatible: daemon= kwarg was added in Python 3.3.
-        # Set .daemon = True after construction for Python 2 compatibility.
         t_log = threading.Thread(
             target=self._monitor_log,
-            name="checkout-monitor-log"
+            name="playground-monitor-log"
         )
         t_log.daemon = True
 
         t_folder = threading.Thread(
-            target=self._monitor_output_folder,
-            name="checkout-monitor-folder"
+            target=self._monitor_playground_folder,
+            name="playground-monitor-folder"
         )
         t_folder.daemon = True
 
         t_watchdog = threading.Thread(
             target=self._timeout_watchdog,
-            name="checkout-timeout-watchdog"
+            name="playground-timeout-watchdog"
         )
         t_watchdog.daemon = True
-        
+
         t_popup = threading.Thread(
             target=self._popup_watchdog,
-            name="checkout-popup-watchdog"
+            name="playground-popup-watchdog"
         )
         t_popup.daemon = True
 
@@ -1378,24 +1431,35 @@ class SlateCompletionMonitor(object):
         for t in threads:
             t.start()
 
-        # Heartbeat loop every 2 minutes
-        while not self._complete_event.wait(timeout=120):
+        # Heartbeat loop every 30 seconds (playground creation is fast)
+        while not self._complete_event.wait(timeout=30):
             elapsed = int(time.time() - self.start_time)
             self.logger.info(
-                "[Heartbeat] Checkout running... "
-                + str(elapsed // 3600) + "h "
-                + str((elapsed % 3600) // 60) + "m"
+                "[Heartbeat] Playground creation running... "
+                + str(elapsed) + "s"
                 + " (method=" + self.completion_method + ")"
             )
 
         return not self._error_event.is_set()
 
 
+# Keep SlateCompletionMonitor as an alias for backward compatibility
+SlateCompletionMonitor = PlaygroundCompletionMonitor
+
+
 # ── MEMORY COLLECTION ─────────────────────────────────────────────────────────
+import subprocess
+
 def collect_one_dut(dut_elem, output_dir, logger):
     """
-    Memory collection for one DUT.
-    Replace with your actual memory_collect.exe call.
+    Memory collection for one DUT using memory_collect.exe.
+
+    Calls the configured MEMORY_COLLECT_EXE with:
+      --dut-location <row,col>
+      --mid <MID>
+      --output <per-DUT output directory>
+
+    Falls back to writing a diagnostic info file if the exe is not found.
     """
     mid     = dut_elem.get("MID", "unknown")
     lot     = dut_elem.get("Lot", "")
@@ -1406,26 +1470,75 @@ def collect_one_dut(dut_elem, output_dir, logger):
         if not os.path.isdir(dut_dir):
             os.makedirs(dut_dir)
 
-        # ── INSERT REAL MEMORY COLLECTION CALL HERE ───────────────────
-        # import subprocess
-        # cmd = [r"C:\test_program\tools\memory_collect.exe",
-        #        "--dut-location", dut_loc,
-        #        "--mid", mid,
-        #        "--output", dut_dir]
-        # proc = subprocess.run(cmd, capture_output=True, timeout=300)
-        # if proc.returncode != 0:
-        #     raise RuntimeError(proc.stderr.decode())
-        # ─────────────────────────────────────────────────────────────
+        # ── REAL MEMORY COLLECTION via memory_collect.exe ─────────────
+        if os.path.isfile(MEMORY_COLLECT_EXE):
+            cmd = [
+                MEMORY_COLLECT_EXE,
+                "--dut-location", dut_loc,
+                "--mid", mid,
+                "--lot", lot,
+                "--output", dut_dir,
+            ]
+            logger.info(
+                "  [RUN] " + " ".join(cmd)
+            )
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = proc.communicate(
+                    timeout=MEMORY_COLLECT_TIMEOUT
+                )
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                raise RuntimeError(
+                    "memory_collect.exe timed out after "
+                    + str(MEMORY_COLLECT_TIMEOUT) + "s"
+                )
 
-        info_file = os.path.join(dut_dir, "memory_info.txt")
-        with open(info_file, "w") as f:
-            f.write("MID        : " + mid + "\n")
-            f.write("Lot        : " + lot + "\n")
-            f.write("DUT Loc    : " + dut_loc + "\n")
-            f.write("Timestamp  : " + datetime.now().isoformat() + "\n")
-            f.write("Status     : PLACEHOLDER\n")
+            # Write stdout/stderr to log files for diagnostics
+            if stdout:
+                stdout_file = os.path.join(dut_dir, "memory_collect_stdout.log")
+                with open(stdout_file, "wb") as f:
+                    f.write(stdout)
+            if stderr:
+                stderr_file = os.path.join(dut_dir, "memory_collect_stderr.log")
+                with open(stderr_file, "wb") as f:
+                    f.write(stderr)
 
-        logger.info("  [OK] Memory collected: " + mid + " @ " + dut_loc)
+            if proc.returncode != 0:
+                err_msg = stderr.decode("utf-8", errors="replace").strip()
+                raise RuntimeError(
+                    "memory_collect.exe returned code "
+                    + str(proc.returncode) + ": " + err_msg
+                )
+
+            logger.info(
+                "  [OK] Memory collected via exe: " + mid + " @ " + dut_loc
+            )
+        else:
+            # ── FALLBACK: exe not found — write diagnostic info file ──
+            logger.warning(
+                "  [WARN] memory_collect.exe not found at: "
+                + MEMORY_COLLECT_EXE
+                + " — writing diagnostic info file instead"
+            )
+            info_file = os.path.join(dut_dir, "memory_info.txt")
+            with open(info_file, "w") as f:
+                f.write("MID        : " + mid + "\n")
+                f.write("Lot        : " + lot + "\n")
+                f.write("DUT Loc    : " + dut_loc + "\n")
+                f.write("Timestamp  : " + datetime.now().isoformat() + "\n")
+                f.write("Status     : FALLBACK (exe not found)\n")
+                f.write("Expected   : " + MEMORY_COLLECT_EXE + "\n")
+
+            logger.info(
+                "  [OK] Diagnostic info written: " + mid + " @ " + dut_loc
+            )
+
         return True
 
     except Exception as e:
@@ -1506,13 +1619,15 @@ def process_checkout_xml(xml_path, env, logger):
     """
     Full pipeline for one checkout XML.
 
+    Checkout ends at Create Playground — NO Load Recipe / Run Test.
+
     Steps:
       1. Validate XML integrity
       2. Write in_progress status
       3. Copy XML -> SLATE hot folder (AUTO-CREATED)
-      3b. Drive SLATE GUI via slate_gui_trigger() [NEW]
-      4. Wait for SLATE completion (parallel methods)
-      5. Memory collection for all DUTs (saved to CHECKOUT_RESULTS/HOSTNAME_ENV/JIRA_KEY/)
+      3b. Drive SLATE GUI up to Create Playground via slate_gui_trigger()
+      4. Confirm playground creation (PlaygroundCompletionMonitor)
+      5. Memory collection for all DUTs immediately after playground created
       6. Write success/failed status -> orchestrator wakes up
     """
     fname    = os.path.basename(xml_path)
@@ -1608,29 +1723,34 @@ def process_checkout_xml(xml_path, env, logger):
         )
         return
     # ════════════════════════════════════════════════════════════════════
-    # END Step 3b
+    # END Step 3b — slate_gui_trigger() returned True = playground created
     # ════════════════════════════════════════════════════════════════════
 
-    # Step 4: Wait for SLATE completion
-    logger.info("[~] Waiting for SLATE completion...")
-    monitor = SlateCompletionMonitor(xml_path, logger, timeout_hours=8)
+    # Step 4: Confirm playground creation via secondary detection
+    # slate_gui_trigger() already waited for btnCreatePlayground to return,
+    # but we run PlaygroundCompletionMonitor as a secondary confirmation
+    # that the playground was actually written to disk / logged by SLATE.
+    logger.info("[~] Confirming playground creation...")
+    monitor = PlaygroundCompletionMonitor(xml_path, logger, timeout_minutes=30)
     success = monitor.wait_for_completion()
 
     if not success:
         write_status(
             xml_path, "failed",
-            "SLATE did not complete successfully "
+            "Playground creation could not be confirmed "
             "(method=" + monitor.completion_method + ")"
         )
-        logger.error("[FAIL] SLATE failed/timed out: " + fname)
+        logger.error("[FAIL] Playground creation failed/timed out: " + fname)
         return
 
     logger.info(
-        "[OK] SLATE complete via " + monitor.completion_method
+        "[OK] Playground created via " + monitor.completion_method
         + ": " + fname
     )
 
-    # Step 5: Memory collection
+    # Step 5: Memory collection — triggered immediately after playground creation
+    # No test run happens during checkout; memory collection runs right after
+    # the playground is confirmed created.
     logger.info("[~] Starting memory collection for all DUTs...")
     mem_result = trigger_memory_collection(
         xml_path, jira_key, logger,
@@ -1640,7 +1760,8 @@ def process_checkout_xml(xml_path, env, logger):
     # Step 6: Write success status -> orchestrator wakes up
     write_status(
         xml_path, "success",
-        "Checkout complete via " + monitor.completion_method + ". "
+        "Checkout complete (playground created via "
+        + monitor.completion_method + "). "
         + "MemCollect: " + mem_result["status"]
         + " (" + mem_result["detail"] + ")"
     )

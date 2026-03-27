@@ -1,7 +1,7 @@
 import os
 import tkinter as tk
-from tkinter import ttk, filedialog
-from typing import Any
+from tkinter import ttk, filedialog, simpledialog
+from typing import Any, List, Dict
 from view.tabs.base_tab import BaseTab
 
 
@@ -12,7 +12,12 @@ class CheckoutTab(BaseTab):
     Auto Start Checkout automation.
 
     Layout:
-      1. CRT Excel File Selection + preview grid
+      1. Profile Generation Table (replaces CRT Excel File Selection)
+         - Editable grid with 11 columns matching CRT Automation Tools:
+           Auto-populated from CRT: Form_Factor, Material_Desc, CFGPN, MCTO_#1, Dummy_Lot
+           User-editable (additional): Step, MID, Tester, Primitive, Dut, ATTR_OVERWRITE
+         - All columns are editable by user (auto-populated can be overridden)
+         - Mimics CRT Automation Tools profile generation process
       2. DUT Identity (JIRA, MID, CFGPN, FW, Slots, TGZ, Hot Folder)
          + Dummy Lot Prefix
          + DUT Locations
@@ -33,20 +38,33 @@ class CheckoutTab(BaseTab):
         "TIMEOUT":     ("#ca5010", "white"),
     }
 
-    # Exact CRT column names from crt_excel_template.json [24]
-    # "Product  Name" has DOUBLE SPACE — intentional
-    _CRT_GRID_COLUMNS = [
-        ("Material description",   200),
-        ("CFGPN",                   80),
-        ("FW Wave ID",              80),
-        ("FIDB_ASIC_FW_REV",       110),
-        ("Product  Name",          100),   # DOUBLE SPACE [24]
-        ("CRT Customer",           100),
-        ("SSD Drive Type",          90),
-        ("ABIT Release (Yes/No)",   90),
-        ("SFN2 Release (Yes/No)",   90),
-        ("CRT Checkout (Yes/No)",   90),   # Fix #1: added missing column
+    # Profile Generation Table columns
+    # Mirrors CRT Automation Tools _profile_gen_headers + additional_headers_profile_gen()
+    # First 5 columns are auto-populated from CRT data (but still editable by user)
+    # Last 6 columns are user-editable (additional headers for profile generation)
+    # ATTR_OVERWRITE has a special edit dialog
+    _PROFILE_GEN_COLUMNS = [
+        ("Form_Factor",         120),
+        ("Material_Desc",       150),
+        ("CFGPN",               120),
+        ("MCTO_#1",             100),
+        ("Dummy_Lot",           120),
+        ("Step",                 80),
+        ("MID",                 120),
+        ("Tester",              120),
+        ("Primitive",           100),
+        ("Dut",                  60),
+        ("ATTR_OVERWRITE",      200),
     ]
+
+    # Columns that are auto-populated from CRT data (but still user-editable)
+    _AUTO_POPULATED_COLS = {"Form_Factor", "Material_Desc", "CFGPN", "MCTO_#1", "Dummy_Lot"}
+
+    # Columns that are user-editable (additional profile gen headers)
+    _EDITABLE_COLS = {
+        "Form_Factor", "Material_Desc", "CFGPN", "MCTO_#1", "Dummy_Lot",
+        "Step", "MID", "Tester", "Primitive", "Dut", "ATTR_OVERWRITE",
+    }
 
     def __init__(self, notebook, context):
         super().__init__(notebook, context, "🧪 Checkout")
@@ -55,9 +73,9 @@ class CheckoutTab(BaseTab):
         self._tester_vars               = {}
         self._tester_frame: Any         = None
         self._tester_row                = 1
+        self._profile_data: List[Dict]  = []   # Internal data store for profile table
         self._init_vars()
         self._build_ui()
-        self._setup_dut_location_autofill()
 
     # ──────────────────────────────────────────────────────────────────────
     # VARIABLE INITIALISATION  (must run before _build_ui)
@@ -73,16 +91,10 @@ class CheckoutTab(BaseTab):
         _iv = lambda name, val=0: ctx.set_var(name, tk.IntVar(value=val)) \
               if ctx.get_var(name) is None else None
 
-        _sv('checkout_mid')
-        _sv('checkout_cfgpn')
-        _sv('checkout_fw_ver')
-        _sv('checkout_env', 'ABIT')                          # Fix #2: ENV field
         _sv('checkout_tgz_path')
         _sv('checkout_hot_folder',
             ctx.config.get('checkout', {}).get(
                 'hot_folder', r'C:\test_program\playground_queue'))
-        _sv('checkout_lot_prefix')
-        _sv('checkout_dut_locations')
         _sv('checkout_detect_method', "AUTO")
         _sv('checkout_tc_passing_label', "passing")
         _sv('checkout_tc_fail_label', "force_fail_1")
@@ -91,59 +103,14 @@ class CheckoutTab(BaseTab):
         _sv('checkout_excel_path',
             ctx.config.get('cat', {}).get(
                 'crt_excel_path',
-                r'\\sifsmodtestrep\ModTestRep\crab\crt_from_sap.xlsx'
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'Documents', 'incoming_crt.xlsx')
             ))
         _sv('checkout_webhook_url',                          # Fix #4: Teams webhook
             ctx.config.get('notifications', {}).get('teams_webhook_url', ''))
-        _iv('checkout_dut_slots', 1)
         _iv('checkout_timeout_min', 60)
         _bv('checkout_tc_passing', True)
         _bv('checkout_tc_force_fail', False)
         _bv('checkout_notify_teams', True)
-
-    # ──────────────────────────────────────────────────────────────────────
-    # DUT LOCATION AUTO-FILL
-    # ──────────────────────────────────────────────────────────────────────
-
-    def _setup_dut_location_autofill(self):
-        """
-        Attach a trace to checkout_dut_slots so DUT locations auto-fill
-        whenever the slot count changes.  Also trigger an initial fill.
-        """
-        slots_var = self.context.get_var('checkout_dut_slots')
-        slots_var.trace_add("write", self._on_slots_changed)
-        # Initial auto-fill (only if locations field is empty)
-        self._auto_generate_dut_locations()
-
-    def _on_slots_changed(self, *_args):
-        """Callback fired when checkout_dut_slots value changes."""
-        self._auto_generate_dut_locations()
-
-    def _auto_generate_dut_locations(self):
-        """
-        Auto-generate DUT location coordinates from the current slot count.
-
-        SLATE grid layout: 4 rows (0-3) × 32 columns (0-31).
-        DutLocation format: "row,col"  e.g. "0,0  0,1  1,0"
-
-        Only overwrites the locations field if it is currently empty
-        or was previously auto-generated (no manual edits).
-        """
-        from model.orchestrators.checkout_orchestrator import generate_dut_locations
-
-        try:
-            n = self.context.get_var('checkout_dut_slots').get()
-        except (tk.TclError, ValueError):
-            return
-
-        if n < 1:
-            return
-
-        locs = generate_dut_locations(n)
-        loc_str = " ".join(locs)
-
-        # Always update — the locations field mirrors the slot count
-        self.context.get_var('checkout_dut_locations').set(loc_str)
 
     # ──────────────────────────────────────────────────────────────────────
     # BUILD UI
@@ -152,118 +119,104 @@ class CheckoutTab(BaseTab):
     def _build_ui(self):
         self.columnconfigure(0, weight=1)
 
-        # ── Section 1: CRT Excel File Selection ──────────────────────────
-        excel_frame = ttk.LabelFrame(self, text="CRT Excel File Selection", padding="5")
-        excel_frame.grid(row=0, column=0, sticky="we", pady=2)
-        excel_frame.columnconfigure(1, weight=1)
+        # ── Section 1: Profile Generation Table ──────────────────────────
+        # Replaces old CRT Excel File Selection + CRT Data Preview
+        profile_frame = ttk.LabelFrame(self, text="Profile Generation", padding="5")
+        profile_frame.grid(row=0, column=0, sticky="we", pady=2)
+        profile_frame.columnconfigure(0, weight=1)
 
-        ttk.Label(excel_frame, text="Excel File:").grid(row=0, column=0, sticky=tk.W, padx=(0, 6))
-        ttk.Entry(excel_frame,
+        # ── Workflow Actions bar ──────────────────────────────────────────
+        actions_frame = ttk.Frame(profile_frame)
+        actions_frame.grid(row=0, column=0, sticky="we", pady=(0, 4))
+
+        ttk.Button(actions_frame, text="Add Row",
+                   command=self._profile_add_row).pack(side=tk.LEFT, padx=2)
+        ttk.Button(actions_frame, text="Remove Row",
+                   command=self._profile_remove_row).pack(side=tk.LEFT, padx=2)
+        ttk.Button(actions_frame, text="Import from Excel",
+                   command=self._profile_import_excel).pack(side=tk.LEFT, padx=2)
+        ttk.Button(actions_frame, text="Export to Excel",
+                   command=self._profile_export_excel).pack(side=tk.LEFT, padx=2)
+        ttk.Button(actions_frame, text="Load from CRT",
+                   command=self._profile_load_from_crt).pack(side=tk.LEFT, padx=2)
+
+        # ── CRT Source (Excel path + CFGPN filter for Load from CRT) ─────
+        crt_source_frame = ttk.Frame(profile_frame)
+        crt_source_frame.grid(row=1, column=0, sticky="we", pady=(0, 4))
+        crt_source_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(crt_source_frame, text="Excel File:").grid(
+            row=0, column=0, sticky=tk.W, padx=(0, 4))
+        ttk.Entry(crt_source_frame,
                   textvariable=self.context.get_var('checkout_excel_path'),
-                  width=70).grid(row=0, column=1, sticky="we")
-        ttk.Button(excel_frame, text="Browse Excel File",
-                   command=self._browse_excel).grid(row=0, column=2, padx=(6, 0))
-
-        ttk.Label(excel_frame, text="Filter CFGPN:").grid(
-            row=1, column=0, sticky=tk.W, padx=(0, 6), pady=(2, 0))
-        ttk.Entry(excel_frame,
+                  width=60).grid(row=0, column=1, sticky="we")
+        ttk.Button(crt_source_frame, text="Browse",
+                   command=self._browse_excel).grid(row=0, column=2, padx=(4, 8))
+        ttk.Label(crt_source_frame, text="Filter CFGPN:").grid(
+            row=0, column=3, sticky=tk.W, padx=(0, 4))
+        ttk.Entry(crt_source_frame,
                   textvariable=self.context.get_var('checkout_cfgpn_filter'),
-                  width=20).grid(row=1, column=1, sticky=tk.W, pady=(2, 0))
-        ttk.Button(excel_frame, text="Load CRT Data",
-                   command=self._load_crt_data).grid(row=1, column=2, padx=(6, 0), pady=(2, 0))
+                  width=15).grid(row=0, column=4, sticky=tk.W)
 
-        # ── Section 2: CRT Data Preview Grid ─────────────────────────────
-        grid_frame = ttk.LabelFrame(self, text="CRT Data Preview", padding="4")
-        grid_frame.grid(row=1, column=0, sticky="we", pady=2)
-        grid_frame.columnconfigure(0, weight=1)
+        # ── Profile Generation Grid ───────────────────────────────────────
+        grid_container = ttk.Frame(profile_frame)
+        grid_container.grid(row=2, column=0, sticky="nsew")
+        grid_container.columnconfigure(0, weight=1)
 
-        cols = [c for c, _ in self._CRT_GRID_COLUMNS]
-        self._grid = ttk.Treeview(grid_frame, columns=cols, show="headings",
-                                   height=2, selectmode="browse")
-        for col_name, col_width in self._CRT_GRID_COLUMNS:
-            self._grid.heading(col_name, text=col_name)
-            self._grid.column(col_name, width=col_width, minwidth=40, stretch=False)
+        cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
+        self._profile_grid = ttk.Treeview(
+            grid_container, columns=cols, show="headings",
+            height=5, selectmode="browse")
+        for col_name, col_width in self._PROFILE_GEN_COLUMNS:
+            self._profile_grid.heading(col_name, text=col_name)
+            self._profile_grid.column(col_name, width=col_width, minwidth=40, stretch=True)
 
-        grid_scroll_y = ttk.Scrollbar(grid_frame, orient=tk.VERTICAL,   command=self._grid.yview)
-        grid_scroll_x = ttk.Scrollbar(grid_frame, orient=tk.HORIZONTAL, command=self._grid.xview)
-        self._grid.configure(yscrollcommand=grid_scroll_y.set,
-                             xscrollcommand=grid_scroll_x.set)
-        self._grid.grid(row=0, column=0, sticky="nsew")
-        grid_scroll_y.grid(row=0, column=1, sticky="ns")
-        grid_scroll_x.grid(row=1, column=0, sticky="ew")
-        self._grid.bind("<<TreeviewSelect>>", self._on_grid_row_select)
+        profile_scroll_y = ttk.Scrollbar(grid_container, orient=tk.VERTICAL,
+                                         command=self._profile_grid.yview)
+        profile_scroll_x = ttk.Scrollbar(grid_container, orient=tk.HORIZONTAL,
+                                         command=self._profile_grid.xview)
+        self._profile_grid.configure(yscrollcommand=profile_scroll_y.set,
+                                     xscrollcommand=profile_scroll_x.set)
+        self._profile_grid.grid(row=0, column=0, sticky="nsew")
+        profile_scroll_y.grid(row=0, column=1, sticky="ns")
+        profile_scroll_x.grid(row=1, column=0, sticky="ew")
 
-        grid_status_frame = ttk.Frame(self)
-        grid_status_frame.grid(row=2, column=0, sticky="we", pady=(0, 2))
-        self._grid_selection_label = ttk.Label(
-            grid_status_frame,
-            text="No selection — click a row to auto-fill DUT fields",
+        # Double-click to edit a cell
+        self._profile_grid.bind("<Double-1>", self._on_profile_cell_double_click)
+        # Single click on row to auto-fill DUT fields
+        self._profile_grid.bind("<<TreeviewSelect>>", self._on_profile_row_select)
+
+        # ── Status bar under grid ─────────────────────────────────────────
+        profile_status_frame = ttk.Frame(profile_frame)
+        profile_status_frame.grid(row=3, column=0, sticky="we", pady=(2, 0))
+        self._profile_status_label = ttk.Label(
+            profile_status_frame,
+            text="No data — use 'Load from CRT' or 'Add Row' to populate",
             foreground="#cc6600", font=("Segoe UI", 8))
-        self._grid_selection_label.pack(side=tk.LEFT)
-        self._grid_row_count_label = ttk.Label(grid_status_frame, text="", foreground="#555555", font=("Segoe UI", 8))
-        self._grid_row_count_label.pack(side=tk.RIGHT)
+        self._profile_status_label.pack(side=tk.LEFT)
+        self._profile_row_count_label = ttk.Label(
+            profile_status_frame, text="0 row(s)",
+            foreground="#555555", font=("Segoe UI", 8))
+        self._profile_row_count_label.pack(side=tk.RIGHT)
 
-        # ── Section 3: DUT Identity ───────────────────────────────────────
-        dut_frame = ttk.LabelFrame(self, text="DUT Identity", padding="5")
+        # Add initial empty row with "None" in Dummy_Lot (matching the tool's default)
+        self._profile_add_default_row()
+
+        # ── Section 3: Checkout Paths & Test Cases ────────────────────────
+        dut_frame = ttk.LabelFrame(self, text="Checkout Paths & Test Cases", padding="5")
         dut_frame.grid(row=3, column=0, sticky="we", pady=2)
         dut_frame.columnconfigure(1, weight=1)
-        dut_frame.columnconfigure(3, weight=1)
 
-        # Row 0: JIRA Key, MID, CFGPN, FW Wave, ENV
-        ttk.Label(dut_frame, text="JIRA:").grid(row=0, column=0, sticky=tk.W, pady=0)
-        ttk.Entry(dut_frame, textvariable=self.context.get_var('issue_var'),
-                  width=15).grid(row=0, column=1, sticky=tk.W, pady=0)
-        ttk.Label(dut_frame, text="MID:").grid(row=0, column=2, sticky=tk.W, pady=0, padx=(5, 0))
-        ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_mid'),
-                  width=15).grid(row=0, column=3, sticky="we", pady=0)
-        ttk.Label(dut_frame, text="CFGPN:").grid(row=0, column=4, sticky=tk.W, pady=0, padx=(5, 0))
-        ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_cfgpn'),
-                  width=12).grid(row=0, column=5, sticky="we", pady=0)
-        ttk.Label(dut_frame, text="Wave:").grid(row=0, column=6, sticky=tk.W, pady=0, padx=(5, 0))
-        ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_fw_ver'),
-                  width=8).grid(row=0, column=7, sticky="we", pady=0)
-        ttk.Label(dut_frame, text="ENV:").grid(row=0, column=8, sticky=tk.W, pady=0, padx=(5, 0))
-        ttk.Combobox(dut_frame,                              # Fix #2: ENV combobox
-                     textvariable=self.context.get_var('checkout_env'),
-                     values=["ABIT", "SFN2", "CNFG"],
-                     state="readonly", width=6
-                     ).grid(row=0, column=9, sticky=tk.W, pady=0)
-
-        # Row 1: Slots, Lot Prefix, Locations
-        ttk.Label(dut_frame, text="Slots:").grid(row=1, column=0, sticky=tk.W, pady=0)
-        ttk.Spinbox(dut_frame, textvariable=self.context.get_var('checkout_dut_slots'),
-                    from_=1, to=32, width=4).grid(row=1, column=1, sticky=tk.W, pady=0)
-        ttk.Label(dut_frame, text="Lot:").grid(row=1, column=2, sticky=tk.W, pady=0, padx=(5, 0))
-        ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_lot_prefix'),
-                  width=12).grid(row=1, column=3, sticky=tk.W, pady=0)
-        ttk.Label(dut_frame, text="Loc:").grid(row=1, column=4, sticky=tk.W, pady=0, padx=(5, 0))
-        ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_dut_locations'),
-                  width=35).grid(row=1, column=5, columnspan=3, sticky="we", pady=0)
-
-        # Row 2: Hint labels for Lot prefix and DUT Locations
-        ttk.Label(dut_frame, text="").grid(row=2, column=0, sticky=tk.W)          # spacer under "Slots:"
-        ttk.Label(dut_frame, text="").grid(row=2, column=1, sticky=tk.W)          # spacer under slots spinbox
-        ttk.Label(dut_frame, text="").grid(row=2, column=2, sticky=tk.W)          # spacer under "Lot:"
-        ttk.Label(dut_frame,
-                  text="e.g. JAANTJB → JAANTJB001…",
-                  foreground="#888888", font=("Segoe UI", 7)
-                  ).grid(row=2, column=3, sticky=tk.W, pady=(0, 2))
-        ttk.Label(dut_frame, text="").grid(row=2, column=4, sticky=tk.W)          # spacer under "Loc:"
-        ttk.Label(dut_frame,
-                  text="Auto-filled from Slots (row,col).  Override: 0,0  0,1  1,0",
-                  foreground="#888888", font=("Segoe UI", 7)
-                  ).grid(row=2, column=5, columnspan=3, sticky=tk.W, pady=(0, 2))
-
-        # Row 3: TGZ Source
-        ttk.Label(dut_frame, text="TGZ:").grid(row=3, column=0, sticky=tk.W, pady=0)
+        # Row 0: TGZ Source
+        ttk.Label(dut_frame, text="TGZ:").grid(row=0, column=0, sticky=tk.W, pady=0)
         ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_tgz_path'),
-                  width=60).grid(row=3, column=1, columnspan=6, sticky="we", pady=0)
+                  width=60).grid(row=0, column=1, columnspan=6, sticky="we", pady=0)
         ttk.Button(dut_frame, text="…", width=3,
-                   command=self._browse_tgz).grid(row=3, column=7, padx=(2, 0), pady=0)
+                   command=self._browse_tgz).grid(row=0, column=7, padx=(2, 0), pady=0)
 
-        # Row 4: Test Cases (PASS/FAIL)
+        # Row 1: Test Cases (PASS/FAIL)
         test_case_frame = ttk.Frame(dut_frame)
-        test_case_frame.grid(row=4, column=0, columnspan=8, sticky="we", pady=0)
+        test_case_frame.grid(row=1, column=0, columnspan=8, sticky="we", pady=0)
         ttk.Label(test_case_frame, text="TC:").pack(side=tk.LEFT)
         ttk.Checkbutton(test_case_frame, text="PASS", variable=self.context.get_var('checkout_tc_passing')).pack(side=tk.LEFT, padx=2)
         ttk.Entry(test_case_frame, textvariable=self.context.get_var('checkout_tc_passing_label'), width=10).pack(side=tk.LEFT, padx=2)
@@ -271,10 +224,10 @@ class CheckoutTab(BaseTab):
         ttk.Entry(test_case_frame, textvariable=self.context.get_var('checkout_tc_fail_label'), width=10).pack(side=tk.LEFT, padx=2)
         ttk.Entry(test_case_frame, textvariable=self.context.get_var('checkout_tc_fail_desc'), width=30).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
 
-        # Row 5: Hot folder
-        ttk.Label(dut_frame, text="Hot Folder:").grid(row=5, column=0, sticky=tk.W, pady=0)
+        # Row 2: Hot folder
+        ttk.Label(dut_frame, text="Hot Folder:").grid(row=2, column=0, sticky=tk.W, pady=0)
         ttk.Entry(dut_frame, textvariable=self.context.get_var('checkout_hot_folder'),
-                  width=70).grid(row=5, column=1, columnspan=7, sticky="we", pady=0)
+                  width=70).grid(row=2, column=1, columnspan=7, sticky="we", pady=0)
 
         # ── Section 4: Side-by-Side Detection & Testers ──────────────────
         side_frame = ttk.Frame(self)
@@ -361,6 +314,374 @@ class CheckoutTab(BaseTab):
         results_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
     # ──────────────────────────────────────────────────────────────────────
+    # PROFILE GENERATION TABLE — DATA MANAGEMENT
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _profile_add_default_row(self):
+        """Add the default initial row with 'None' in Dummy_Lot."""
+        row_data = {
+            "Form_Factor": "",
+            "Material_Desc": "",
+            "CFGPN": "",
+            "MCTO_#1": "",
+            "Dummy_Lot": "None",
+            "Step": "",
+            "MID": "",
+            "Tester": "",
+            "Primitive": "",
+            "Dut": "",
+            "ATTR_OVERWRITE": "",
+        }
+        self._profile_data.append(row_data)
+        self._refresh_profile_grid()
+
+    def _profile_add_row(self):
+        """Add a new empty row to the profile generation table."""
+        row_data = {
+            "Form_Factor": "",
+            "Material_Desc": "",
+            "CFGPN": "",
+            "MCTO_#1": "",
+            "Dummy_Lot": "",
+            "Step": "",
+            "MID": "",
+            "Tester": "",
+            "Primitive": "",
+            "Dut": "",
+            "ATTR_OVERWRITE": "",
+        }
+        self._profile_data.append(row_data)
+        self._refresh_profile_grid()
+        self._update_profile_status()
+
+    def _profile_remove_row(self):
+        """Remove the selected row from the profile generation table."""
+        sel = self._profile_grid.selection()
+        if not sel:
+            self.show_error("No Selection", "Select a row to remove.")
+            return
+        # Find the index of the selected item
+        item_id = sel[0]
+        idx = self._profile_grid.index(item_id)
+        if 0 <= idx < len(self._profile_data):
+            self._profile_data.pop(idx)
+        self._refresh_profile_grid()
+        self._update_profile_status()
+
+    def _refresh_profile_grid(self):
+        """Refresh the Treeview grid from internal _profile_data."""
+        for row in self._profile_grid.get_children():
+            self._profile_grid.delete(row)
+        cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
+        for row_dict in self._profile_data:
+            values = [str(row_dict.get(col, "")) for col in cols]
+            self._profile_grid.insert("", tk.END, values=values)
+        self._profile_row_count_label.configure(
+            text=f"{len(self._profile_data)} row(s)")
+
+    def _update_profile_status(self):
+        """Update the status label under the profile grid."""
+        count = len(self._profile_data)
+        if count == 0:
+            self._profile_status_label.configure(
+                text="No data — use 'Load from CRT' or 'Add Row' to populate",
+                foreground="#cc6600")
+        else:
+            self._profile_status_label.configure(
+                text=f"{count} row(s) loaded — double-click a cell to edit",
+                foreground="#0078d4")
+
+    # Mapping from CRT Excel column names → profile grid column names
+    _CRT_TO_PROFILE_MAP = {
+        "Material description": "Material_Desc",
+        "CFGPN":                "CFGPN",
+        "MCTO_#1":              "MCTO_#1",
+        "Form_Factor":          "Form_Factor",
+        "Dummy_Lot":            "Dummy_Lot",
+        "Step Name":            "Step",
+        "Step Status":          "Step",
+        # Direct grid column names (pass-through)
+        "Material_Desc":        "Material_Desc",
+        "Step":                 "Step",
+        "MID":                  "MID",
+        "Tester":               "Tester",
+        "Primitive":            "Primitive",
+        "Dut":                  "Dut",
+        "ATTR_OVERWRITE":       "ATTR_OVERWRITE",
+    }
+
+    def _profile_import_excel(self):
+        """Import profile generation data from an Excel file."""
+        excel_path = self.context.get_var('checkout_excel_path').get().strip()
+        initial_dir = os.path.dirname(excel_path) if excel_path and os.path.isdir(os.path.dirname(excel_path)) else "/"
+        path = filedialog.askopenfilename(
+            title="Import Profile Table from Excel",
+            initialdir=initial_dir,
+            filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            import pandas as pd
+            if path.endswith(".xlsx"):
+                df = pd.read_excel(path, engine="openpyxl", dtype=str)
+            else:
+                df = pd.read_excel(path, engine="xlrd", dtype=str)
+            df = df.fillna("")
+
+            cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
+            # Build reverse lookup: for each grid col, find matching Excel col
+            excel_to_grid = {}
+            for excel_col in df.columns:
+                grid_col = self._CRT_TO_PROFILE_MAP.get(excel_col)
+                if grid_col and grid_col in cols:
+                    excel_to_grid[excel_col] = grid_col
+
+            self._profile_data = []
+            for _, row in df.iterrows():
+                row_dict = {col: "" for col in cols}
+                # Map Excel columns to grid columns
+                for excel_col, grid_col in excel_to_grid.items():
+                    val = str(row.get(excel_col, "")).strip()
+                    if val and val.lower() != "none":
+                        row_dict[grid_col] = val
+                # Also try direct column name match for any unmapped columns
+                for col in cols:
+                    if not row_dict.get(col) and col in df.columns:
+                        val = str(row.get(col, "")).strip()
+                        if val and val.lower() != "none":
+                            row_dict[col] = val
+                self._profile_data.append(row_dict)
+            self._refresh_profile_grid()
+            self._update_profile_status()
+            self.log(f"✓ Profile table imported: {len(self._profile_data)} row(s) from {os.path.basename(path)}")
+        except Exception as e:
+            self.show_error("Import Error", f"Cannot import file:\n{path}\n\n{e}")
+
+    def _profile_export_excel(self):
+        """Export profile generation data to an Excel file."""
+        if not self._profile_data:
+            self.show_error("No Data", "No profile data to export.")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Export Profile Table to Excel",
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            import pandas as pd
+            df = pd.DataFrame(self._profile_data)
+            df.to_excel(path, index=False, engine="openpyxl")
+            self.log(f"✓ Profile table exported to {os.path.basename(path)}")
+        except Exception as e:
+            self.show_error("Export Error", f"Cannot export file:\n{path}\n\n{e}")
+
+    def _profile_load_from_crt(self):
+        """
+        Load CRT data and auto-populate the profile generation table.
+        Reads from the CRT Excel file, auto-fills Form_Factor, Material_Desc,
+        CFGPN, MCTO_#1, Dummy_Lot from CRT data, and leaves Step, MID, Tester,
+        Primitive, Dut, ATTR_OVERWRITE for user input. All columns remain editable.
+        """
+        excel_path = self.context.get_var('checkout_excel_path').get().strip()
+        cfgpn_flt  = self.context.get_var('checkout_cfgpn_filter').get().strip()
+
+        # Delegate to controller which loads CRT data in background
+        self.context.controller.checkout_controller.load_crt_for_profile(
+            excel_path=excel_path, cfgpn_filter=cfgpn_flt)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # PROFILE GRID — INLINE EDITING
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _on_profile_cell_double_click(self, event):
+        """Handle double-click on a profile grid cell for inline editing."""
+        region = self._profile_grid.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+
+        col_id = self._profile_grid.identify_column(event.x)
+        item_id = self._profile_grid.identify_row(event.y)
+        if not item_id or not col_id:
+            return
+
+        # Convert column identifier (#1, #2, ...) to column name
+        col_idx = int(col_id.replace("#", "")) - 1
+        cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
+        if col_idx < 0 or col_idx >= len(cols):
+            return
+        col_name = cols[col_idx]
+
+        # All columns are editable — auto-populated columns can be overridden by user
+        row_idx = self._profile_grid.index(item_id)
+        if row_idx < 0 or row_idx >= len(self._profile_data):
+            return
+
+        current_value = self._profile_data[row_idx].get(col_name, "")
+
+        # Special handling for ATTR_OVERWRITE — open dialog
+        if col_name == "ATTR_OVERWRITE":
+            self._show_attr_overwrite_dialog(row_idx)
+            return
+
+        # For other editable columns, use inline entry editing
+        self._start_inline_edit(item_id, col_id, col_idx, row_idx, col_name, current_value)
+
+    def _start_inline_edit(self, item_id, col_id, col_idx, row_idx, col_name, current_value):
+        """Create an inline Entry widget over the cell for editing."""
+        # Get cell bounding box
+        bbox = self._profile_grid.bbox(item_id, col_id)
+        if not bbox:
+            return
+        x, y, w, h = bbox
+
+        # Create entry widget
+        edit_entry = ttk.Entry(self._profile_grid, width=w // 8)
+        edit_entry.insert(0, current_value)
+        edit_entry.select_range(0, tk.END)
+        edit_entry.place(x=x, y=y, width=w, height=h)
+        edit_entry.focus_set()
+
+        def _save_edit(event=None):
+            new_value = edit_entry.get().strip()
+            self._profile_data[row_idx][col_name] = new_value
+            self._refresh_profile_grid()
+            edit_entry.destroy()
+
+        def _cancel_edit(event=None):
+            edit_entry.destroy()
+
+        edit_entry.bind("<Return>", _save_edit)
+        edit_entry.bind("<Escape>", _cancel_edit)
+        edit_entry.bind("<FocusOut>", _save_edit)
+
+    def _show_attr_overwrite_dialog(self, row_idx):
+        """
+        Show the ATTR_OVERWRITE edit dialog, mimicking the CRT Automation Tools.
+        Format: Section;AttrName;AttrValue;Section;AttrName;AttrValue;...
+        """
+        current_value = self._profile_data[row_idx].get("ATTR_OVERWRITE", "")
+
+        dialog = tk.Toplevel(self.winfo_toplevel())
+        dialog.title("ATTR_OVERWRITE Editor")
+        dialog.geometry("600x450")
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        # ── Input fields ──────────────────────────────────────────────────
+        input_frame = ttk.LabelFrame(dialog, text="Add Attribute Override", padding="5")
+        input_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        ttk.Label(input_frame, text="Section:").grid(row=0, column=0, sticky=tk.W, padx=2)
+        section_var = tk.StringVar()
+        section_combo = ttk.Combobox(input_frame, textvariable=section_var,
+                                     values=["MAM", "MCTO", "CFGPN", "EQUIPMENT"],
+                                     width=15)
+        section_combo.grid(row=0, column=1, sticky="we", padx=2)
+
+        ttk.Label(input_frame, text="Attr Name:").grid(row=1, column=0, sticky=tk.W, padx=2)
+        attr_name_var = tk.StringVar()
+        ttk.Entry(input_frame, textvariable=attr_name_var, width=20).grid(
+            row=1, column=1, sticky="we", padx=2)
+
+        ttk.Label(input_frame, text="Attr Value:").grid(row=2, column=0, sticky=tk.W, padx=2)
+        attr_value_var = tk.StringVar()
+        ttk.Entry(input_frame, textvariable=attr_value_var, width=20).grid(
+            row=2, column=1, sticky="we", padx=2)
+
+        input_frame.columnconfigure(1, weight=1)
+
+        # ── Entries grid ──────────────────────────────────────────────────
+        entries_frame = ttk.LabelFrame(dialog, text="Current Overrides", padding="5")
+        entries_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        entry_cols = ["Section", "Attr Name", "Attr Value"]
+        entries_tree = ttk.Treeview(entries_frame, columns=entry_cols,
+                                    show="headings", height=6, selectmode="browse")
+        for col in entry_cols:
+            entries_tree.heading(col, text=col)
+            entries_tree.column(col, width=150, stretch=True)
+        entries_tree.pack(fill=tk.BOTH, expand=True)
+
+        # Populate from existing value
+        if current_value:
+            parts = current_value.split(";")
+            for i in range(0, len(parts), 3):
+                if i + 2 < len(parts):
+                    entries_tree.insert("", tk.END,
+                                        values=(parts[i], parts[i+1], parts[i+2]))
+
+        # ── Buttons ───────────────────────────────────────────────────────
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        def _add_entry():
+            s = section_var.get().strip().upper()
+            n = attr_name_var.get().strip().upper()
+            v = attr_value_var.get().strip().upper()
+            if not s or not n or not v:
+                return
+            # Check for duplicate
+            for child in entries_tree.get_children():
+                vals = entries_tree.item(child, "values")
+                if vals[0] == s and vals[1] == n and vals[2] == v:
+                    return
+            entries_tree.insert("", tk.END, values=(s, n, v))
+            section_var.set("")
+            attr_name_var.set("")
+            attr_value_var.set("")
+
+        def _remove_entry():
+            sel = entries_tree.selection()
+            if sel:
+                entries_tree.delete(sel[0])
+
+        def _remove_all():
+            for child in entries_tree.get_children():
+                entries_tree.delete(child)
+
+        def _save():
+            parts = []
+            for child in entries_tree.get_children():
+                vals = entries_tree.item(child, "values")
+                parts.append(f"{vals[0]};{vals[1]};{vals[2]}")
+            self._profile_data[row_idx]["ATTR_OVERWRITE"] = ";".join(parts)
+            self._refresh_profile_grid()
+            dialog.destroy()
+
+        def _cancel():
+            dialog.destroy()
+
+        ttk.Button(btn_frame, text="Add", command=_add_entry).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Remove", command=_remove_entry).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Remove All", command=_remove_all).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Save", command=_save).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(btn_frame, text="Cancel", command=_cancel).pack(side=tk.RIGHT, padx=2)
+
+    def _on_profile_row_select(self, event):
+        """When a profile row is selected, update the status bar with details."""
+        sel = self._profile_grid.selection()
+        if not sel:
+            return
+        values = self._profile_grid.item(sel[0], "values")
+        cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
+
+        def _get(col_name):
+            idx = cols.index(col_name) if col_name in cols else -1
+            return values[idx] if 0 <= idx < len(values) else ""
+
+        cfgpn = _get("CFGPN")
+        dummy_lot = _get("Dummy_Lot")
+        mid = _get("MID")
+        step = _get("Step")
+        tester = _get("Tester")
+
+        self._profile_status_label.configure(
+            text=(f"Selected: CFGPN={cfgpn}  Lot={dummy_lot}  "
+                  f"MID={mid}  Step={step}  Tester={tester}"),
+            foreground="#0078d4")
+
+    # ──────────────────────────────────────────────────────────────────────
     # TESTER REFRESH
     # ──────────────────────────────────────────────────────────────────────
 
@@ -400,13 +721,6 @@ class CheckoutTab(BaseTab):
     # USER ACTIONS
     # ──────────────────────────────────────────────────────────────────────
 
-    def _browse_excel(self):
-        path = filedialog.askopenfilename(
-            title="Select CRT Excel File",
-            filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")])
-        if path:
-            self.context.get_var('checkout_excel_path').set(path)
-
     def _browse_tgz(self):
         # Default browse location — confirmed path from Phase 1 compile output
         _DEFAULT_TGZ_DIR = r"P:\temp\BENTO\RELEASE_TGZ"
@@ -421,40 +735,13 @@ class CheckoutTab(BaseTab):
         if path:
             self.context.get_var('checkout_tgz_path').set(path)
 
-    def _load_crt_data(self):
-        excel_path = self.context.get_var('checkout_excel_path').get().strip()
-        cfgpn_flt  = self.context.get_var('checkout_cfgpn_filter').get().strip()
-        self.context.controller.checkout_controller.load_crt_grid(
-            excel_path=excel_path, cfgpn_filter=cfgpn_flt)
-
-    def _on_grid_row_select(self, event):
-        sel = self._grid.selection()
-        if not sel:
-            return
-        values = self._grid.item(sel[0], "values")
-        cols   = [c for c, _ in self._CRT_GRID_COLUMNS]
-
-        def _get(col_name):
-            return values[cols.index(col_name)] if col_name in cols and cols.index(col_name) < len(values) else ""
-
-        mid     = _get("Material description")
-        cfgpn   = _get("CFGPN")
-        fw_wave = _get("FW Wave ID")
-        self.context.get_var('checkout_mid').set(mid)
-        self.context.get_var('checkout_cfgpn').set(cfgpn)
-        self.context.get_var('checkout_fw_ver').set(fw_wave)
-
-        # Fix #2: Auto-set ENV from ABIT/SFN2 Release columns
-        abit_rel = _get("ABIT Release (Yes/No)")
-        sfn2_rel = _get("SFN2 Release (Yes/No)")
-        if abit_rel.strip().lower() == "yes":
-            self.context.get_var('checkout_env').set("ABIT")
-        elif sfn2_rel.strip().lower() == "yes":
-            self.context.get_var('checkout_env').set("SFN2")
-
-        self._grid_selection_label.configure(
-            text=f"Selected: {mid}  |  CFGPN: {cfgpn}  |  FW: {fw_wave}",
-            foreground="#0078d4")
+    def _browse_excel(self):
+        """Browse for a CRT Excel file to use as profile generation source."""
+        path = filedialog.askopenfilename(
+            title="Select CRT Excel File",
+            filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")])
+        if path:
+            self.context.get_var('checkout_excel_path').set(path)
 
     def _select_all(self):
         for var in self._tester_vars.values():
@@ -493,38 +780,26 @@ class CheckoutTab(BaseTab):
 
     def _collect_params(self):
         """Gather and validate all form inputs. Returns params dict or None."""
-        jira_key      = self.context.get_var('issue_var').get().strip()
+        # Paths & test case fields (still in UI)
         tgz_path      = self.context.get_var('checkout_tgz_path').get().strip()
         hot_folder    = self.context.get_var('checkout_hot_folder').get().strip()
-        mid           = self.context.get_var('checkout_mid').get().strip()
-        cfgpn         = self.context.get_var('checkout_cfgpn').get().strip()
-        fw_ver        = self.context.get_var('checkout_fw_ver').get().strip()
-        dut_slots     = self.context.get_var('checkout_dut_slots').get()
         method        = self.context.get_var('checkout_detect_method').get()
         timeout_m     = self.context.get_var('checkout_timeout_min').get()
         notify        = self.context.get_var('checkout_notify_teams').get()
         hostnames     = [h for h, v in self._tester_vars.items() if v.get()]
-        env           = self.context.get_var('checkout_env').get().strip()   # Fix #2
-        webhook_url   = self.context.get_var('checkout_webhook_url').get().strip()  # Fix #4
+        webhook_url   = self.context.get_var('checkout_webhook_url').get().strip()
 
-        # New fields
-        lot_prefix    = self.context.get_var('checkout_lot_prefix').get().strip()
-        dut_locs_raw  = self.context.get_var('checkout_dut_locations').get().strip()
-        dut_locations = dut_locs_raw.split() if dut_locs_raw else []
         tc_passing    = self.context.get_var('checkout_tc_passing').get()
         tc_fail       = self.context.get_var('checkout_tc_force_fail').get()
         passing_label = self.context.get_var('checkout_tc_passing_label').get().strip()
         fail_label    = self.context.get_var('checkout_tc_fail_label').get().strip()
         fail_desc     = self.context.get_var('checkout_tc_fail_desc').get().strip()
 
+        # Collect profile generation table data (replaces old DUT Identity fields)
+        profile_table = self._profile_data.copy() if self._profile_data else []
+
         # Validation
-        if not jira_key or jira_key.endswith("-"):
-            self.show_error("Input Error", "Enter a valid JIRA key (e.g. TSESSD-1234).")
-            return None
-        if not env:
-            self.show_error("Input Error", "Select an ENV (ABIT / SFN2 / CNFG).")
-            return None
-        if not tgz_path:                                             # Fix #3: tgz_path validation
+        if not tgz_path:
             self.show_error("Input Error", "Enter the TGZ path.")
             return None
         if not hot_folder:
@@ -533,14 +808,13 @@ class CheckoutTab(BaseTab):
         if not hostnames:
             self.show_error("Input Error", "Select at least one tester.")
             return None
-        if not lot_prefix:
-            self.show_error("Input Error", "Enter a Dummy Lot prefix (e.g. JAANTJB).")
-            return None
-        if not dut_locations:
-            self.show_error("Input Error", "Enter at least one DUT location (e.g. 0,0).")
+        if not profile_table:
+            self.show_error("Input Error",
+                            "Profile table is empty. Use 'Load from CRT' or 'Add Row'.")
             return None
         if not tc_passing and not tc_fail:
-            self.show_error("Input Error", "Select at least one test case (PASSING or FORCE FAIL).")
+            self.show_error("Input Error",
+                            "Select at least one test case (PASSING or FORCE FAIL).")
             return None
 
         # Build test cases list
@@ -552,22 +826,15 @@ class CheckoutTab(BaseTab):
                                 "description": fail_desc})
 
         return {
-            "jira_key":        jira_key,
-            "env":             env,             # Fix #2: included in params
             "tgz_path":        tgz_path,
             "hot_folder":      hot_folder,
-            "mid":             mid,
-            "cfgpn":           cfgpn,
-            "fw_ver":          fw_ver,
-            "dut_slots":       dut_slots,
-            "lot_prefix":      lot_prefix,
-            "dut_locations":   dut_locations,
             "test_cases":      test_cases,
             "detect_method":   method,
             "timeout_seconds": timeout_m * 60,
             "notify_teams":    notify,
-            "webhook_url":     webhook_url,     # Fix #4: included in params
+            "webhook_url":     webhook_url,
             "hostnames":       hostnames,
+            "profile_table":   profile_table,
         }
 
     # ──────────────────────────────────────────────────────────────────────
@@ -610,23 +877,57 @@ class CheckoutTab(BaseTab):
     # VIEW CALLBACKS
     # ──────────────────────────────────────────────────────────────────────
 
+    def on_profile_data_loaded(self, profile_rows: List[Dict]):
+        """
+        Callback when CRT data is loaded for profile generation.
+        Populates the profile generation table with auto-filled CRT columns
+        (Form_Factor, Material_Desc, CFGPN, MCTO_#1, Dummy_Lot) and empty
+        editable columns (Step, MID, Tester, Primitive, Dut, ATTR_OVERWRITE).
+        All columns remain user-editable.
+        """
+        self._profile_data = profile_rows
+        self._refresh_profile_grid()
+        self._update_profile_status()
+        count = len(profile_rows)
+        self.log(f"✓ Profile table loaded: {count} row(s) from CRT data")
+
     def on_crt_grid_loaded(self, crt_data):
-        for row in self._grid.get_children():
-            self._grid.delete(row)
-        cols = [c for c, _ in self._CRT_GRID_COLUMNS]
-        for row_dict in crt_data.get("rows", []):
-            values = [str(row_dict.get(col, "")) for col in cols]
-            self._grid.insert("", tk.END, values=values)
+        """
+        Legacy callback — converts CRT grid data into profile generation rows.
+        Auto-populates Form_Factor, Material_Desc, CFGPN, MCTO_#1, Dummy_Lot
+        from CRT data. Leaves Step, MID, Tester, Primitive, Dut, ATTR_OVERWRITE
+        for user input.
+        """
+        rows = crt_data.get("rows", [])
+        self._profile_data = []
+        for row_dict in rows:
+            material_desc = str(row_dict.get("Material description", "")).strip()
+            cfgpn = str(row_dict.get("CFGPN", "")).strip()
+            profile_row = {
+                "Form_Factor": str(row_dict.get("Form_Factor", "")).strip(),
+                "Material_Desc": material_desc,
+                "CFGPN": cfgpn,
+                "MCTO_#1": str(row_dict.get("MCTO_#1", "")).strip(),
+                "Dummy_Lot": str(row_dict.get("Dummy_Lot", material_desc or "None")).strip(),
+                "Step": "",
+                "MID": "",
+                "Tester": "",
+                "Primitive": "",
+                "Dut": "",
+                "ATTR_OVERWRITE": "",
+            }
+            self._profile_data.append(profile_row)
+
+        if not self._profile_data:
+            self._profile_add_default_row()
+
+        self._refresh_profile_grid()
+        self._update_profile_status()
         count = crt_data.get("count", 0)
-        self._grid_row_count_label.configure(text=f"{count} row(s) loaded")
-        self._grid_selection_label.configure(
-            text="Click a row to auto-fill DUT fields", foreground="#cc6600")
-        self.log(f"✓ CRT grid loaded: {count} row(s)")
+        self.log(f"✓ Profile table loaded from CRT: {count} row(s)")
 
     def on_autofill_completed(self, mid, cfgpn, fw_ver):
-        self.context.get_var('checkout_mid').set(mid)
-        self.context.get_var('checkout_cfgpn').set(cfgpn)
-        self.context.get_var('checkout_fw_ver').set(fw_ver)
+        """Log auto-fill results. DUT Identity fields are now in the profile table."""
         self.log(f"✓ Auto-filled: MID={mid}  CFGPN={cfgpn}  FW={fw_ver}")
 
     def on_xml_imported(self, data: dict):
@@ -639,26 +940,11 @@ class CheckoutTab(BaseTab):
         if data.get("tgz_path"):
             self.context.get_var('checkout_tgz_path').set(data["tgz_path"])
 
-        if data.get("env") and data["env"] in ("ABIT", "SFN2", "CNFG"):
-            self.context.get_var('checkout_env').set(data["env"])
-
-        if data.get("mid"):
-            self.context.get_var('checkout_mid').set(data["mid"])
-
-        if data.get("lot_prefix"):
-            self.context.get_var('checkout_lot_prefix').set(data["lot_prefix"])
-
-        locs = data.get("dut_locations", [])
-        if locs:
-            self.context.get_var('checkout_dut_locations').set(" ".join(locs))
-            self.context.get_var('checkout_dut_slots').set(len(locs))
-
         filled = []
         if data.get("tgz_path"):   filled.append("TGZ")
         if data.get("env"):        filled.append(f"ENV={data['env']}")
         if data.get("mid"):        filled.append(f"MID={data['mid']}")
         if data.get("lot_prefix"): filled.append(f"Lot={data['lot_prefix']}")
-        if locs:                   filled.append(f"{len(locs)} DUT(s)")
 
         summary = "  ".join(filled) if filled else "(nothing recognised)"
         self.log(f"✓ XML imported: {summary}")
@@ -695,3 +981,7 @@ class CheckoutTab(BaseTab):
         if not running:
             self.stop_btn.state(["disabled"])
             self.unlock_gui()
+
+    def get_profile_table_data(self) -> List[Dict]:
+        """Return the current profile generation table data."""
+        return self._profile_data.copy()
