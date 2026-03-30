@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import tkinter as tk
-from tkinter import ttk, filedialog, simpledialog
+from tkinter import ttk, filedialog, simpledialog, messagebox
 from typing import Any, List, Dict
 from view.tabs.base_tab import BaseTab
 
@@ -83,6 +83,7 @@ class CheckoutTab(BaseTab):
         "RUNNING":     ("#005a9e", "white"),
         "COLLECTING":  ("#8764b8", "white"),
         "SUCCESS":     ("#107c10", "white"),
+        "PARTIAL":     ("#ca5010", "white"),
         "FAILED":      ("#a80000", "white"),
         "TIMEOUT":     ("#ca5010", "white"),
     }
@@ -150,6 +151,7 @@ class CheckoutTab(BaseTab):
         _iv = lambda name, val=0: ctx.set_var(name, tk.IntVar(value=val)) \
               if ctx.get_var(name) is None else None
 
+        _sv('checkout_site', 'SINGAPORE')
         _sv('checkout_tgz_path')
         _sv('checkout_hot_folder',
             ctx.config.get('checkout', {}).get(
@@ -171,6 +173,8 @@ class CheckoutTab(BaseTab):
         _bv('checkout_tc_passing', True)
         _bv('checkout_tc_force_fail', False)
         _bv('checkout_notify_teams', True)
+        _sv('checkout_form_factor', '')
+        _bv('checkout_gen_tmptravl', False)
 
     # ──────────────────────────────────────────────────────────────────────
     # BUILD UI — scrollable canvas wrapper
@@ -328,24 +332,57 @@ class CheckoutTab(BaseTab):
         frm.grid(row=row, column=0, sticky="we", pady=(0, 6))
         frm.columnconfigure(1, weight=1)
 
+        # Site selection row
+        from model.site_config import _DEFAULT_SITES, _DEFAULT_FORM_FACTORS
+        ttk.Label(frm, text="Site:").grid(
+            row=0, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
+        site_combo = ttk.Combobox(
+            frm, textvariable=self.context.get_var('checkout_site'),
+            values=list(_DEFAULT_SITES), state="readonly", width=15)
+        site_combo.grid(row=0, column=1, sticky=tk.W, pady=(0, 4))
+        _tip(site_combo,
+             "Select the manufacturing site.\n"
+             "Routes MAM queries and other operations to the correct servers.")
+
+        # Form Factor dropdown (global default for all profile rows)
+        ttk.Label(frm, text="Form Factor:").grid(
+            row=0, column=2, sticky=tk.W, padx=(16, 8), pady=(0, 4))
+        ff_combo = ttk.Combobox(
+            frm, textvariable=self.context.get_var('checkout_form_factor'),
+            values=[""] + list(_DEFAULT_FORM_FACTORS),
+            state="readonly", width=10)
+        ff_combo.grid(row=0, column=3, sticky=tk.W, pady=(0, 4))
+        _tip(ff_combo,
+             "Default form factor for new profile rows.\n"
+             "Per-row Form_Factor in the profile table takes precedence.")
+
+        # Generate TempTraveler checkbox
+        gen_tt_cb = ttk.Checkbutton(
+            frm, text="Generate TempTraveler",
+            variable=self.context.get_var('checkout_gen_tmptravl'))
+        gen_tt_cb.grid(row=0, column=4, sticky=tk.W, padx=(16, 0), pady=(0, 4))
+        _tip(gen_tt_cb,
+             "Generate a TempTraveler .dat file for each MID.\n"
+             "Uses the template in model/resources/template_tmptravl.dat.")
+
         # TGZ row
         ttk.Label(frm, text="TGZ:").grid(
-            row=0, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
+            row=1, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
         tgz_entry = ttk.Entry(frm, textvariable=self.context.get_var('checkout_tgz_path'))
-        tgz_entry.grid(row=0, column=1, sticky="we", pady=(0, 4))
+        tgz_entry.grid(row=1, column=1, sticky="we", pady=(0, 4))
         _tip(tgz_entry, "Path to the compiled .tgz test program archive.\n"
              "Default browse location: P:\\temp\\BENTO\\RELEASE_TGZ")
         tgz_btn = ttk.Button(frm, text="…", width=3, command=self._browse_tgz)
-        tgz_btn.grid(row=0, column=2, padx=(6, 0), pady=(0, 4))
+        tgz_btn.grid(row=1, column=2, padx=(6, 0), pady=(0, 4))
         _tip(tgz_btn, "Browse for a compiled TGZ archive.")
 
         # Separator
         ttk.Separator(frm, orient=tk.HORIZONTAL).grid(
-            row=1, column=0, columnspan=3, sticky="we", pady=(0, 4))
+            row=2, column=0, columnspan=3, sticky="we", pady=(0, 4))
 
         # Test Cases row
         tc_frame = ttk.Frame(frm)
-        tc_frame.grid(row=2, column=0, columnspan=3, sticky="we", pady=(0, 4))
+        tc_frame.grid(row=3, column=0, columnspan=3, sticky="we", pady=(0, 4))
 
         ttk.Label(tc_frame, text="TC:").pack(side=tk.LEFT, padx=(0, 8))
 
@@ -379,13 +416,13 @@ class CheckoutTab(BaseTab):
 
         # Separator
         ttk.Separator(frm, orient=tk.HORIZONTAL).grid(
-            row=3, column=0, columnspan=3, sticky="we", pady=(0, 4))
+            row=4, column=0, columnspan=3, sticky="we", pady=(0, 4))
 
         # Hot Folder row
         ttk.Label(frm, text="Hot Folder:").grid(
-            row=4, column=0, sticky=tk.W, padx=(0, 8))
+            row=5, column=0, sticky=tk.W, padx=(0, 8))
         hot_entry = ttk.Entry(frm, textvariable=self.context.get_var('checkout_hot_folder'))
-        hot_entry.grid(row=4, column=1, columnspan=2, sticky="we")
+        hot_entry.grid(row=5, column=1, columnspan=2, sticky="we")
         _tip(hot_entry, "Path to the SLATE hot folder where XML profiles are dropped.\n"
              "Default: C:\\test_program\\playground_queue")
 
@@ -752,8 +789,10 @@ class CheckoutTab(BaseTab):
             row=0, column=0, sticky=tk.W, padx=(0, 6), pady=2)
         section_var = tk.StringVar()
         ttk.Combobox(input_frame, textvariable=section_var,
-                     values=["MAM", "MCTO", "CFGPN", "EQUIPMENT"],
-                     width=16).grid(row=0, column=1, sticky="we", pady=2)
+                     values=["RecipeFile", "TempTraveler", "MaterialInfo",
+                             "TestJobArchive", "AutoStart", "DutInfo",
+                             "TestProgramInfo", "General"],
+                     width=18).grid(row=0, column=1, sticky="we", pady=2)
 
         ttk.Label(input_frame, text="Attr Name:").grid(
             row=1, column=0, sticky=tk.W, padx=(0, 6), pady=2)
@@ -791,16 +830,24 @@ class CheckoutTab(BaseTab):
         btn_frame.pack(fill=tk.X, padx=10, pady=(4, 10))
 
         def _add_entry():
-            s = section_var.get().strip().upper()
-            n = attr_name_var.get().strip().upper()
-            v = attr_value_var.get().strip().upper()
-            if not s or not n or not v:
+            section = section_var.get().strip()
+            attr = attr_name_var.get().strip()
+            value = attr_value_var.get().strip()
+
+            if not section:
+                messagebox.showwarning("Validation", "Section name is required", parent=dialog)
                 return
+            if not attr:
+                messagebox.showwarning("Validation", "Attribute name is required", parent=dialog)
+                return
+
+            # Check for duplicates
             for child in entries_tree.get_children():
                 vals = entries_tree.item(child, "values")
-                if vals[0] == s and vals[1] == n and vals[2] == v:
+                if vals[0] == section and vals[1] == attr and vals[2] == value:
                     return
-            entries_tree.insert("", tk.END, values=(s, n, v))
+
+            entries_tree.insert("", tk.END, values=(section, attr, value))
             section_var.set("")
             attr_name_var.set("")
             attr_value_var.set("")
@@ -815,11 +862,22 @@ class CheckoutTab(BaseTab):
                 entries_tree.delete(child)
 
         def _save():
-            parts = []
+            entries = []
             for child in entries_tree.get_children():
                 vals = entries_tree.item(child, "values")
-                parts.append(f"{vals[0]};{vals[1]};{vals[2]}")
-            self._profile_data[row_idx]["ATTR_OVERWRITE"] = ";".join(parts)
+                if len(vals) >= 3:
+                    entries.append(f"{vals[0]};{vals[1]};{vals[2]}")
+
+            raw_value = ";".join(entries)
+
+            # Validate format
+            from model.checkout_params import validate_attr_overwrite_string
+            is_valid, error_msg = validate_attr_overwrite_string(raw_value)
+            if not is_valid:
+                messagebox.showwarning("Validation Error", error_msg, parent=dialog)
+                return
+
+            self._profile_data[row_idx]["ATTR_OVERWRITE"] = raw_value
             self._refresh_profile_grid()
             dialog.destroy()
 
@@ -946,11 +1004,20 @@ class CheckoutTab(BaseTab):
         self.stop_btn.state(["disabled"])
 
     def _collect_params(self):
+        from model.checkout_params import (
+            CheckoutParams, TestCaseConfig,
+            parse_attr_overwrite_string, ProfileRowParams,
+        )
+        from pydantic import ValidationError
+
         tgz_path    = self.context.get_var('checkout_tgz_path').get().strip()
         hot_folder  = self.context.get_var('checkout_hot_folder').get().strip()
         method      = self.context.get_var('checkout_detect_method').get()
         timeout_m   = self.context.get_var('checkout_timeout_min').get()
         notify      = self.context.get_var('checkout_notify_teams').get()
+        site        = self.context.get_var('checkout_site').get().strip()
+        form_factor = self.context.get_var('checkout_form_factor').get().strip()
+        gen_tmptravl = self.context.get_var('checkout_gen_tmptravl').get()
         hostnames   = [h for h, v in self._tester_vars.items() if v.get()]
         webhook_url = self.context.get_var('checkout_webhook_url').get().strip()
 
@@ -960,44 +1027,64 @@ class CheckoutTab(BaseTab):
         fail_label    = self.context.get_var('checkout_tc_fail_label').get().strip()
         fail_desc     = self.context.get_var('checkout_tc_fail_desc').get().strip()
 
-        profile_table = self._profile_data.copy() if self._profile_data else []
+        profile_table_raw = self._profile_data.copy() if self._profile_data else []
 
-        if not tgz_path:
-            self.show_error("Input Error", "Enter the TGZ path.")
-            return None
-        if not hot_folder:
-            self.show_error("Input Error", "Enter the hot folder path.")
-            return None
-        if not hostnames:
-            self.show_error("Input Error", "Select at least one tester.")
-            return None
-        if not profile_table:
-            self.show_error("Input Error",
-                            "Profile table is empty. Use 'Load from CRT' or 'Add Row'.")
-            return None
-        if not tc_passing and not tc_fail:
-            self.show_error("Input Error",
-                            "Select at least one test case (PASSING or FORCE FAIL).")
-            return None
-
+        # Build test cases list
         test_cases = []
         if tc_passing:
-            test_cases.append({"type": "passing",    "label": passing_label or "passing"})
+            test_cases.append(TestCaseConfig(type="passing", label=passing_label or "passing"))
         if tc_fail:
-            test_cases.append({"type": "force_fail", "label": fail_label or "force_fail_1",
-                                "description": fail_desc})
+            test_cases.append(TestCaseConfig(
+                type="force_fail",
+                label=fail_label or "force_fail_1",
+                description=fail_desc,
+            ))
 
-        return {
-            "tgz_path":        tgz_path,
-            "hot_folder":      hot_folder,
-            "test_cases":      test_cases,
-            "detect_method":   method,
-            "timeout_seconds": timeout_m * 60,
-            "notify_teams":    notify,
-            "webhook_url":     webhook_url,
-            "hostnames":       hostnames,
-            "profile_table":   profile_table,
-        }
+        # Build profile rows with validated attr_overwrites
+        profile_rows = []
+        for row in profile_table_raw:
+            try:
+                overwrites = parse_attr_overwrite_string(row.get("ATTR_OVERWRITE", ""))
+            except ValueError as e:
+                self.show_error("ATTR_OVERWRITE Error", str(e))
+                return None
+            profile_rows.append(ProfileRowParams(
+                mid=row.get("MID", ""),
+                lot=row.get("Dummy_Lot", row.get("LOT", "")),
+                cfgpn=row.get("CFGPN", ""),
+                mcto=row.get("MCTO_#1", row.get("MCTO", "")),
+                step=row.get("Step", row.get("STEP", "ABIT")),
+                form_factor=row.get("Form_Factor", row.get("FORM_FACTOR", "")) or form_factor,
+                tester=row.get("Tester", row.get("TESTER", "")),
+                primitive=row.get("Primitive", row.get("PRIMITIVE", "")),
+                dut=row.get("Dut", row.get("DUT", "")),
+                attr_overwrites=overwrites,
+            ))
+
+        try:
+            params = CheckoutParams(
+                tgz_path=tgz_path,
+                hot_folder=hot_folder or r"C:\test_program\playground_queue",
+                hostnames=hostnames,
+                site=site or "SINGAPORE",
+                test_cases=test_cases,
+                profile_table=profile_rows,
+                detect_method=method,
+                timeout_minutes=int(timeout_m) if timeout_m else 30,
+                notify_teams=bool(notify),
+                webhook_url=webhook_url,
+                generate_tmptravl=bool(gen_tmptravl),
+            )
+        except ValidationError as e:
+            # Show user-friendly validation errors
+            errors = []
+            for err in e.errors():
+                field = " → ".join(str(loc) for loc in err["loc"])
+                errors.append(f"• {field}: {err['msg']}")
+            self.show_error("Validation Error", "\n".join(errors))
+            return None
+
+        return params.to_legacy_dict()
 
     # ──────────────────────────────────────────────────────────────────────
     # BADGE HELPERS
@@ -1093,16 +1180,30 @@ class CheckoutTab(BaseTab):
         self._set_phase(hostname, phase)
 
     def on_checkout_completed(self, hostname, result):
-        status     = result.get("status", "failed").upper()
-        elapsed    = result.get("elapsed", 0)
-        detail     = result.get("detail", "")
-        test_cases = result.get("test_cases", [])
+        status      = result.get("status", "failed").upper()
+        elapsed     = result.get("elapsed", 0)
+        detail      = result.get("detail", "")
+        test_cases  = result.get("test_cases", [])
+        mid_results = result.get("mid_results", {})
 
         self._set_badge(hostname, status)
         self._set_phase(hostname, "")
         self._append_result(f"[{hostname}] {status}  ({elapsed}s)  {detail}")
+
+        # Per-MID results (mirrors CAT's profile_gen_completed)
+        if mid_results:
+            for mid, mid_info in mid_results.items():
+                mid_status = mid_info.get("status", "unknown")
+                mid_detail = mid_info.get("detail", "")
+                icon = "\u2713" if mid_status == "success" else "\u2717"
+                line = f"   {icon} MID {mid}: {mid_status}"
+                if mid_detail:
+                    line += f" \u2014 {mid_detail}"
+                self._append_result(line)
+
+        # Test case results (existing)
         for tc in test_cases:
-            icon = "✓" if tc.get("status") == "success" else "✗"
+            icon = "\u2713" if tc.get("status") == "success" else "\u2717"
             self._append_result(
                 f"   {icon} {tc.get('label','?')} ({tc.get('type','?')}): "
                 f"{tc.get('status','?')} in {tc.get('elapsed',0)}s")

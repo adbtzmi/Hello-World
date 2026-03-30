@@ -431,6 +431,7 @@ class CheckoutController(object):
             try:
                 from model.orchestrators.checkout_orchestrator import (
                     generate_slate_xml,
+                    sort_generated_profiles,
                 )
 
                 hostnames = params.get("hostnames", [])
@@ -478,33 +479,116 @@ class CheckoutController(object):
                         if test_cases else "passing"
                     )
 
-                    xml_path = generate_slate_xml(
-                        jira_key      = params.get("jira_key", "TSESSD-XXXX"),
-                        mid           = params.get("mid", ""),
-                        cfgpn         = params.get("cfgpn", ""),
-                        fw_ver        = params.get("fw_ver", ""),
-                        dut_slots     = params.get("dut_slots", 4),
-                        tgz_path      = params.get("tgz_path", ""),
-                        env           = env,
-                        lot_prefix    = params.get("lot_prefix", "JAANTJB"),
-                        dut_locations = params.get("dut_locations"),
-                        label         = label,
-                        hostname      = hostname,
-                        output_dir    = output_dir,  # P:\temp\BENTO\CHECKOUT_QUEUE
-                        log_callback  = log_cb,
-                    )
+                    profile_table = params.get("profile_table", [])
 
-                    if xml_path:
+                    # ── Per-MID tracking ──────────────────────────────
+                    mid_results = {}
+
+                    if profile_table:
+                        # Multi-MID mode: generate XML per MID
+                        for row in profile_table:
+                            mid = row.get("mid", params.get("mid", ""))
+                            try:
+                                xml_path = generate_slate_xml(
+                                    jira_key      = params.get("jira_key", "TSESSD-XXXX"),
+                                    mid           = mid,
+                                    cfgpn         = row.get("cfgpn", params.get("cfgpn", "")),
+                                    fw_ver        = params.get("fw_ver", ""),
+                                    dut_slots     = params.get("dut_slots", 4),
+                                    tgz_path      = params.get("tgz_path", ""),
+                                    env           = env,
+                                    lot_prefix    = row.get("lot", params.get("lot_prefix", "JAANTJB")),
+                                    dut_locations = params.get("dut_locations"),
+                                    label         = label,
+                                    hostname      = hostname,
+                                    form_factor   = row.get("form_factor", ""),
+                                    output_dir    = output_dir,
+                                    recipe_folder = self._config.get("checkout", {}).get("recipe_folder", ""),
+                                    python2_exe   = self._config.get("checkout", {}).get("python2_exe", ""),
+                                    site          = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
+                                    log_callback  = log_cb,
+                                )
+                                if xml_path:
+                                    mid_results[mid] = {"status": "success", "xml_path": xml_path, "detail": ""}
+                                    log_cb(f"  \u2713 MID {mid}: XML generated")
+                                else:
+                                    mid_results[mid] = {"status": "error", "xml_path": "", "detail": "XML generation returned None"}
+                                    log_cb(f"  \u2717 MID {mid}: XML generation failed")
+                            except Exception as e:
+                                mid_results[mid] = {"status": "error", "xml_path": "", "detail": str(e)}
+                                log_cb(f"  \u2717 MID {mid}: {e}")
+                    else:
+                        # Single-MID mode (legacy)
+                        mid = params.get("mid", "")
+                        try:
+                            xml_path = generate_slate_xml(
+                                jira_key      = params.get("jira_key", "TSESSD-XXXX"),
+                                mid           = mid,
+                                cfgpn         = params.get("cfgpn", ""),
+                                fw_ver        = params.get("fw_ver", ""),
+                                dut_slots     = params.get("dut_slots", 4),
+                                tgz_path      = params.get("tgz_path", ""),
+                                env           = env,
+                                lot_prefix    = params.get("lot_prefix", "JAANTJB"),
+                                dut_locations = params.get("dut_locations"),
+                                label         = label,
+                                hostname      = hostname,
+                                output_dir    = output_dir,
+                                recipe_folder = self._config.get("checkout", {}).get("recipe_folder", ""),
+                                python2_exe   = self._config.get("checkout", {}).get("python2_exe", ""),
+                                site          = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
+                                log_callback  = log_cb,
+                            )
+                            if xml_path:
+                                mid_results[mid or "default"] = {"status": "success", "xml_path": xml_path, "detail": ""}
+                            else:
+                                mid_results[mid or "default"] = {"status": "error", "xml_path": "", "detail": "XML generation returned None"}
+                        except Exception as e:
+                            mid_results[mid or "default"] = {"status": "error", "xml_path": "", "detail": str(e)}
+
+                    # ── Report per-MID summary ────────────────────────
+                    success_count = sum(1 for r in mid_results.values() if r["status"] == "success")
+                    error_count = sum(1 for r in mid_results.values() if r["status"] == "error")
+                    log_cb(f"[SUMMARY] {hostname}: {success_count} success, {error_count} errors out of {len(mid_results)} MID(s)")
+
+                    # Sort generated profiles into step/recipe folders
+                    step = params.get("step", "")
+                    recipe_name = params.get("recipe", "")
+                    if step and output_dir:
+                        try:
+                            sort_summary = sort_generated_profiles(
+                                output_dir=output_dir,
+                                step=step,
+                                recipe=recipe_name,
+                                log_callback=log_cb,
+                            )
+                            if sort_summary:
+                                log_cb(f"Profile sorting complete: {sort_summary}")
+                        except Exception as e:
+                            log_cb(f"Profile sorting failed (non-fatal): {e}")
+
+                    if success_count > 0 and error_count == 0:
                         log_cb(
                             "[OK] XML saved to shared queue:\n"
-                            "     " + xml_path + "\n"
                             "     checkout_watcher.py on tester will\n"
                             "     pick this up and copy to:\n"
                             "     " + _DEFAULT_HOT_FOLDER
                         )
-                    else:
-                        log_cb(
-                            "[!] XML generation failed for " + hostname
+
+                    # Notify UI with per-MID results
+                    if self._view:
+                        result = {
+                            "status": "success" if error_count == 0 else ("partial" if success_count > 0 else "failed"),
+                            "hostname": hostname,
+                            "env": env,
+                            "mid_results": mid_results,
+                            "detail": f"{success_count}/{len(mid_results)} MIDs generated",
+                            "elapsed": 0,
+                            "test_cases": [],
+                        }
+                        self._view.root.after(
+                            0,
+                            lambda h=hostname, r=result: self._master.on_checkout_completed(h, r)
                         )
 
             except Exception as e:

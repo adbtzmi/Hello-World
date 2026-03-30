@@ -315,6 +315,16 @@ class HomeTab(BaseTab):
                 self.context.analyzer.bitbucket_token = credentials.get('bitbucket_token', '')
                 self.context.analyzer.model_api_key = credentials.get('model_api_key', '')
                 
+                # Set base URLs from credentials, falling back to settings.json
+                self.context.analyzer.jira_base_url = (
+                    credentials.get('jira_url')
+                    or self.context.config.get('jira', {}).get('base_url', '')
+                )
+                self.context.analyzer.bitbucket_base_url = (
+                    credentials.get('bitbucket_url')
+                    or self.context.config.get('bitbucket', {}).get('base_url', '')
+                )
+                
                 # Reinitialize AI client with new key
                 if credentials.get('model_api_key'):
                     from jira_analyzer import AIGatewayClient

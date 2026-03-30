@@ -191,6 +191,9 @@ class ImplementationTab(BaseTab):
 
         self._refresh_testers()
 
+        # 4. Force Fail Section (between action and health monitor)
+        self._build_force_fail_section(compile_frame)
+
         # 2. Watcher Health Monitor (Middle)
         self.health_wrapper = ttk.LabelFrame(f, text="🔍 Watcher Health Monitor", padding="6")
         self.health_wrapper.pack(fill=tk.X, padx=10, pady=5)
@@ -274,6 +277,329 @@ class ImplementationTab(BaseTab):
         
         # Initial history load
         self._refresh_history_from_disk()
+
+    # ──────────────────────────────────────────────────────────────────────
+    # FORCE FAIL SECTION (built inside compile sub-tab)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _build_force_fail_section(self, parent):
+        """Build the force-fail UI section inside the compile LabelFrame."""
+        ff_frame = ttk.LabelFrame(parent, text="❌ Force Fail TGZ", padding="6")
+        ff_frame.grid(row=2, column=0, columnspan=2, sticky="we", pady=(0, 5))
+        ff_frame.columnconfigure(1, weight=1)
+
+        # Row 0: Enable checkbox + Generate button
+        ctrl_row = ttk.Frame(ff_frame)
+        ctrl_row.grid(row=0, column=0, columnspan=2, sticky="we", pady=(0, 4))
+
+        self._ff_enabled_var = tk.BooleanVar(value=False)
+        self._ff_check = ttk.Checkbutton(
+            ctrl_row, text="Enable Force Fail TGZ",
+            variable=self._ff_enabled_var,
+            command=self._on_ff_toggle,
+        )
+        self._ff_check.pack(side=tk.LEFT, padx=(0, 10))
+
+        self._ff_generate_btn = ttk.Button(
+            ctrl_row, text="🤖 Generate Force Fail Cases",
+            command=self._generate_force_fail, state=tk.DISABLED,
+        )
+        self._ff_generate_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self.context.lockable_buttons.append(self._ff_generate_btn)
+
+        self._ff_compile_btn = ttk.Button(
+            ctrl_row, text="🚀 Compile Force Fail TGZ",
+            command=self._compile_force_fail, state=tk.DISABLED,
+        )
+        self._ff_compile_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self.context.lockable_buttons.append(self._ff_compile_btn)
+
+        self._ff_clear_btn = ttk.Button(
+            ctrl_row, text="🗑 Clear", command=self._clear_ff_cases,
+            state=tk.DISABLED, width=8,
+        )
+        self._ff_clear_btn.pack(side=tk.LEFT)
+
+        # Row 1: Status label
+        self._ff_status_var = tk.StringVar(value="Force fail disabled")
+        self._ff_status_lbl = ttk.Label(
+            ff_frame, textvariable=self._ff_status_var,
+            font=("Arial", 9, "italic"), foreground="gray",
+        )
+        self._ff_status_lbl.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 4))
+
+        # Row 2: Cases list (Treeview for per-case toggles)
+        cases_frame = ttk.Frame(ff_frame)
+        cases_frame.grid(row=2, column=0, columnspan=2, sticky="we", pady=(0, 4))
+        cases_frame.columnconfigure(0, weight=1)
+
+        ff_cols = ("Enabled", "Test ID", "Description", "Files")
+        self._ff_tree = ttk.Treeview(
+            cases_frame, columns=ff_cols, show="headings", height=3,
+        )
+        ff_col_widths = [60, 120, 300, 200]
+        for col, w in zip(ff_cols, ff_col_widths):
+            self._ff_tree.heading(col, text=col)
+            self._ff_tree.column(col, width=w, anchor="w")
+
+        self._ff_tree.tag_configure("enabled",  foreground="#107c10")
+        self._ff_tree.tag_configure("disabled", foreground="#888888")
+        self._ff_tree.bind("<Double-1>", self._on_ff_case_double_click)
+
+        ff_scroll = ttk.Scrollbar(cases_frame, orient=tk.VERTICAL, command=self._ff_tree.yview)
+        self._ff_tree.configure(yscrollcommand=ff_scroll.set)
+        self._ff_tree.grid(row=0, column=0, sticky="we")
+        ff_scroll.grid(row=0, column=1, sticky="ns")
+
+        # Row 3: Diff preview (collapsed by default)
+        self._ff_diff_visible = tk.BooleanVar(value=False)
+        diff_toggle = ttk.Checkbutton(
+            ff_frame, text="Show Diff Preview",
+            variable=self._ff_diff_visible,
+            command=self._toggle_ff_diff_preview,
+        )
+        diff_toggle.grid(row=3, column=0, sticky="w", pady=(0, 2))
+
+        self._ff_diff_text = scrolledtext.ScrolledText(
+            ff_frame, height=6, width=70, wrap=tk.WORD,
+            font=("Consolas", 9), state=tk.DISABLED,
+        )
+        # Hidden by default — shown when checkbox is toggled
+        self._ff_diff_text.grid(row=4, column=0, columnspan=2, sticky="we", pady=(0, 2))
+        self._ff_diff_text.grid_remove()
+
+        self._ff_diff_text.tag_config("add",    foreground="#107c10", font=("Consolas", 9, "bold"))
+        self._ff_diff_text.tag_config("remove", foreground="#a80000", font=("Consolas", 9, "bold"))
+        self._ff_diff_text.tag_config("header", foreground="#0066cc", font=("Consolas", 9, "bold"))
+        self._ff_diff_text.tag_config("normal", foreground="#333333")
+
+    # ── Force Fail UI Callbacks ────────────────────────────────────────────
+
+    def _on_ff_toggle(self):
+        """Enable/disable force-fail controls based on checkbox."""
+        enabled = self._ff_enabled_var.get()
+        state = tk.NORMAL if enabled else tk.DISABLED
+        self._ff_generate_btn.config(state=state)
+        self._ff_clear_btn.config(state=state if self._ff_tree.get_children() else tk.DISABLED)
+
+        if enabled:
+            self._ff_status_var.set("Force fail enabled — generate cases to proceed")
+            self._ff_status_lbl.config(foreground="#0066cc")
+        else:
+            self._ff_status_var.set("Force fail disabled")
+            self._ff_status_lbl.config(foreground="gray")
+            self._ff_compile_btn.config(state=tk.DISABLED)
+
+    def _generate_force_fail(self):
+        """Trigger AI generation of force-fail cases."""
+        issue_key = self.context.get_var("issue_var").get().strip().upper()
+        repo_path = self.context.get_var("impl_repo_var").get().strip()
+
+        jira_project = self.context.config.get("jira", {}).get("project_key", "TSESSD")
+        if not issue_key or issue_key == f"{jira_project}-":
+            self.show_error("Input Error", "Enter a valid JIRA issue key.")
+            return
+        if not repo_path:
+            self.show_error("Input Error", "Select the local repository path.")
+            return
+
+        ctrl = getattr(self.context.controller, "force_fail_controller", None)
+        if ctrl is None:
+            self.show_error("Error", "ForceFailController is not initialised.")
+            return
+
+        self.lock_gui()
+        self._ff_status_var.set("⏳ Generating force-fail cases…")
+        self._ff_status_lbl.config(foreground="#fd7e14")
+        self.log(f"[Force Fail] Generating cases for {issue_key}")
+
+        ctrl.generate_force_fail(
+            issue_key=issue_key,
+            repo_path=repo_path,
+            callback=self._on_ff_generated,
+        )
+
+    def _on_ff_generated(self, result):
+        """Callback when force-fail generation completes."""
+        self.unlock_gui()
+
+        if not result.get("success"):
+            error = result.get("error", "Unknown error")
+            self._ff_status_var.set(f"✗ Generation failed")
+            self._ff_status_lbl.config(foreground="#a80000")
+            self.show_error("Force Fail Error", error)
+            return
+
+        cases = result.get("cases", [])
+        from_cache = result.get("from_cache", False)
+        cache_note = " (from cache)" if from_cache else ""
+
+        self._ff_status_var.set(f"✓ {len(cases)} case(s) generated{cache_note}")
+        self._ff_status_lbl.config(foreground="#107c10")
+
+        # Populate the cases treeview
+        self._populate_ff_cases(cases)
+
+        # Enable compile button
+        self._ff_compile_btn.config(state=tk.NORMAL)
+        self._ff_clear_btn.config(state=tk.NORMAL)
+
+        # Update diff preview
+        self._update_ff_diff_preview()
+
+    def _populate_ff_cases(self, cases):
+        """Populate the force-fail cases treeview."""
+        self._ff_tree.delete(*self._ff_tree.get_children())
+        for case in cases:
+            status = "✓" if case.enabled else "○"
+            files = ", ".join(p.file_path for p in case.patches)
+            tag = "enabled" if case.enabled else "disabled"
+            self._ff_tree.insert("", tk.END, iid=case.test_id, values=(
+                status, case.test_id, case.description, files
+            ), tags=(tag,))
+
+    def _on_ff_case_double_click(self, event):
+        """Toggle a force-fail case on/off via double-click."""
+        item = self._ff_tree.identify_row(event.y)
+        if not item:
+            return
+
+        ctrl = getattr(self.context.controller, "force_fail_controller", None)
+        if ctrl is None:
+            return
+
+        # Get current state and toggle
+        values = self._ff_tree.item(item, "values")
+        currently_enabled = values[0] == "✓"
+        new_enabled = not currently_enabled
+
+        ctrl.toggle_case(item, new_enabled)
+
+        # Update display
+        new_status = "✓" if new_enabled else "○"
+        tag = "enabled" if new_enabled else "disabled"
+        self._ff_tree.item(item, values=(new_status, values[1], values[2], values[3]), tags=(tag,))
+
+        # Update status
+        total, enabled = ctrl.get_cases_count()
+        self._ff_status_var.set(f"✓ {total} case(s), {enabled} enabled")
+
+        # Update diff preview
+        self._update_ff_diff_preview()
+
+        # Enable/disable compile button based on enabled count
+        self._ff_compile_btn.config(state=tk.NORMAL if enabled > 0 else tk.DISABLED)
+
+    def _toggle_ff_diff_preview(self):
+        """Show/hide the diff preview text widget."""
+        if self._ff_diff_visible.get():
+            self._ff_diff_text.grid()
+            self._update_ff_diff_preview()
+        else:
+            self._ff_diff_text.grid_remove()
+
+    def _update_ff_diff_preview(self):
+        """Update the diff preview with current force-fail cases."""
+        ctrl = getattr(self.context.controller, "force_fail_controller", None)
+        if ctrl is None:
+            return
+
+        self._ff_diff_text.config(state=tk.NORMAL)
+        self._ff_diff_text.delete("1.0", tk.END)
+
+        display = ctrl.get_cases_display()
+        if not display or display.startswith("No force-fail"):
+            self._ff_diff_text.insert(tk.END, display or "No cases generated.", "normal")
+            self._ff_diff_text.config(state=tk.DISABLED)
+            return
+
+        # Syntax-highlight the diff display
+        for line in display.split("\n"):
+            if line.startswith("+++") or line.startswith("---"):
+                self._ff_diff_text.insert(tk.END, line + "\n", "header")
+            elif line.startswith("+"):
+                self._ff_diff_text.insert(tk.END, line + "\n", "add")
+            elif line.startswith("-"):
+                self._ff_diff_text.insert(tk.END, line + "\n", "remove")
+            elif line.startswith("@@") or line.startswith("=="):
+                self._ff_diff_text.insert(tk.END, line + "\n", "header")
+            else:
+                self._ff_diff_text.insert(tk.END, line + "\n", "normal")
+
+        self._ff_diff_text.config(state=tk.DISABLED)
+
+    def _compile_force_fail(self):
+        """Compile the force-fail TGZ using patched repo."""
+        issue_key = self.context.get_var("issue_var").get().strip().upper()
+        repo_path = self.context.get_var("impl_repo_var").get().strip()
+        shared_folder = self.context.get_var("compile_raw_zip").get().strip().replace("\\RAW_ZIP", "")
+        hostnames = self._get_selected_hostnames()
+
+        if not hostnames:
+            self.show_error("Input Error", "Select at least one tester.")
+            return
+
+        ctrl = getattr(self.context.controller, "force_fail_controller", None)
+        if ctrl is None:
+            self.show_error("Error", "ForceFailController is not initialised.")
+            return
+
+        total, enabled = ctrl.get_cases_count()
+        if enabled == 0:
+            self.show_error("Input Error", "No enabled force-fail cases. Double-click to toggle.")
+            return
+
+        # Determine label
+        base_label = self.context.get_var("tgz_label_var").get().strip()
+        ff_label = f"force_fail_{base_label}" if base_label else "force_fail_1"
+
+        self.lock_gui()
+        self._ff_status_var.set("⏳ Compiling force-fail TGZ…")
+        self._ff_status_lbl.config(foreground="#fd7e14")
+        self.compile_status_var.set("Force Fail Compile Running...")
+        self.log(f"[Force Fail] Compiling {enabled} case(s) on {len(hostnames)} tester(s)")
+
+        ctrl.compile_force_fail(
+            issue_key=issue_key,
+            repo_path=repo_path,
+            shared_folder=shared_folder,
+            hostnames=hostnames,
+            label=ff_label,
+            callback=self._on_ff_compiled,
+        )
+
+    def _on_ff_compiled(self, result):
+        """Callback when force-fail compilation completes."""
+        self.unlock_gui()
+        self.compile_status_var.set("")
+
+        if result.get("success"):
+            label = result.get("label", "force_fail")
+            self._ff_status_var.set(f"✓ Force-fail TGZ submitted (label: {label})")
+            self._ff_status_lbl.config(foreground="#107c10")
+            self.log(f"[Force Fail] ✓ Compilation submitted — label: {label}")
+        else:
+            error = result.get("error", "Unknown error")
+            self._ff_status_var.set("✗ Force-fail compilation failed")
+            self._ff_status_lbl.config(foreground="#a80000")
+            self.show_error("Force Fail Compile Error", error)
+
+    def _clear_ff_cases(self):
+        """Clear all generated force-fail cases."""
+        ctrl = getattr(self.context.controller, "force_fail_controller", None)
+        if ctrl:
+            ctrl.clear_cases()
+
+        self._ff_tree.delete(*self._ff_tree.get_children())
+        self._ff_compile_btn.config(state=tk.DISABLED)
+        self._ff_clear_btn.config(state=tk.DISABLED)
+        self._ff_status_var.set("Force fail enabled — generate cases to proceed")
+        self._ff_status_lbl.config(foreground="#0066cc")
+
+        # Clear diff preview
+        self._ff_diff_text.config(state=tk.NORMAL)
+        self._ff_diff_text.delete("1.0", tk.END)
+        self._ff_diff_text.config(state=tk.DISABLED)
 
     # ──────────────────────────────────────────────────────────────────────
     # AI PLAN GENERATOR — USER ACTIONS

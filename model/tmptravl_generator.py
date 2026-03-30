@@ -1,0 +1,235 @@
+"""
+model/tmptravl_generator.py
+============================
+TempTraveler (.dat) file generator for recipe selection compatibility.
+Mirrors CAT's ProfileDump/main.py CustomiseTmptravl() (lines 470-539).
+
+The tmptravl file has sections delimited by markers:
+  $$_BEGIN_SECTION_MAM / $$_END_SECTION_MAM
+  $$_BEGIN_SECTION_CFGPN / $$_END_SECTION_CFGPN
+  $$_BEGIN_SECTION_MCTO / $$_END_SECTION_MCTO
+  $$_BEGIN_SECTION_EQUIPMENT / $$_END_SECTION_EQUIPMENT
+  $$_BEGIN_SECTION_DRIVE_INFO / $$_END_SECTION_DRIVE_INFO
+
+Within each section, attributes are written as "KEY: VALUE" lines.
+Outside sections, specific keys can be replaced via a constant_dict.
+"""
+import os
+import re
+import shutil
+import logging
+from typing import Dict, Optional, List, Tuple
+
+logger = logging.getLogger("bento_app")
+
+# Path to template
+_RESOURCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources")
+_TEMPLATE_PATH = os.path.join(_RESOURCE_DIR, "template_tmptravl.dat")
+
+
+class TmptravlGenerator:
+    """
+    Generates customized tmptravl .dat files for recipe selection.
+
+    Mirrors CAT's CustomiseTmptravl() flow:
+    1. Copy template to per-MID file
+    2. Replace section contents with real data
+    3. Replace specific keys outside sections with constant values
+    """
+
+    def __init__(self, output_dir: str, template_path: str = ""):
+        """
+        Args:
+            output_dir: Directory to write generated tmptravl files
+            template_path: Path to template_tmptravl.dat (defaults to bundled template)
+        """
+        self._template = template_path or _TEMPLATE_PATH
+        self._output_dir = output_dir
+        os.makedirs(self._output_dir, exist_ok=True)
+
+        if not os.path.exists(self._template):
+            logger.warning(f"Template tmptravl not found at {self._template}")
+
+    def generate(
+        self,
+        mid: str,
+        step: str,
+        mam_dict: Optional[Dict[str, str]] = None,
+        cfgpn_dict: Optional[Dict[str, str]] = None,
+        mcto_dict: Optional[Dict[str, str]] = None,
+        drive_info_dict: Optional[Dict[str, str]] = None,
+        constant_dict: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """
+        Generate a customized tmptravl file for a single MID.
+
+        Mirrors CAT's CustomiseTmptravl() (ProfileDump/main.py:470-539).
+
+        Args:
+            mid: The MID identifier
+            step: Test step (ABIT, SFN2, SCHP)
+            mam_dict: MAM section attributes (from GetMAM or defaults)
+            cfgpn_dict: CFGPN section attributes (from SAP or defaults)
+            mcto_dict: MCTO section attributes (from SAP or defaults)
+            drive_info_dict: DRIVE_INFO attributes (STEP, STEP_ID, LOT, MID)
+            constant_dict: Key-value pairs to replace outside sections
+                          (LOT, DIB_TYPE, MACHINE_MODEL, etc.)
+
+        Returns:
+            Path to the generated tmptravl file
+        """
+        mam_dict = mam_dict or {}
+        cfgpn_dict = cfgpn_dict or {}
+        mcto_dict = mcto_dict or {}
+        drive_info_dict = drive_info_dict or {}
+        constant_dict = constant_dict or {}
+
+        # Create per-MID filename: {MID}_tmptravl_{STEP}.dat
+        filename = f"{mid}_tmptravl_{step}.dat"
+        output_path = os.path.join(self._output_dir, filename)
+
+        # Step 1: Copy template
+        if not os.path.exists(self._template):
+            raise FileNotFoundError(f"Template tmptravl not found: {self._template}")
+
+        shutil.copy(self._template, output_path)
+        logger.info(f"Creating customised tmptravl for {filename}")
+
+        # Step 2: Customize sections
+        # Mirrors CAT's CustomiseTmptravl line-by-line parsing
+        with open(output_path, 'r+') as f:
+            content = f.readlines()
+            f.seek(0)
+            f.truncate()
+
+            within_cfgpn = False
+            within_mam = False
+            within_mcto = False
+            within_equipment = False
+            within_drive_info = False
+
+            for line in content:
+                # ── CFGPN Section ──
+                if "$$_BEGIN_SECTION_CFGPN" in line:
+                    within_cfgpn = True
+                    f.write(line)
+                    for key, value in cfgpn_dict.items():
+                        if key == "PRODUCT_NAME":
+                            f.write(f"{key}: {value.replace(' ', '_')}\n")
+                        else:
+                            f.write(f"{key}: {value}\n")
+                elif "$$_END_SECTION_CFGPN" in line:
+                    within_cfgpn = False
+                    f.write(line)
+
+                # ── MCTO Section ──
+                elif "$$_BEGIN_SECTION_MCTO" in line:
+                    within_mcto = True
+                    f.write(line)
+                    for key, value in mcto_dict.items():
+                        if key == "PRODUCT_NAME":
+                            f.write(f"{key}: {value.replace(' ', '_')}\n")
+                        else:
+                            f.write(f"{key}: {value}\n")
+                elif "$$_END_SECTION_MCTO" in line:
+                    within_mcto = False
+                    f.write(line)
+
+                # ── MAM Section ──
+                elif "$$_BEGIN_SECTION_MAM" in line:
+                    within_mam = True
+                    f.write(line)
+                    for key, value in mam_dict.items():
+                        f.write(f"{key}: {value}\n")
+                elif "$$_END_SECTION_MAM" in line:
+                    within_mam = False
+                    # Write DRIVE_INFO at end of MAM section (before END marker)
+                    # Mirrors CAT: drive_info_dict written just before $$_END_SECTION_MAM
+                    for key, value in drive_info_dict.items():
+                        f.write(f"{key}: {value}\n")
+                    f.write(line)
+
+                # ── Outside sections: replace matching keys ──
+                elif not within_cfgpn and not within_mam and not within_mcto:
+                    attr = re.split(r':\s*', line)[0]
+                    if attr in constant_dict:
+                        line = f"{attr}: {constant_dict[attr]}\n"
+                    f.write(line)
+
+        logger.info(f"Customised tmptravl written: {output_path}")
+        return output_path
+
+    def generate_for_checkout(
+        self,
+        mid: str,
+        step: str,
+        lot: str,
+        cfgpn: str,
+        site: str,
+        dib_type: str,
+        machine_model: str,
+        machine_vendor: str,
+        step_name: str,
+        step_id: str,
+        mam_dict: Optional[Dict[str, str]] = None,
+        cfgpn_dict: Optional[Dict[str, str]] = None,
+        mcto_dict: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """
+        High-level convenience method for checkout workflow.
+        Builds the constant_dict and drive_info_dict automatically.
+
+        Mirrors CAT's ProfileMass() lines 664-694.
+        """
+        # Build DRIVE_INFO dict (mirrors CAT ProfileMass lines 665-669)
+        drive_info = {
+            "STEP": step_name,
+            "STEP_ID": step_id,
+            "LOT": lot,
+            "MID": mid,
+        }
+
+        # Build CONSTANT dict (mirrors CAT ProfileMass lines 671-688)
+        constants = {
+            "LOT": lot,
+            "DIB_TYPE": dib_type,
+            "DIB_TYPE_NAME": dib_type,
+            "MACHINE_MODEL": machine_model,
+            "MACHINE_VENDOR": machine_vendor,
+            "SITE_NAME": site,
+        }
+
+        return self.generate(
+            mid=mid,
+            step=step,
+            mam_dict=mam_dict,
+            cfgpn_dict=cfgpn_dict,
+            mcto_dict=mcto_dict,
+            drive_info_dict=drive_info,
+            constant_dict=constants,
+        )
+
+    def cleanup(self, tmptravl_path: str):
+        """Remove a tmptravl file after successful recipe selection."""
+        try:
+            if os.path.exists(tmptravl_path):
+                os.remove(tmptravl_path)
+                logger.debug(f"Deleted tmptravl: {tmptravl_path}")
+        except Exception as e:
+            logger.warning(f"Failed to delete tmptravl {tmptravl_path}: {e}")
+
+    def move_to_failing(self, tmptravl_path: str, failing_dir: str = ""):
+        """
+        Move a failed tmptravl to Failing_Tmptravl/ folder.
+        Mirrors CAT ProfileMass lines 766-770.
+        """
+        fail_dir = failing_dir or os.path.join(self._output_dir, "Failing_Tmptravl")
+        os.makedirs(fail_dir, exist_ok=True)
+        try:
+            dest = os.path.join(fail_dir, os.path.basename(tmptravl_path))
+            shutil.move(tmptravl_path, dest)
+            logger.info(f"Moved failed tmptravl to {dest}")
+            return dest
+        except Exception as e:
+            logger.error(f"Failed to move tmptravl to failing dir: {e}")
+            return ""

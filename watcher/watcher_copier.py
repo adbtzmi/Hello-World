@@ -60,6 +60,7 @@ def make_tgz_filename(base_tgz_name, label, env):
     """
     stem = os.path.splitext(base_tgz_name)[0]   # e.g. "ibir_release"
     if label:
+        label = label.replace(" ", "_")          # spaces → underscores in filename
         return stem + "_" + env + "_" + label + ".tgz"
     else:
         return stem + "_" + env + ".tgz"
@@ -135,7 +136,8 @@ def binary_copy(src_path, dest_path, logger):
 # ----------------------------------------------------------------
 def write_build_info(dest_folder, zip_name, tgz_filename,
                      hostname, jira_key, env, label, logger):
-    info_name = "build_info_" + (label if label else "default") + ".txt"
+    safe_label = label.replace(" ", "_") if label else ""
+    info_name = "build_info_" + (safe_label if safe_label else "default") + ".txt"
     info_path = os.path.join(dest_folder, info_name)
     try:
         with open(info_path, "w") as f:

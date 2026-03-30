@@ -5,6 +5,9 @@ cryptography>=41.0.0
 # Document processing
 python-docx>=0.8.11
 
+# Data validation
+pydantic>=2.0
+
 # Note: The following are typically included in Python standard library
 # but listed here for completeness and version compatibility
 
@@ -16,3 +19,6 @@ python-docx>=0.8.11
 # All other imports are from Python standard library:
 # - os, sys, json, subprocess, ssl, urllib, getpass, datetime, typing, threading, hashlib, base64
 # These are built-in and don't need installation
+
+# Optional: AES-GCM config encryption (CAT configManager pattern)
+pycryptodomex>=3.15  # optional: config encryption

@@ -34,6 +34,12 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Optional, Dict, List
 
+from model.hardware_config import get_hardware_config
+from model.tmptravl_generator import TmptravlGenerator
+from model.recipe_selector import RecipeSelector, RecipeResult
+from model.mam_communicator import MAMCommunicator, MAMResult
+from model.profile_sorter import ProfileSorter
+
 # ── CONFIRMED PATHS ───────────────────────────────────────────────────────────
 # N: = \\sifsmodtestrep\ModTestRep  (confirmed via `net use` output)
 CAT_CRAB_FOLDER         = r"\\sifsmodtestrep\ModTestRep\crab"
@@ -95,12 +101,7 @@ _COL_ABIT_REL  = "ABIT Release (Yes/No)"
 _COL_SFN2_REL  = "SFN2 Release (Yes/No)"
 _COL_CHECKOUT  = "CRT Checkout (Yes/No)"
 
-# ── Recipe file per ENV — confirmed from FullAutoStart.md [24] ───────────────
-RECIPE_MAP = {
-    "ABIT": r"RECIPE:PEREGRINE\ON_NEOSEM_ABIT.XML",
-    "SFN2": r"RECIPE:PEREGRINE\ON_NEOSEM_SFN2.XML",
-    "CNFG": r"RECIPE:PEREGRINE\ON_NEOSEM_CNFG.XML",
-}
+# NOTE: Static RECIPE_MAP moved to model/recipe_selector.py as _FALLBACK_RECIPE_MAP
 
 
 # ── LOGGER ────────────────────────────────────────────────────────────────────
@@ -128,6 +129,160 @@ def _phase(logger, msg: str, log_callback=None, phase_callback=None):
     _log(logger, msg, log_callback)
     if phase_callback:
         phase_callback(msg)
+
+
+# ── MAM QUERY / UPDATE HELPERS ────────────────────────────────────────────────
+def query_mam_attributes(
+    lot: str,
+    site: str = "",
+    log_callback=None,
+) -> Dict[str, str]:
+    """Query MAM for lot attributes (CFGPN, MCTO, etc.).
+
+    Mirrors CAT ProfileWriter.GetMAM().
+    Returns empty dict if MAM is unavailable or query fails.
+
+    Parameters
+    ----------
+    lot : str
+        Lot ID to query.
+    site : str
+        Site name for MAM server selection.
+    log_callback : callable, optional
+        Callback for log messages.
+
+    Returns
+    -------
+    dict
+        Lot attributes from MAM, or empty dict on failure.
+    """
+    logger = _get_logger(log_callback)
+
+    mam = MAMCommunicator(site=site)
+    if not mam.is_available:
+        _log(logger, "MAM query skipped — PyMIPC not available", log_callback)
+        return {}
+
+    _log(logger, f"Querying MAM for lot {lot} (site: {mam.site})...", log_callback)
+    result = mam.get_lot_attributes(lot)
+
+    if result.success:
+        _log(logger, f"MAM returned {len(result.attributes)} attributes for lot {lot}", log_callback)
+        return result.attributes
+    else:
+        _log(logger, f"MAM query failed: {result.error}", log_callback)
+        return {}
+
+
+def update_mam_cfgpn_mcto(
+    lot: str,
+    cfgpn: str,
+    mcto: str,
+    site: str = "",
+    log_callback=None,
+) -> bool:
+    """Update CFGPN and MCTO attributes in MAM for a lot.
+
+    Mirrors CAT ProfileWriter.UpdateMAM_CFGPN_MCTO().
+
+    Parameters
+    ----------
+    lot : str
+        Lot ID to update.
+    cfgpn : str
+        CFGPN value to set.
+    mcto : str
+        MCTO value to set.
+    site : str
+        Site name for MAM server selection.
+    log_callback : callable, optional
+        Callback for log messages.
+
+    Returns
+    -------
+    bool
+        True if update succeeded, False otherwise.
+    """
+    logger = _get_logger(log_callback)
+
+    mam = MAMCommunicator(site=site)
+    if not mam.is_available:
+        _log(logger, "MAM update skipped — PyMIPC not available", log_callback)
+        return False
+
+    attrs = {}
+    if cfgpn:
+        attrs["CFGPN"] = cfgpn
+    if mcto:
+        attrs["MCTO"] = mcto
+
+    if not attrs:
+        _log(logger, "No CFGPN/MCTO values to update in MAM", log_callback)
+        return False
+
+    _log(logger, f"Updating MAM for lot {lot}: {attrs}", log_callback)
+    result = mam.set_lot_attributes(lot, attrs)
+
+    if result.success:
+        _log(logger, f"MAM update successful for lot {lot}", log_callback)
+        return True
+    else:
+        _log(logger, f"MAM update failed: {result.error}", log_callback)
+        return False
+
+
+# ── PROFILE SORTING ──────────────────────────────────────────────────────────
+def sort_generated_profiles(
+    output_dir: str,
+    step: str = "",
+    recipe: str = "",
+    log_callback=None,
+) -> Dict[str, int]:
+    """Sort generated profile files into tester/recipe folder structure.
+
+    Mirrors CAT ProfileSort() + ProfileClean().
+
+    Parameters
+    ----------
+    output_dir : str
+        Directory containing generated XML profiles.
+    step : str
+        Step name for folder organization.
+    recipe : str
+        Recipe name for folder organization.
+    log_callback : callable, optional
+        Callback for log messages.
+
+    Returns
+    -------
+    dict
+        Summary: {tester/recipe_folder: file_count}
+    """
+    logger = _get_logger(log_callback)
+
+    if not output_dir or not os.path.isdir(output_dir):
+        _log(logger, f"Output directory not found for sorting: {output_dir}", log_callback)
+        return {}
+
+    sorter = ProfileSorter(output_dir)
+
+    if step:
+        dest = sorter.sort_by_step(output_dir, step, recipe, log_callback=log_callback)
+        _log(logger, f"Profiles sorted into: {dest}", log_callback)
+
+    # Clean up empty folders
+    removed = sorter.clean_empty_folders(log_callback=log_callback)
+    if removed:
+        _log(logger, f"Removed {removed} empty directories", log_callback)
+
+    # Return summary
+    summary = sorter.get_sorted_summary()
+    flat_summary = {}
+    for tester, recipes in summary.items():
+        for rec, count in recipes.items():
+            flat_summary[f"{tester}/{rec}"] = count
+
+    return flat_summary
 
 
 # ── STEP 0 — Load valid ENVs ──────────────────────────────────────────────────
@@ -267,8 +422,13 @@ def generate_slate_xml(
     dut_locations: Optional[list] = None,
     label:         str            = "",
     hostname:      str  = "",
+    form_factor:   str  = "",
     output_dir:    str  = "",
     dry_run:       bool = False,
+    generate_tmptravl: bool = False,
+    recipe_folder: str  = "",
+    python2_exe:   str  = "",
+    site:          str  = "",
     logger               = None,
     log_callback         = None,
 ) -> Optional[str]:
@@ -293,8 +453,6 @@ def generate_slate_xml(
     parts      = [p for p in [jira_key, hostname, env.upper() if env else None, timestamp, label] if p]
     xml_name   = "checkout_" + "_".join(parts) + ".xml"
     out_dir    = output_dir or CHECKOUT_QUEUE_FOLDER
-    recipe     = RECIPE_MAP.get(env.upper(),
-                                r"RECIPE:PEREGRINE\ON_NEOSEM_ABIT.XML")
 
     # ── Auto-create output directory ──────────────────────────────────
     try:
@@ -317,18 +475,69 @@ def generate_slate_xml(
         # TGZ path from Phase 1 compile output [7]
         ET.SubElement(profile, "TestJobArchive").text = tgz_path
 
+        # ── Load hardware config (replaces hardcoded values) ───────────
+        hw_config = get_hardware_config()
+        step = env.upper()
+        mam_step, cfgpn_step_id = hw_config.get_step_names(step)
+        # form_factor defaults to empty — will use fallback DIB
+        # In future, form_factor will come from profile_table row
+        _form_factor = form_factor
+        dib_type = hw_config.get_dib_type(step, _form_factor) if _form_factor else hw_config.get_dib_type(step, "U.2")
+
+        # ── Optional: Generate tmptravl for recipe selection compatibility ──
+        tmptravl_path = ""
+        if generate_tmptravl:
+            try:
+                traces_dir = os.path.join(out_dir, "Traces")
+                tmptravl_gen = TmptravlGenerator(output_dir=traces_dir)
+                tmptravl_path = tmptravl_gen.generate_for_checkout(
+                    mid=mid,
+                    step=step,
+                    lot=lot_prefix,
+                    cfgpn=cfgpn,
+                    site="SINGAPORE",  # Will be parameterized in Phase 3B
+                    dib_type=dib_type,
+                    machine_model=hw_config.get_machine_model(step),
+                    machine_vendor=hw_config.get_machine_vendor(step),
+                    step_name=mam_step,
+                    step_id=cfgpn_step_id,
+                )
+                _log(logger, f"✓ Tmptravl: {os.path.basename(tmptravl_path)}", log_callback)
+            except Exception as e:
+                _log(logger, f"⚠ Tmptravl generation failed (non-fatal): {e}", log_callback, "warning")
+                tmptravl_path = ""
+
+        # ── Recipe selection via subprocess or fallback ────────────────
+        selector = RecipeSelector(recipe_folder=recipe_folder, python2_exe=python2_exe)
+        recipe_result = selector.select_recipe_or_fallback(tmptravl_path, step)
+        recipe = recipe_result.recipe_name or r"RECIPE:PEREGRINE\ON_NEOSEM_ABIT.XML"
+        _log(logger, f"Recipe: {recipe} (success={recipe_result.success})", log_callback)
+
+        # ── MAM attribute query (optional) ──────────────────────────
+        mam_attrs = {}
+        if lot_prefix and site:
+            mam_attrs = query_mam_attributes(lot_prefix, site=site, log_callback=log_callback)
+            if mam_attrs:
+                # Use MAM CFGPN if not already provided
+                if not cfgpn and mam_attrs.get("CFGPN"):
+                    cfgpn = mam_attrs["CFGPN"]
+                    _log(logger, f"Using CFGPN from MAM: {cfgpn}", log_callback)
+                # Log MCTO if available (informational)
+                if mam_attrs.get("MCTO"):
+                    _log(logger, f"MAM MCTO: {mam_attrs['MCTO']}", log_callback)
+
         # ── RecipeFile ────────────────────────────────────────────────
         ET.SubElement(profile, "RecipeFile").text = recipe
 
         # ── TempTraveler — confirmed rows from FullAutoStart.md [24] ──
         tt = ET.SubElement(profile, "TempTraveler")
         for section, name, value in [
-            ("MAM",       "STEP",          env.upper()),
+            ("MAM",       "STEP",          mam_step),
             ("MAM",       "NAND_OPTION",   "BAD_PLANE"),
-            ("CFGPN",     "STEP_ID",       "AMB IB TEST"),
+            ("CFGPN",     "STEP_ID",       cfgpn_step_id),
             ("CFGPN",     "SEC_PROCESS",   "ABIT_REQ0"),
-            ("EQUIPMENT", "DIB_TYPE",      "MS0052"),
-            ("EQUIPMENT", "DIB_TYPE_NAME", "MS0022"),
+            ("EQUIPMENT", "DIB_TYPE",      dib_type),
+            ("EQUIPMENT", "DIB_TYPE_NAME", dib_type),
         ]:
             a = ET.SubElement(tt, "Attribute")
             a.set("Section", section)
@@ -358,6 +567,12 @@ def generate_slate_xml(
              f"✓ XML: {xml_name} | AutoStart=True | "
              f"{len(locations)} DUT(s) | {size_kb:.1f} KB",
              log_callback)
+
+        # ── Optional profile sorting ────────────────────────────────
+        # Sort into step/recipe subfolder if step is provided
+        # (Actual sorting is typically done after all MIDs are generated,
+        #  so this is a hook for the controller to call sort_generated_profiles())
+
         return xml_path
 
     except Exception as e:
@@ -404,11 +619,12 @@ def parse_slate_xml(xml_path: str) -> dict:
     if tja is not None and tja.text:
         result["tgz_path"] = tja.text.strip()
 
-    # RecipeFile -> reverse-map to ENV
+    # RecipeFile -> reverse-map to ENV using _FALLBACK_RECIPE_MAP
+    from model.recipe_selector import _FALLBACK_RECIPE_MAP
     rf = root.find("RecipeFile")
     if rf is not None and rf.text:
         recipe_text = rf.text.strip().upper()
-        for env_key, recipe_val in RECIPE_MAP.items():
+        for env_key, recipe_val in _FALLBACK_RECIPE_MAP.items():
             if recipe_val.upper() in recipe_text or env_key in recipe_text:
                 result["env"] = env_key
                 break

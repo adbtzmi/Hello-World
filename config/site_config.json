@@ -1,0 +1,28 @@
+{
+    "sites": ["SINGAPORE", "PENANG", "BOISE", "XIAN"],
+    "steps": ["ABIT", "SFN2", "SCHP"],
+    "form_factors": ["U.2", "U.3", "E3.S", "E1.S", "E1.L", "M.2", "BGA"],
+    "default_site": "SINGAPORE",
+    "site_settings": {
+        "SINGAPORE": {
+            "mam_server": "intsvr2695.amr.corp.intel.com",
+            "mam_port": 1583,
+            "timezone": "Asia/Singapore"
+        },
+        "PENANG": {
+            "mam_server": "intsvr2695.amr.corp.intel.com",
+            "mam_port": 1583,
+            "timezone": "Asia/Kuala_Lumpur"
+        },
+        "BOISE": {
+            "mam_server": "intsvr2695.amr.corp.intel.com",
+            "mam_port": 1583,
+            "timezone": "America/Boise"
+        },
+        "XIAN": {
+            "mam_server": "intsvr2695.amr.corp.intel.com",
+            "mam_port": 1583,
+            "timezone": "Asia/Shanghai"
+        }
+    }
+}

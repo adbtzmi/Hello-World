@@ -134,6 +134,8 @@ def create_tp_zip(source_dir, env, jira_key, hostname, logger, log_callback=None
     Returns the full path to the created ZIP, or None on failure.
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # Include seconds to prevent collision
+    if label:
+        label = label.replace(" ", "_")                    # spaces → underscores in filename
     zip_name  = f"{jira_key}_{hostname}_{env}_{timestamp}" + ("_" + label if label else "") + ".zip"
     _raw_zip = raw_zip_folder if raw_zip_folder else RAW_ZIP_FOLDER
     zip_path  = os.path.join(_raw_zip, zip_name)

@@ -14,7 +14,7 @@ import urllib.error
 import getpass
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 from cryptography.fernet import Fernet
 import base64
 import hashlib
@@ -161,8 +161,8 @@ class AIGatewayClient:
         prompts = self._modes_data.get('prompts', {})
         return prompts.get(prompt_type, '')
     
-    def chat_completion(self, messages: List[Dict], model: str = None, task_type: str = "code_generation",
-                        mode: str = None) -> Dict:
+    def chat_completion(self, messages: List[Dict], model: Optional[str] = None, task_type: str = "code_generation",
+                        mode: Optional[str] = None) -> Dict:
         """
         Send chat completion request to Model Gateway
         
@@ -343,15 +343,15 @@ class AIGatewayClient:
 class JIRAAnalyzer:
     """Main class for JIRA request analysis and implementation"""
     
-    def __init__(self, log_callback=None, gui_only_log_callback=None):
-        self.email = None  # Email for JIRA (Atlassian Cloud)
-        self.bitbucket_username = None  # Username for Bitbucket (part before @)
-        self.jira_token = None
-        self.bitbucket_token = None
-        self.jira_base_url = None
-        self.bitbucket_base_url = None
-        self.model_api_key = None
-        self.ai_client = None
+    def __init__(self, log_callback: Optional[Callable] = None, gui_only_log_callback: Optional[Callable] = None):
+        self.email: Optional[str] = None  # Email for JIRA (Atlassian Cloud)
+        self.bitbucket_username: Optional[str] = None  # Username for Bitbucket (part before @)
+        self.jira_token: Optional[str] = None
+        self.bitbucket_token: Optional[str] = None
+        self.jira_base_url: Optional[str] = None
+        self.bitbucket_base_url: Optional[str] = None
+        self.model_api_key: Optional[str] = None
+        self.ai_client: Optional[AIGatewayClient] = None
         self.log_callback = log_callback  # Optional callback for logging to GUI
         self.gui_only_log_callback = gui_only_log_callback  # Optional callback for GUI-only logging (no file log)
     
@@ -360,7 +360,7 @@ class JIRAAnalyzer:
         if self.log_callback:
             self.log_callback(message)
         else:
-            self._log(message)
+            print(message)
     
     def _log_gui_only(self, message):
         """Log message to GUI only (no file log). Used for verbose output like git clone progress."""
@@ -370,7 +370,7 @@ class JIRAAnalyzer:
             # Fallback to regular log if gui_only not available
             self.log_callback(message)
         else:
-            self._log(message)
+            print(message)
         
     def get_credentials(self):
         """Get credentials from user or load from encrypted file"""
@@ -395,7 +395,7 @@ class JIRAAnalyzer:
                     self.jira_base_url = credentials['jira_url']
                     self.bitbucket_base_url = credentials['bitbucket_url']
                     self.model_api_key = credentials['model_api_key']
-                    self.ai_client = AIGatewayClient(self.model_api_key)
+                    self.ai_client = AIGatewayClient(str(self.model_api_key))
                     self._log("✓ Credentials loaded successfully\n")
                     return
                 else:
@@ -439,7 +439,7 @@ class JIRAAnalyzer:
             self._log("✗ Model Gateway API Key is required!")
             sys.exit(1)
         
-        self.ai_client = AIGatewayClient(self.model_api_key)
+        self.ai_client = AIGatewayClient(str(self.model_api_key))
         
         # Ask if user wants to save credentials
         self._log("\n[Save Credentials]")
@@ -616,8 +616,16 @@ class JIRAAnalyzer:
             return str(content)
             
         text_parts = []
+        _seen = set()  # Guard against circular references
         
-        def traverse(node):
+        def traverse(node, depth=0):
+            if depth > 100:  # Prevent infinite recursion on deeply nested ADF
+                return
+            node_id = id(node)
+            if node_id in _seen:
+                return  # Circular reference detected
+            _seen.add(node_id)
+            
             if isinstance(node, dict):
                 if node.get('type') == 'text':
                     text_parts.append(node.get('text', ''))
@@ -629,10 +637,10 @@ class JIRAAnalyzer:
                 # Recursively check content
                 if 'content' in node:
                     for child in node['content']:
-                        traverse(child)
+                        traverse(child, depth + 1)
             elif isinstance(node, list):
                 for item in node:
-                    traverse(item)
+                    traverse(item, depth + 1)
                     
         traverse(content)
         return ''.join(text_parts).strip()
@@ -815,26 +823,35 @@ class JIRAAnalyzer:
         """Fetch JIRA issue details via REST API"""
         self._log(f"\n[Fetching JIRA Issue: {issue_key}]")
         
+        # Fallback: load jira_base_url from settings.json if not set
+        if not self.jira_base_url:
+            try:
+                with open('settings.json', 'r') as f:
+                    settings = json.load(f)
+                self.jira_base_url = settings.get('jira', {}).get('base_url', '')
+                if self.jira_base_url:
+                    self._log(f"  ℹ Loaded JIRA base URL from settings.json: {self.jira_base_url}")
+            except Exception:
+                pass
+        
+        if not self.jira_base_url:
+            self._log("✗ JIRA base URL is not configured.")
+            self._log("  Please load credentials or set the JIRA URL in Settings.")
+            return None
+        
+        url = ""
         try:
             # For Atlassian Cloud, use /rest/api/3/ (latest) or /rest/api/2/
             # Try API v3 first for Atlassian Cloud
-            if 'atlassian.net' in self.jira_base_url:
+            if self.jira_base_url and 'atlassian.net' in self.jira_base_url:
                 api_version = '3'
             else:
                 api_version = '2'
             
             url = f"{self.jira_base_url}/rest/api/{api_version}/issue/{issue_key}"
-            # Fetch required fields:
-            # - issuetype (work type)
-            # - description
-            # - components
-            # - comment (comments)
-            # - customfield_* (for acceptance criteria and change category)
-            # - assignee, reporter (for context in comments/analysis)
-            # - issuelinks, attachment (for context in AI analysis)
-            url += "?field=issuetype,description,components,comment,customfield_*,"
-            url += "assignee,reporter,issuelinks,attachment"
-            url += "&expand=names"  # Need names to identify custom fields
+            # Fetch all fields (including custom fields) and expand names
+            # to identify custom field labels like acceptance criteria
+            url += "?expand=names"
             
             self._log(f"  API URL: {url}")
             self._log(f"  Using API version: {api_version}")
@@ -876,6 +893,26 @@ class JIRAAnalyzer:
             self._log(f"  URL: {url}")
             self._log(f"  Response: {error_body}")
             
+            # If API v3 returned 404, retry with API v2
+            if e.code == 404 and api_version == '3':
+                self._log("\n  ℹ Retrying with API v2...")
+                try:
+                    url_v2 = f"{self.jira_base_url}/rest/api/2/issue/{issue_key}?expand=names"
+                    self._log(f"  API URL: {url_v2}")
+                    request_v2 = urllib.request.Request(url_v2, headers=headers)
+                    response_v2 = urllib.request.urlopen(request_v2, context=ssl_context, timeout=30)
+                    issue_data = json.loads(response_v2.read().decode('utf-8'))
+                    self._log(f"✓ Successfully fetched issue (API v2): {issue_data['fields']['summary']}")
+                    extracted_fields = self.extract_jira_fields(issue_data)
+                    issue_data['extracted_fields'] = extracted_fields
+                    return issue_data
+                except urllib.error.HTTPError as e2:
+                    error_body_v2 = e2.read().decode('utf-8')
+                    self._log(f"\n✗ HTTP Error {e2.code} (API v2 retry)")
+                    self._log(f"  Response: {error_body_v2}")
+                except Exception as e2:
+                    self._log(f"✗ API v2 retry also failed: {str(e2)}")
+            
             # Provide helpful debugging info
             if e.code == 404:
                 self._log("\n  Possible causes:")
@@ -906,6 +943,8 @@ class JIRAAnalyzer:
         self._log(f"\n[Fetching {len(issue_links)} linked issues for context...]")
         
         for link in issue_links[:5]:  # Limit to 5 linked issues
+            linked_key: Optional[str] = None
+            link_type: str = 'relates to'
             try:
                 # Get the linked issue key
                 linked_key = None
@@ -933,7 +972,7 @@ class JIRAAnalyzer:
                         f"  Description: {description}..."
                     )
             except Exception as e:
-                self._log(f"  Warning: Could not fetch {linked_key}: {str(e)}")
+                self._log(f"  Warning: Could not fetch {linked_key or 'unknown'}: {str(e)}")
                 continue
         
         if linked_context:
@@ -969,6 +1008,7 @@ class JIRAAnalyzer:
     
     def analyze_jira_request(self, issue_data: Dict) -> Dict:
         """Analyze JIRA request using AI to understand change requirements"""
+        assert self.ai_client is not None, "AI client not initialized. Call get_credentials() first."
         self._log("\n[Analyzing JIRA Request with AI]")
         
         # Use pre-extracted fields from fetch_jira_issue()
@@ -1079,7 +1119,7 @@ Provide comprehensive analysis including objectives, requirements, and implement
         
         # Construct clone URL with credentials (use bitbucket_username)
         clone_url = f"https://{self.bitbucket_username}:{self.bitbucket_token}@"
-        clone_url += self.bitbucket_base_url.replace('https://', '')
+        clone_url += (self.bitbucket_base_url or '').replace('https://', '')
         clone_url += f"/scm/{project_key}/{repo_slug}.git"
         
         # Create Repos directory if not exists
@@ -1106,7 +1146,7 @@ Provide comprehensive analysis including objectives, requirements, and implement
             )
             
             # Stream output in real-time to GUI only (not to log file)
-            for line in process.stdout:
+            for line in (process.stdout or []):
                 line = line.strip()
                 if line:
                     self._log_gui_only(f"  {line}")
@@ -1130,7 +1170,7 @@ Provide comprehensive analysis including objectives, requirements, and implement
             )
             
             # Stream checkout output to GUI only (not to log file)
-            for line in process.stdout:
+            for line in (process.stdout or []):
                 line = line.strip()
                 if line:
                     self._log_gui_only(f"  {line}")
@@ -1172,7 +1212,7 @@ Provide comprehensive analysis including objectives, requirements, and implement
             return None
             
     
-    def create_feature_branch(self, repo_path: str, issue_key: str, base_branch: str, custom_branch_name: str = None) -> bool:
+    def create_feature_branch(self, repo_path: str, issue_key: str, base_branch: str, custom_branch_name: Optional[str] = None) -> bool:
         """Create a feature branch for the JIRA issue"""
         self._log(f"\n[Creating Feature Branch]")
         
@@ -1207,6 +1247,7 @@ Provide comprehensive analysis including objectives, requirements, and implement
     
     def implement_code_changes(self, repo_path: str, jira_analysis: Dict, impact_analysis: Dict, repo_index: Dict) -> bool:
         """Use AI to implement code changes based on JIRA analysis"""
+        assert self.ai_client is not None, "AI client not initialized. Call get_credentials() first."
         self._log(f"\n[Implementing Code Changes with AI]")
         
         # Get list of key files to analyze
@@ -1448,6 +1489,7 @@ Step-by-step guide for manual review and additional changes.
     
     def analyze_code_impact(self, repo_path: str, repo_index: Dict, jira_analysis: Dict) -> Dict:
         """Analyze potential code changes and dependencies using AI"""
+        assert self.ai_client is not None, "AI client not initialized. Call get_credentials() first."
         self._log("\n[Analyzing Code Impact with AI]")
         
         # Prepare code context
@@ -1517,6 +1559,7 @@ Please provide:
     
     def generate_test_scenarios(self, jira_analysis: Dict, repo_index: Dict) -> Dict:
         """Generate comprehensive test scenarios using AI"""
+        assert self.ai_client is not None, "AI client not initialized. Call get_credentials() first."
         self._log("\n[Generating Test Scenarios with AI]")
         
         stats = repo_index['stats']
@@ -1581,6 +1624,7 @@ Format each test case with:
     
     def assess_risks(self, jira_analysis: Dict, impact_analysis: Dict) -> Dict:
         """Evaluate change complexity, risks, and mitigation strategies using AI"""
+        assert self.ai_client is not None, "AI client not initialized. Call get_credentials() first."
         self._log("\n[Assessing Risks with AI]")
         
         # Get prompt template from config

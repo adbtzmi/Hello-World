@@ -46,6 +46,7 @@ class BentoController(metaclass=SingletonMeta):
         self.jira_controller     = None
         self.repo_controller     = None
         self.test_controller     = None
+        self.force_fail_controller = None
 
         _logger.info("BentoController ready (Phase 2 controllers pending set_view).")
 
@@ -115,6 +116,14 @@ class BentoController(metaclass=SingletonMeta):
             self.chat_controller
         )
 
+        # Force Fail controller (depends on workflow + chat)
+        from controller.force_fail_controller import ForceFailController
+        self.force_fail_controller = ForceFailController(
+            view.context,
+            self.workflow_controller,
+            self.chat_controller
+        )
+
         # Phase 3D: Full workflow orchestrator
         from controller.full_workflow_controller import FullWorkflowController
         self.full_workflow_controller = FullWorkflowController(
@@ -153,6 +162,8 @@ class BentoController(metaclass=SingletonMeta):
             checks.append(self.validation_controller.is_running())
         if hasattr(self, 'implementation_controller') and self.implementation_controller:
             checks.append(self.implementation_controller.is_running())
+        if hasattr(self, 'force_fail_controller') and self.force_fail_controller:
+            checks.append(self.force_fail_controller.is_running())
         if hasattr(self, 'full_workflow_controller') and self.full_workflow_controller:
             checks.append(self.full_workflow_controller.is_running())
         return any(checks)

@@ -10,6 +10,7 @@ Extracted from gui/app.py lines 1310-1468.
 
 import logging
 import threading
+from typing import Callable, Optional
 
 logger = logging.getLogger("bento_app")
 
@@ -35,7 +36,7 @@ class JiraController:
     def is_running(self):
         return self._running
     
-    def fetch_issue(self, issue_key, callback=None):
+    def fetch_issue(self, issue_key, callback: Optional[Callable] = None):
         """
         Fetch JIRA issue only.
         
@@ -100,16 +101,17 @@ class JiraController:
                         self.context.root.after(0, lambda: callback({'success': False, 'error': f"Failed to fetch issue {issue_key}"}))
             
             except Exception as e:
-                logger.error(f"fetch_issue error: {e}")
-                self.context.log(f"✗ Error fetching issue: {e}")
+                error_msg = str(e)
+                logger.error(f"fetch_issue error: {error_msg}")
+                self.context.log(f"✗ Error fetching issue: {error_msg}")
                 if callback:
-                    self.context.root.after(0, lambda: callback({'success': False, 'error': str(e)}))
+                    self.context.root.after(0, lambda _m=error_msg: callback({'success': False, 'error': _m}))
             finally:
                 self._running = False
         
         threading.Thread(target=_fetch, daemon=True).start()
     
-    def analyze_issue(self, issue_key, callback=None):
+    def analyze_issue(self, issue_key, callback: Optional[Callable] = None):
         """
         Analyze JIRA with AI only.
         
@@ -183,10 +185,11 @@ class JiraController:
                         self.context.root.after(0, lambda: callback({'success': False, 'error': 'Failed to fetch issue'}))
             
             except Exception as e:
-                logger.error(f"analyze_issue error: {e}")
-                self.context.log(f"✗ Error analyzing issue: {e}")
+                error_msg = str(e)
+                logger.error(f"analyze_issue error: {error_msg}")
+                self.context.log(f"✗ Error analyzing issue: {error_msg}")
                 if callback:
-                    self.context.root.after(0, lambda: callback({'success': False, 'error': str(e)}))
+                    self.context.root.after(0, lambda _m=error_msg: callback({'success': False, 'error': _m}))
             finally:
                 self._running = False
         

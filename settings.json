@@ -26,18 +26,32 @@
         "profile_gen_excel":  "\\\\sifsmodtestrep\\ModTestRep\\crab\\for_profile_gen.xlsx"
     },
     "checkout": {
+        "hardware_config":        "config/profile_gen_hardware.json",
+        "site_config":            "config/site_config.json",
         "hot_folder":             "C:\\test_program\\playground_queue",
         "slate_log_path":         "C:\\test_program\\logs\\slate_system.log",
         "playground_folder":      "C:\\test_program\\playground",
         "output_folder":          "C:\\test_program\\results",
         "memory_collect_exe":     "C:\\tools\\memory_collect.exe",
         "memory_collect_timeout": 600,
-        "timeout_minutes":        30
+        "timeout_minutes":        30,
+        "recipe_folder":          "",
+        "python2_exe":            "",
+        "mam_site":               ""
     },
     "notifications": {
         "teams_webhook_url":  "",
         "notify_on_complete": true,
         "notify_on_failure":  true
     },
-    "registry_path": "P:\\temp\\BENTO\\bento_testers.json"
+    "force_fail": {
+        "max_cases":    5,
+        "auto_cleanup": true,
+        "temp_dir":     ""
+    },
+    "registry_path": "P:\\temp\\BENTO\\bento_testers.json",
+    "encryption": {
+        "enabled": false,
+        "encrypted_settings": ""
+    }
 }
