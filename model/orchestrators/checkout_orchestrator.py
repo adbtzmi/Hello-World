@@ -439,27 +439,31 @@ def load_dut_info_from_crt(
 
 # ── DUT LOCATION AUTO-GENERATION ──────────────────────────────────────────────
 # SLATE grid layout: 4 rows (0-3) × 32 columns (0-31)
-# DutLocation format: "row,col"  e.g. "0,0", "0,1", ..., "0,31", "1,0", ...
+# DutLocation format: "{tester_flag},{primitive},{dut}"
 _SLATE_COLS_PER_ROW = 32
 _SLATE_MAX_ROWS     = 4
 
 
-def generate_dut_locations(n: int, cols_per_row: int = _SLATE_COLS_PER_ROW) -> list:
+def _normalize_tester_path(path: str) -> str:
+    """Normalize path for tester consumption: backslashes, uppercase."""
+    if not path:
+        return ""
+    return path.replace("/", "\\").upper()
+
+
+def generate_dut_locations(n: int, tester_type: str = "NEOSEM", cols_per_row: int = _SLATE_COLS_PER_ROW) -> list:
     """
     Auto-generate DUT location strings for *n* slots.
 
-    Maps slot index to SLATE grid coordinates:
-      slot 0  → "0,0"
-      slot 1  → "0,1"
-      ...
-      slot 31 → "0,31"
-      slot 32 → "1,0"
-      slot 33 → "1,1"
-      ...
+    CAT format: "{tester_flag},{primitive},{dut}"
+      NEOSEM:    tester_flag=1  (ABIT, SCHP steps)
+      ADVANTEST: tester_flag=0  (SFN2 step)
 
-    Max capacity: 4 rows × 32 cols = 128 DUTs.
+    When actual primitive/dut values are available from CRT Excel,
+    those should be used instead of this auto-generation.
     """
-    return [f"{i // cols_per_row},{i % cols_per_row}" for i in range(n)]
+    tester_flag = "1" if tester_type.upper() in ("NEOSEM", "NEOS") else "0"
+    return [f"{tester_flag},{i // cols_per_row},{i % cols_per_row}" for i in range(n)]
 
 
 # ── STEP 2 — Generate SLATE XML ───────────────────────────────────────────────
@@ -483,6 +487,7 @@ def generate_slate_xml(
     python2_exe:   str  = "",
     site:          str  = "",
     sap_instance:  str  = "PR1",
+    autostart:     str  = "False",
     logger               = None,
     log_callback         = None,
 ) -> Optional[str]:
@@ -501,11 +506,13 @@ def generate_slate_xml(
         logger = _get_logger()
 
     timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Filename includes hostname + env + label for tester-specific routing [8]
-    # Both hostname AND env tag are required so checkout_watcher.py ENV filter matches.
-    # e.g. checkout_TSESSD-14270_IBIR-0383_ABIT_20260325_094809_passing.xml
-    parts      = [p for p in [jira_key, hostname, env.upper() if env else None, timestamp, label] if p]
-    xml_name   = "checkout_" + "_".join(parts) + ".xml"
+    # Filename: Profile_{MID}_{Lot}.xml — matches CAT convention
+    # Fall back to checkout_... pattern if MID is not available
+    if mid and lot_prefix:
+        xml_name = f"Profile_{mid}_{lot_prefix}.xml"
+    else:
+        parts      = [p for p in [jira_key, hostname, env.upper() if env else None, timestamp, label] if p]
+        xml_name   = "checkout_" + "_".join(parts) + ".xml"
     out_dir    = output_dir or CHECKOUT_QUEUE_FOLDER
 
     # ── Auto-create output directory ──────────────────────────────────
@@ -525,9 +532,9 @@ def generate_slate_xml(
         # ── Correct Profile schema from FullAutoStart.md [24] ─────────
         profile = ET.Element("Profile")
 
-        # ── TestJobArchive ────────────────────────────────────────────
-        # TGZ path from Phase 1 compile output [7]
-        ET.SubElement(profile, "TestJobArchive").text = tgz_path
+        # ── TestJobArchive — deferred until after recipe selection ────
+        # Will be set after recipe selection determines the actual path
+        tja_elem = ET.SubElement(profile, "TestJobArchive")
 
         # ── Load hardware config (replaces hardcoded values) ───────────
         hw_config = get_hardware_config()
@@ -612,78 +619,77 @@ def generate_slate_xml(
         recipe = recipe_result.recipe_name or r"RECIPE:PEREGRINE\ON_NEOSEM_ABIT.XML"
         _log(logger, f"Recipe: {recipe} (success={recipe_result.success})", log_callback)
 
-        # ── RecipeFile ────────────────────────────────────────────────
-        ET.SubElement(profile, "RecipeFile").text = recipe
+        # ── Set TestJobArchive — prefer recipe selection result ────────
+        if recipe_result.success and recipe_result.test_program_path:
+            tja_elem.text = recipe_result.test_program_path  # Already uppercased by recipe_selector
+        else:
+            tja_elem.text = _normalize_tester_path(tgz_path)
 
-        # ── TempTraveler — confirmed rows from FullAutoStart.md [24] ──
+        # ── RecipeFile ────────────────────────────────────────────────
+        ET.SubElement(profile, "RecipeFile").text = recipe.upper() if recipe else ""
+
+        # ── TempTraveler — CAT-aligned attribute format ───────────────
         tt = ET.SubElement(profile, "TempTraveler")
-        # Base attributes (always present)
+        # Base attributes (always present) — lowercase keys match CAT's attrdict.py
         for section, name, value in [
             ("MAM",       "STEP",          mam_step),
-            ("MAM",       "NAND_OPTION",   mam_attrs.get("NAND_OPTION", "BAD_PLANE")),
             ("CFGPN",     "STEP_ID",       cfgpn_step_id),
-            ("CFGPN",     "SEC_PROCESS",   cfgpn_attrs.get("SEC_PROCESS", "ABIT_REQ0")),
             ("EQUIPMENT", "DIB_TYPE",      dib_type),
             ("EQUIPMENT", "DIB_TYPE_NAME", dib_type),
         ]:
             a = ET.SubElement(tt, "Attribute")
-            a.set("Section", section)
-            a.set("Name",    name)
-            a.set("Value",   value)
+            a.set("section", section)
+            a.set("attr",    name)
+            a.set("value",   value)
 
-        # SAP CFGPN attributes (when available)
-        for key, value in cfgpn_attrs.items():
-            if key not in ("CFGPN", "STEP_ID", "SEC_PROCESS"):  # avoid duplicates
-                a = ET.SubElement(tt, "Attribute")
-                a.set("Section", "CFGPN")
-                a.set("Name",    key)
-                a.set("Value",   str(value))
-
-        # SAP MCTO attributes (when available)
-        for key, value in mcto_attrs.items():
-            if key != "CFGPN":  # avoid duplicate
-                a = ET.SubElement(tt, "Attribute")
-                a.set("Section", "MCTO")
-                a.set("Name",    key)
-                a.set("Value",   str(value))
-
-        # SAP firmware paths in constant section
-        for key in SAP_FIRMWARE_KEYS:
-            if key in sap_constant_dict:
-                a = ET.SubElement(tt, "Attribute")
-                a.set("Section", "CONSTANT")
-                a.set("Name",    key)
-                a.set("Value",   sap_constant_dict[key])
-
-        # MARKET_SEGMENT from SAP
-        if "MARKET_SEGMENT" in sap_constant_dict:
+        # RECIPE_SELECTION attribute — from recipe selection output
+        if recipe_result.success and recipe_result.test_program_path:
             a = ET.SubElement(tt, "Attribute")
-            a.set("Section", "CONSTANT")
-            a.set("Name",    "MARKET_SEGMENT")
-            a.set("Value",   sap_constant_dict["MARKET_SEGMENT"])
+            a.set("section", "RECIPE_SELECTION")
+            a.set("attr",    "RECIPE_SEL_TEST_PROGRAM_PATH")
+            a.set("value",   recipe_result.test_program_path)  # Already uppercased
 
-        # ── MaterialInfo — user-provided DUT locations or auto-generate
+        # ── AddtionalFileFolder — firmware/config file copy paths ─────
+        # Note: "AddtionalFileFolder" is intentionally misspelled — matches CAT production spelling
+        aff = ET.SubElement(profile, "AddtionalFileFolder")
+        if recipe_result.success and recipe_result.file_copy_paths:
+            for key in sorted(recipe_result.file_copy_paths.keys()):
+                path_entry = recipe_result.file_copy_paths[key]
+                if "," in path_entry:
+                    source, dest = path_entry.split(",", 1)
+                    file_elem = ET.SubElement(aff, "File")
+                    file_elem.set("source", source.strip())
+                    file_elem.set("dest", dest.strip())
+
+        # ── MaterialInfo — ONE entry per XML (CAT generates one XML per MID)
         mat       = ET.SubElement(profile, "MaterialInfo")
-        locations = dut_locations or generate_dut_locations(dut_slots)
-        for idx, loc in enumerate(locations):
-            lot_num = f"{lot_prefix}{str(idx + 1).zfill(3)}"
-            a = ET.SubElement(mat, "Attribute")
-            a.set("Lot",         lot_num)
-            a.set("MID",         mid)
-            a.set("DutLocation", loc)
+        # Determine tester type from step
+        tester_type = "ADVANTEST" if step == "SFN2" else "NEOSEM"
+        # Use first provided dut_location, or generate a single one
+        if dut_locations and len(dut_locations) > 0:
+            dut_loc = dut_locations[0]
+        else:
+            dut_loc = generate_dut_locations(1, tester_type=tester_type)[0]
+        a = ET.SubElement(mat, "Attribute")
+        a.set("Lot",         lot_prefix)   # No suffix — CAT uses lot as-is
+        a.set("MID",         mid)
+        a.set("DutLocation", dut_loc)
 
-        # ── AutoStart = True — KEY: no manual click needed [24] ───────
-        ET.SubElement(profile, "AutoStart").text = "True"
+        # ── AutoStart — defaults to "False", CAT controls this ────────
+        ET.SubElement(profile, "AutoStart").text = autostart
 
         # ── Write XML ─────────────────────────────────────────────────
         tree = ET.ElementTree(profile)
         ET.indent(tree, space="    ")
-        tree.write(xml_path, encoding="unicode", xml_declaration=True)
+        # Write XML with double-quote declaration matching CAT format
+        with open(xml_path, "w", encoding="utf-8") as f:
+            f.write('<?xml version="1.0" ?>\n')
+            tree.write(f, encoding="unicode", xml_declaration=False)
 
         size_kb = os.path.getsize(xml_path) / 1024
         _log(logger,
-             f"✓ XML: {xml_name} | AutoStart=True | "
-             f"{len(locations)} DUT(s) | {size_kb:.1f} KB",
+             f"✓ XML: {xml_name} | AutoStart={autostart} | "
+             f"1 DUT ({dut_loc}) | {size_kb:.1f} KB",
              log_callback)
 
         # ── Optional profile sorting ────────────────────────────────
@@ -751,11 +757,13 @@ def parse_slate_xml(xml_path: str) -> dict:
     tt = root.find("TempTraveler")
     if tt is not None:
         for attr in tt.findall("Attribute"):
-            if (attr.get("Section", "").upper() == "MAM"
-                    and attr.get("Name", "").upper() == "STEP"):
-                val = attr.get("Value", "").strip().upper()
-                if val in ("ABIT", "SFN2", "CNFG"):
-                    result["env"] = val
+            sec = attr.get("section", "") or attr.get("Section", "")
+            name = attr.get("attr", "") or attr.get("Name", "")
+            val = attr.get("value", "") or attr.get("Value", "")
+            if sec.upper() == "MAM" and name.upper() == "STEP":
+                val_upper = val.strip().upper()
+                if val_upper in ("ABIT", "SFN2", "CNFG"):
+                    result["env"] = val_upper
                 break
 
     # MaterialInfo -> mid, lot_prefix, dut_locations
@@ -1157,6 +1165,7 @@ def run_checkout(
     notify_teams:    bool  = True,
     webhook_url:     str   = "",
     sap_instance:    str   = "PR1",
+    autostart:       str   = "False",
     log_callback           = None,
     phase_callback         = None,
     cancel_event:    Optional[threading.Event] = None,
@@ -1251,6 +1260,7 @@ def run_checkout(
             hostname      = hostname,
             output_dir    = _queue,      # ← P:\temp\BENTO\CHECKOUT_QUEUE
             sap_instance  = sap_instance,
+            autostart     = autostart,
             logger        = logger,
             log_callback  = log_callback,
         )

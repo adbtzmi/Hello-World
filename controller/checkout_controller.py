@@ -575,20 +575,20 @@ class CheckoutController(object):
                             "     " + _DEFAULT_HOT_FOLDER
                         )
 
-                    # Notify UI with per-MID results
+                    # Notify UI with per-MID results (XML generation only)
                     if self._view:
                         result = {
-                            "status": "success" if error_count == 0 else ("partial" if success_count > 0 else "failed"),
+                            "status": "xml_done" if error_count == 0 else ("xml_partial" if success_count > 0 else "xml_fail"),
                             "hostname": hostname,
                             "env": env,
                             "mid_results": mid_results,
-                            "detail": f"{success_count}/{len(mid_results)} MIDs generated",
+                            "detail": f"{success_count}/{len(mid_results)} MIDs generated (XML only)",
                             "elapsed": 0,
                             "test_cases": [],
                         }
                         self._view.root.after(
                             0,
-                            lambda h=hostname, r=result: self._master.on_checkout_completed(h, r)
+                            lambda h=hostname, r=result: self._master.on_xml_generation_completed(h, r)
                         )
 
             except Exception as e:

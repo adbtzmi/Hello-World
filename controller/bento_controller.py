@@ -196,3 +196,7 @@ class BentoController(metaclass=SingletonMeta):
         if self._view:
             self._view.checkout_completed(hostname, result)
 
+    def on_xml_generation_completed(self, hostname: str, result: dict):
+        if self._view:
+            self._view.xml_generation_completed(hostname, result)
+

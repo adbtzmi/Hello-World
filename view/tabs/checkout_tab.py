@@ -86,6 +86,9 @@ class CheckoutTab(BaseTab):
         "PARTIAL":     ("#ca5010", "white"),
         "FAILED":      ("#a80000", "white"),
         "TIMEOUT":     ("#ca5010", "white"),
+        "XML_DONE":    ("#2d7d9a", "white"),
+        "XML_PARTIAL": ("#ca5010", "white"),
+        "XML_FAIL":    ("#a80000", "white"),
     }
 
     # Profile Generation Table columns
@@ -1230,6 +1233,34 @@ class CheckoutTab(BaseTab):
                 f"   {icon} {tc.get('label','?')} ({tc.get('type','?')}): "
                 f"{tc.get('status','?')} in {tc.get('elapsed',0)}s")
 
+        running = [lbl for lbl in self._badge_labels.values()
+                   if lbl.cget("text") in ("PENDING", "RUNNING", "COLLECTING")]
+        if not running:
+            self.stop_btn.state(["disabled"])
+            self.unlock_gui()
+
+    def on_xml_generation_completed(self, hostname, result):
+        """Handle XML-only generation completion (distinct from checkout)."""
+        status      = result.get("status", "xml_fail").upper()
+        detail      = result.get("detail", "")
+        mid_results = result.get("mid_results", {})
+
+        self._set_badge(hostname, status)
+        self._set_phase(hostname, "")
+        self._append_result(f"[{hostname}] XML Generated — {status}  {detail}")
+
+        # Per-MID results
+        if mid_results:
+            for mid, mid_info in mid_results.items():
+                mid_status = mid_info.get("status", "unknown")
+                mid_detail = mid_info.get("detail", "")
+                icon = "\u2713" if mid_status == "success" else "\u2717"
+                line = f"   {icon} MID {mid}: {mid_status}"
+                if mid_detail:
+                    line += f" \u2014 {mid_detail}"
+                self._append_result(line)
+
+        # Unlock GUI if no more pending/running badges
         running = [lbl for lbl in self._badge_labels.values()
                    if lbl.cget("text") in ("PENDING", "RUNNING", "COLLECTING")]
         if not running:

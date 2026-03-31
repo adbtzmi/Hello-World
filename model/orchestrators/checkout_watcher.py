@@ -344,13 +344,20 @@ def _parse_xml_for_slate_fields(xml_path, logger=None):
         <TestJobArchive>C:\\path\\to\\file.tgz</TestJobArchive>
         <AutoStart>True</AutoStart>
         <MaterialInfo>
-          <Attribute Lot="JAANTJB001" MID="XXXXXXX" DutLocation="1,1"/>
+          <Attribute Lot="JAANTJB001" MID="XXXXXXX" DutLocation="1,0,32"/>
           ...
         </MaterialInfo>
         <TempTraveler>
-          <Attribute name="MAM/STEP">...</Attribute>
+          <Attribute section="MAM" attr="STEP" value="ABIT"/>
+          <Attribute section="CFGPN" attr="STEP_ID" value="AMB_BI_TEST"/>
+          ...
         </TempTraveler>
       </Profile>
+
+    Old XML format (still supported for backward compatibility):
+      <TempTraveler>
+        <Attribute Section="MAM" Name="STEP" Value="ABIT"/>
+      </TempTraveler>
 
     Returns:
       {
@@ -402,9 +409,9 @@ def _parse_xml_for_slate_fields(xml_path, logger=None):
         if tt_elem is not None:
             for attr in tt_elem.findall("Attribute"):
                 temp_traveler.append({
-                    "Section": attr.get("Section", ""),
-                    "Name": attr.get("Name", ""),
-                    "Value": attr.get("Value", "")
+                    "Section": attr.get("section", "") or attr.get("Section", ""),
+                    "Name": attr.get("attr", "") or attr.get("Name", ""),
+                    "Value": attr.get("value", "") or attr.get("Value", "")
                 })
 
         # ── Ensure MODULE FGPN is present to prevent Lot Cache errors ──────
@@ -1041,10 +1048,12 @@ def slate_gui_trigger(xml_path, timeout=60):
     # SLATE grid layout: 4 rows (prim 0-3) × 32 columns (slot 1-32)
     # Panel auto_id pattern: pnlDUT_{rack}_{prim}_{slot}
     #   rack  = 1 (always — single rack)
-    #   prim  = row from DutLocation (0-3)
-    #   slot  = col + 1 from DutLocation (1-indexed, 1-32)
-    # Example: DutLocation="0,0" → pnlDUT_1_0_1
-    #          DutLocation="1,5" → pnlDUT_1_1_6
+    #   prim  = primitive from DutLocation
+    #   slot  = dut + 1 from DutLocation (1-indexed, 1-32)
+    # New CAT format: DutLocation="1,0,32" → pnlDUT_1_0_33
+    #   (tester_flag=1, primitive=0, dut=32)
+    # Old format:     DutLocation="0,0"    → pnlDUT_1_0_1
+    #   (row=0, col=0)
     dut_locations = fields.get("dut_locations", [])
     if dut_locations:
         log.info(
@@ -1054,14 +1063,22 @@ def slate_gui_trigger(xml_path, timeout=60):
         for idx, loc in enumerate(dut_locations):
             try:
                 parts = loc.split(",")
-                if len(parts) != 2:
+                if len(parts) == 3:
+                    # New CAT format: "tester_flag,primitive,dut"
+                    # tester_flag: 1=NEOSEM, 0=ADVANTEST
+                    tester_flag = int(parts[0].strip())
+                    row = int(parts[1].strip())
+                    col = int(parts[2].strip())
+                elif len(parts) == 2:
+                    # Old format: "row,col" — backward compatible
+                    row = int(parts[0].strip())
+                    col = int(parts[1].strip())
+                else:
                     log.warning(
                         "    \u26a0\ufe0f Invalid DutLocation format: '"
-                        + loc + "' — expected 'row,col', skipping"
+                        + loc + "' — expected 'flag,prim,dut' or 'row,col', skipping"
                     )
                     continue
-                row = int(parts[0].strip())
-                col = int(parts[1].strip())
                 # SLATE panels are 1-indexed for slot (column)
                 slot = col + 1
                 panel_id = "pnlDUT_1_" + str(row) + "_" + str(slot)

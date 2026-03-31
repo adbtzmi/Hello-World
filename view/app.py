@@ -249,6 +249,18 @@ class BentoApp:
         if checkout_tab:
             checkout_tab.on_checkout_completed(hostname, result)
 
+    def xml_generation_completed(self, hostname: str, result: dict):
+        """Called by CheckoutController when XML-only generation finishes."""
+        status = result.get("status", "unknown").upper()
+        is_ok = status in ("XML_DONE", "XML_PARTIAL")
+        self._log_message(
+            f"{'✓' if is_ok else '✗'} "
+            f"XML Generation {'complete' if is_ok else 'FAILED'} → {hostname}: "
+            f"{result.get('detail', '')}")
+        checkout_tab = getattr(self, "checkout_tab", None)
+        if checkout_tab:
+            checkout_tab.on_xml_generation_completed(hostname, result)
+
     def checkout_progress(self, hostname: str, phase: str):
         """Called by CheckoutController to relay mid-run phase updates."""
         self._log_message(f"   ↳ [{hostname}] {phase}")

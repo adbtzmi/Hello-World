@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 
 # Fallback static map — copied from checkout_orchestrator.py lines ~102-106
 _FALLBACK_RECIPE_MAP: Dict[str, str] = {
-    "ABIT": r"RECIPE:PEREGRINE\ON_NEOSEM_ABIT.XML",
-    "SFN2": r"RECIPE:PEREGRINE\ON_NEOSEM_SFN2.XML",
-    "CNFG": r"RECIPE:PEREGRINE\ON_NEOSEM_CNFG.XML",
+    "ABIT": r"RECIPE\PEREGRINE\ON_NEOSEM_ABIT.XML",
+    "SFN2": r"RECIPE\PEREGRINE\ON_NEOSEM_SFN2.XML",
+    "CNFG": r"RECIPE\PEREGRINE\ON_NEOSEM_CNFG.XML",
 }
 
 
@@ -124,10 +124,12 @@ class RecipeSelector:
     def _extract(self, output: str, result: RecipeResult) -> RecipeResult:
         """Parse recipe selection stdout output.
 
-        Mirrors CAT Extract() — looks for key=value lines:
-        - RECIPE_SEL_PROGRAM_RECIPE=<recipe_name>
-        - RECIPE_SEL_TEST_PROGRAM_PATH=<path>
-        - RECIPE_SEL_FILE_COPY_PATHS_<n>=<path>
+        Mirrors CAT Extract() — looks for key:value lines (colon separator):
+        - RECIPE_SEL_PROGRAM_RECIPE:<recipe_name>
+        - RECIPE_SEL_TEST_PROGRAM_PATH:<path>
+        - RECIPE_SEL_FILE_COPY_PATHS_<n>:<path>
+
+        Also supports equals separator for backward compatibility.
 
         Parameters
         ----------
@@ -143,21 +145,28 @@ class RecipeSelector:
         """
         for line in output.splitlines():
             line = line.strip()
-            if not line or '=' not in line:
+            if not line:
                 continue
 
-            key, _, value = line.partition('=')
+            # CAT uses colon separator, but support both for flexibility
+            if ':' in line:
+                key, _, value = line.partition(':')
+            elif '=' in line:
+                key, _, value = line.partition('=')
+            else:
+                continue
+
             key = key.strip()
             value = value.strip()
 
             if key == "RECIPE_SEL_PROGRAM_RECIPE":
-                result.recipe_name = value
-                logger.info(f"Recipe selected: {value}")
+                result.recipe_name = value.upper()  # CAT uppercases
+                logger.info(f"Recipe selected: {result.recipe_name}")
             elif key == "RECIPE_SEL_TEST_PROGRAM_PATH":
-                result.test_program_path = value
-                logger.info(f"Test program path: {value}")
+                result.test_program_path = value.upper()  # CAT uppercases
+                logger.info(f"Test program path: {result.test_program_path}")
             elif key.startswith("RECIPE_SEL_FILE_COPY_PATHS"):
-                result.file_copy_paths[key] = value
+                result.file_copy_paths[key] = value  # NOT uppercased per CAT
                 logger.debug(f"File copy path: {key}={value}")
 
         result.success = bool(result.recipe_name)

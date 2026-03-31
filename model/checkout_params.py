@@ -118,7 +118,7 @@ class CheckoutParams(BaseModel):
     webhook_url: str = Field(default="")
 
     # Autostart
-    autostart: str = Field(default="True")
+    autostart: str = Field(default="False")
 
     # TempTraveler generation
     generate_tmptravl: bool = Field(default=False, description="Generate TempTraveler .dat file")
@@ -151,7 +151,7 @@ class CheckoutParams(BaseModel):
     @classmethod
     def validate_autostart(cls, v):
         """Mirrors CAT's field_validator('autostart')."""
-        return v.strip().capitalize() if v else "True"
+        return v.strip().capitalize() if v else "False"
 
     @field_validator('tgz_path', mode='before')
     @classmethod
