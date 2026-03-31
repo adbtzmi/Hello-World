@@ -734,26 +734,33 @@ class CheckoutController(object):
             log_callback   = self._make_log_callback(hostname)
             phase_callback = self._make_phase_callback(hostname)
 
+            # Read generate_tmptravl from checkout config (same as generate_xml_only)
+            generate_tmptravl = self._config.get("checkout", {}).get("generate_tmptravl", False)
+
             result = run_checkout(
-                jira_key        = params["jira_key"],
-                hostname        = hostname,
-                env             = env,
-                tgz_path        = params.get("tgz_path", ""),
-                hot_folder      = params.get("hot_folder", ""),
-                mid             = params.get("mid", ""),
-                cfgpn           = params.get("cfgpn", ""),
-                fw_ver          = params.get("fw_ver", ""),
-                dut_slots       = params.get("dut_slots", 4),
-                lot_prefix      = params.get("lot_prefix", "JAANTJB"),
-                dut_locations   = params.get("dut_locations"),
-                test_cases      = params.get("test_cases"),
-                detect_method   = params.get("detect_method", "AUTO"),
-                timeout_seconds = params.get("timeout_seconds", 3600),
-                notify_teams    = params.get("notify_teams", True),
-                webhook_url     = webhook_url,
-                log_callback    = log_callback,
-                phase_callback  = phase_callback,
-                cancel_event    = self._cancel_event,
+                jira_key          = params["jira_key"],
+                hostname          = hostname,
+                env               = env,
+                tgz_path          = params.get("tgz_path", ""),
+                hot_folder        = params.get("hot_folder", ""),
+                mid               = params.get("mid", ""),
+                cfgpn             = params.get("cfgpn", ""),
+                fw_ver            = params.get("fw_ver", ""),
+                dut_slots         = params.get("dut_slots", 4),
+                lot_prefix        = params.get("lot_prefix", "JAANTJB"),
+                dut_locations     = params.get("dut_locations"),
+                test_cases        = params.get("test_cases"),
+                detect_method     = params.get("detect_method", "AUTO"),
+                timeout_seconds   = params.get("timeout_seconds", 3600),
+                notify_teams      = params.get("notify_teams", True),
+                webhook_url       = webhook_url,
+                generate_tmptravl = generate_tmptravl,
+                recipe_folder     = self._config.get("checkout", {}).get("recipe_folder", ""),
+                python2_exe       = self._config.get("checkout", {}).get("python2_exe", ""),
+                site              = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
+                log_callback      = log_callback,
+                phase_callback    = phase_callback,
+                cancel_event      = self._cancel_event,
             )
             return result
 

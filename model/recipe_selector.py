@@ -14,11 +14,28 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger(__name__)
 
 # Fallback static map — copied from checkout_orchestrator.py lines ~102-106
+# TODO: VERIFY fallback recipe names against actual .rul file output.
+# Known discrepancy: These fallback names may not match what the subprocess
+# recipe_selection.py returns via RECIPE_SEL_PROGRAM_RECIPE.
+# Example: Fallback has "RECIPE\PEREGRINE\ON_NEOSEM_ABIT.XML" but .rul files
+# may produce "recipe\\Peregrine_neosem_ABIT.xml" (different case/format).
+# To verify: Run the subprocess manually with a known-good tmptravl and compare
+# the RECIPE_SEL_PROGRAM_RECIPE value against these fallback entries.
 _FALLBACK_RECIPE_MAP: Dict[str, str] = {
     "ABIT": r"RECIPE\PEREGRINE\ON_NEOSEM_ABIT.XML",
     "SFN2": r"RECIPE\PEREGRINE\ON_NEOSEM_SFN2.XML",
     "CNFG": r"RECIPE\PEREGRINE\ON_NEOSEM_CNFG.XML",
 }
+# TODO (Fix 5 - DEFERRED): Consider adding static file_copy_paths to fallback map.
+# Currently, when fallback is used, file_copy_paths is always empty, meaning
+# <AddtionalFileFolder> will be empty in the generated Slate XML.
+# If file copies ARE needed during fallback, change this map from Dict[str, str]
+# to Dict[str, dict] with structure:
+#   {"recipe_name": "...", "file_copy_paths": {"RECIPE_SEL_FILE_COPY_PATHS_01": "source|dest", ...}}
+# Then update select_recipe_or_fallback() to populate result.file_copy_paths from the map.
+# RISK: Hardcoded paths become stale if upstream recipe_selection.py changes.
+# PREREQUISITE: Capture subprocess stdout when it succeeds to get actual
+# RECIPE_SEL_FILE_COPY_PATHS_## values for each step.
 
 
 class RecipeResult:
@@ -30,11 +47,12 @@ class RecipeResult:
         self.raw_output: str = ""
         self.success: bool = False
         self.error: str = ""
+        self.source: str = ""  # "subprocess" or "fallback" — indicates where the result came from
 
     def __repr__(self):
         return (f"RecipeResult(recipe={self.recipe_name!r}, "
                 f"program_path={self.test_program_path!r}, "
-                f"success={self.success})")
+                f"success={self.success}, source={self.source!r})")
 
 
 class RecipeSelector:
@@ -90,6 +108,7 @@ class RecipeSelector:
 
         cmd = [self.python2_exe, self._script_path, tmptravl_path]
         logger.info(f"Running recipe selection: {' '.join(cmd)}")
+        logger.info("DIAG: RecipeSelector - script=%s, python2=%s, tmptravl=%s", self._script_path, self.python2_exe, tmptravl_path)
 
         try:
             proc = subprocess.run(
@@ -99,15 +118,38 @@ class RecipeSelector:
                 timeout=timeout,
                 cwd=self.recipe_folder,
             )
-            result.raw_output = proc.stdout
+            stdout = proc.stdout
+            stderr = proc.stderr
+            result.raw_output = stdout
+            logger.warning("DIAG: RecipeSelector subprocess returncode=%d", proc.returncode)
+            logger.warning("DIAG: RecipeSelector stdout (first 2000 chars): %s", stdout[:2000] if stdout else "EMPTY")
+            logger.warning("DIAG: RecipeSelector stderr (first 2000 chars): %s", stderr[:2000] if stderr else "EMPTY")
+
+            # Fix 8: Warn when stdout contains no RECIPE_SEL lines
+            if not any(line.strip().startswith("RECIPE_SEL") for line in (stdout or "").splitlines()):
+                logger.warning("DIAG: Subprocess stdout contains NO RECIPE_SEL_* lines — will try tmptravl file")
 
             if proc.returncode != 0:
-                result.error = f"recipe_selection.py exited with code {proc.returncode}: {proc.stderr}"
+                result.error = f"recipe_selection.py exited with code {proc.returncode}: {stderr}"
                 logger.error(result.error)
-                return result
+                # Don't return yet — try tmptravl file parsing below
 
-            # Parse the output
-            result = self._extract(proc.stdout, result)
+            # Parse the stdout output
+            if proc.returncode == 0:
+                result = self._extract(proc.stdout, result)
+
+            # If stdout parsing failed (no RECIPE_SEL_PROGRAM_RECIPE found),
+            # try parsing the tmptravl file itself. recipe_selection.py writes
+            # RECIPE_SEL_* results into the $$_BEGIN_SECTION_RECIPE_SELECTION
+            # section of the tmptravl file before it may crash on secondary rules
+            # (e.g., BOISE_PROGRAM_RECIPE). This recovers the recipe + file_copy_paths.
+            if not result.recipe_name and tmptravl_path and os.path.isfile(tmptravl_path):
+                logger.info("DIAG: Attempting to extract RECIPE_SEL_* from tmptravl file: %s", tmptravl_path)
+                result = self._extract_from_tmptravl(tmptravl_path, result)
+                if result.recipe_name:
+                    result.source = "tmptravl"
+                    logger.info("DIAG: Successfully recovered recipe from tmptravl file: %s (file_copy_paths=%d)",
+                                result.recipe_name, len(result.file_copy_paths))
 
         except subprocess.TimeoutExpired:
             result.error = f"recipe_selection.py timed out after {timeout}s"
@@ -170,9 +212,80 @@ class RecipeSelector:
                 logger.debug(f"File copy path: {key}={value}")
 
         result.success = bool(result.recipe_name)
-        if not result.success:
+        if result.success:
+            result.source = "subprocess"
+        else:
             result.error = "No RECIPE_SEL_PROGRAM_RECIPE found in output"
             logger.warning(result.error)
+
+        return result
+
+    def _extract_from_tmptravl(self, tmptravl_path: str, result: RecipeResult) -> RecipeResult:
+        """Parse RECIPE_SEL_* lines from the tmptravl file's RECIPE_SELECTION section.
+
+        recipe_selection.py writes its results into the tmptravl file under
+        $$_BEGIN_SECTION_RECIPE_SELECTION / $$_END_SECTION_RECIPE_SELECTION.
+        This method extracts those results as a fallback when stdout parsing fails
+        (e.g., when the subprocess crashes on a secondary rule after writing results).
+
+        Parameters
+        ----------
+        tmptravl_path : str
+            Path to the tmptravl .dat file.
+        result : RecipeResult
+            Result object to populate.
+
+        Returns
+        -------
+        RecipeResult
+            Populated result object.
+        """
+        try:
+            with open(tmptravl_path, "r", encoding="utf-8", errors="replace") as f:
+                in_recipe_section = False
+                for line in f:
+                    line = line.strip()
+                    if line == "$$_BEGIN_SECTION_RECIPE_SELECTION":
+                        in_recipe_section = True
+                        continue
+                    if line == "$$_END_SECTION_RECIPE_SELECTION":
+                        in_recipe_section = False
+                        continue
+                    if not in_recipe_section or not line:
+                        continue
+
+                    # Parse key: value lines within the section
+                    if ':' in line:
+                        key, _, value = line.partition(':')
+                    elif '=' in line:
+                        key, _, value = line.partition('=')
+                    else:
+                        continue
+
+                    key = key.strip()
+                    value = value.strip()
+
+                    if key == "RECIPE_SEL_PROGRAM_RECIPE":
+                        result.recipe_name = value.upper()
+                        logger.info("Tmptravl recipe: %s", result.recipe_name)
+                    elif key == "RECIPE_SEL_TEST_PROGRAM_PATH":
+                        result.test_program_path = value.upper()
+                        logger.info("Tmptravl test program path: %s", result.test_program_path)
+                    elif key.startswith("RECIPE_SEL_FILE_COPY_PATHS"):
+                        result.file_copy_paths[key] = value
+                        logger.debug("Tmptravl file copy path: %s=%s", key, value)
+                    elif key.startswith("RECIPE_SEL_"):
+                        # Capture other RECIPE_SEL_* keys (e.g., BINS, BIN_DEFS, etc.)
+                        logger.debug("Tmptravl recipe key: %s=%s", key, value)
+
+            result.success = bool(result.recipe_name)
+            if not result.success:
+                result.error = "No RECIPE_SEL_PROGRAM_RECIPE found in tmptravl file"
+                logger.warning(result.error)
+
+        except Exception as e:
+            logger.warning("Failed to parse tmptravl file for recipe data: %s", e)
+            result.error = f"Tmptravl parsing failed: {e}"
 
         return result
 
@@ -193,20 +306,36 @@ class RecipeSelector:
         RecipeResult
             Recipe selection result (from subprocess or fallback).
         """
+        logger.info("DIAG: select_recipe_or_fallback called - is_available=%s, tmptravl_path=%s, tmptravl_exists=%s, step=%s",
+                     self.is_available, tmptravl_path, os.path.isfile(tmptravl_path) if tmptravl_path else False, step)
+
         if self.is_available and tmptravl_path and os.path.isfile(tmptravl_path):
             result = self.select_recipe(tmptravl_path, timeout)
             if result.success:
+                # Preserve source set by select_recipe() — "subprocess" or "tmptravl"
+                if not result.source:
+                    result.source = "subprocess"
+                logger.info("DIAG: Recipe selection SUCCEEDED - recipe=%s, file_copy_paths_count=%d, source=%s",
+                            result.recipe_name, len(result.file_copy_paths), result.source)
                 return result
             logger.warning(f"Subprocess recipe selection failed, falling back to static map: {result.error}")
+            logger.warning("DIAG: Subprocess recipe selection FAILED - error: %s", result.error)
+        else:
+            logger.warning("DIAG: Subprocess recipe selection SKIPPED - is_available=%s, tmptravl_path=%r, tmptravl_exists=%s",
+                           self.is_available, tmptravl_path, os.path.isfile(tmptravl_path) if tmptravl_path else False)
 
         # Fallback to static map
+        logger.warning("DIAG: Using FALLBACK recipe map (file_copy_paths will be EMPTY)")
         result = RecipeResult()
         step_upper = step.upper() if step else ""
         recipe = _FALLBACK_RECIPE_MAP.get(step_upper, "")
         if recipe:
             result.recipe_name = recipe
             result.success = True
+            result.source = "fallback"
             logger.info(f"Using fallback recipe for step '{step_upper}': {recipe}")
+            logger.warning("DIAG: Using fallback recipe_name='%s' for step='%s' — verify this matches .rul file output",
+                           recipe, step)
         else:
             result.error = f"No fallback recipe found for step: {step_upper}"
             logger.warning(result.error)
