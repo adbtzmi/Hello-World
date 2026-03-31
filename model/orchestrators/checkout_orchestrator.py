@@ -38,6 +38,7 @@ from model.hardware_config import get_hardware_config
 from model.tmptravl_generator import TmptravlGenerator
 from model.recipe_selector import RecipeSelector, RecipeResult
 from model.mam_communicator import MAMCommunicator, MAMResult
+from model.sap_communicator import SAPCommunicator, SAPResult, SAP_FIRMWARE_KEYS
 from model.profile_sorter import ProfileSorter
 
 # ── CONFIRMED PATHS ───────────────────────────────────────────────────────────
@@ -171,6 +172,58 @@ def query_mam_attributes(
         return result.attributes
     else:
         _log(logger, f"MAM query failed: {result.error}", log_callback)
+        return {}
+
+
+def query_sap_attributes(
+    cfgpn: str,
+    instance: str = "PR1",
+    logger=None,
+    log_callback=None,
+) -> dict:
+    """Query SAP for CFGPN/MCTO attributes.
+
+    Mirrors CAT ProfileDump/main.py Duplicate() method.
+
+    Parameters
+    ----------
+    cfgpn : str
+        CFGPN or MCTO material number to query.
+    instance : str
+        SAP instance (PR1=production, QA5=QA).
+    logger : optional
+        Logger instance.
+    log_callback : callable, optional
+        UI callback for log messages.
+
+    Returns
+    -------
+    dict
+        SAP attributes as {CHARC_NAME: CHARC_VALUE} or empty dict on failure.
+    """
+    if logger is None:
+        logger = _get_logger(log_callback)
+
+    if not cfgpn:
+        _log(logger, "No CFGPN provided for SAP query", log_callback, "warning")
+        return {}
+
+    sap = SAPCommunicator(instance=instance)
+    if not sap.is_available:
+        _log(logger, "SAP unavailable (suds not installed) — skipping SAP query", log_callback, "warning")
+        return {}
+
+    try:
+        _log(logger, f"Querying SAP ({instance}) for CFGPN={cfgpn}...", log_callback)
+        result = sap.get_cfgpn_data(str(cfgpn))
+        if result.success:
+            _log(logger, f"✓ SAP returned {len(result.attributes)} attributes for CFGPN={cfgpn}", log_callback)
+            return result.attributes
+        else:
+            _log(logger, f"⚠ SAP query failed for CFGPN={cfgpn}: {result.error}", log_callback, "warning")
+            return {}
+    except Exception as e:
+        _log(logger, f"⚠ SAP query error for CFGPN={cfgpn}: {e}", log_callback, "warning")
         return {}
 
 
@@ -429,6 +482,7 @@ def generate_slate_xml(
     recipe_folder: str  = "",
     python2_exe:   str  = "",
     site:          str  = "",
+    sap_instance:  str  = "PR1",
     logger               = None,
     log_callback         = None,
 ) -> Optional[str]:
@@ -484,58 +538,91 @@ def generate_slate_xml(
         _form_factor = form_factor
         dib_type = hw_config.get_dib_type(step, _form_factor) if _form_factor else hw_config.get_dib_type(step, "U.2")
 
-        # ── Optional: Generate tmptravl for recipe selection compatibility ──
+        # ── MAM attribute query ──────────────────────────────────────
+        mam_attrs = {}
+        if lot_prefix and site:
+            mam_attrs = query_mam_attributes(lot_prefix, site=site, log_callback=log_callback)
+            if mam_attrs:
+                if not cfgpn and mam_attrs.get("CFGPN"):
+                    cfgpn = mam_attrs["CFGPN"]
+                    _log(logger, f"Using CFGPN from MAM: {cfgpn}", log_callback)
+                if mam_attrs.get("MCTO"):
+                    _log(logger, f"MAM MCTO: {mam_attrs['MCTO']}", log_callback)
+
+        # ── SAP attribute query (CFGPN + MCTO) ──────────────────────
+        cfgpn_attrs = {}
+        mcto_attrs = {}
+        sap_constant_dict = {}
+        mcto_number = mam_attrs.get("MODULE_FGPN", "") or mam_attrs.get("MCTO", "")
+
+        if cfgpn:
+            cfgpn_attrs = query_sap_attributes(
+                cfgpn, instance=sap_instance,
+                logger=logger, log_callback=log_callback
+            )
+            if cfgpn_attrs:
+                sap_comm = SAPCommunicator(instance=sap_instance)
+                sap_constant_dict = sap_comm.extract_constant_dict(cfgpn_attrs)
+                _log(logger, f"SAP constant dict: {list(sap_constant_dict.keys())}", log_callback)
+
+        if mcto_number:
+            mcto_attrs = query_sap_attributes(
+                mcto_number, instance=sap_instance,
+                logger=logger, log_callback=log_callback
+            )
+            if mcto_attrs:
+                _log(logger, f"✓ SAP MCTO attributes: {len(mcto_attrs)} keys", log_callback)
+
+        # ── Optional: Generate tmptravl for recipe selection ─────────
         tmptravl_path = ""
         if generate_tmptravl:
             try:
                 traces_dir = os.path.join(out_dir, "Traces")
                 tmptravl_gen = TmptravlGenerator(output_dir=traces_dir)
-                tmptravl_path = tmptravl_gen.generate_for_checkout(
+
+                # Build constant dict merging hardware + SAP data
+                tmptravl_constants = {
+                    "LOT": lot_prefix,
+                    "DIB_TYPE": dib_type,
+                    "MACHINE_MODEL": hw_config.get_machine_model(step),
+                    "MACHINE_VENDOR": hw_config.get_machine_vendor(step),
+                    "STEP": mam_step,
+                    "STEP_ID": cfgpn_step_id,
+                    "SITE": site or "SINGAPORE",
+                }
+                # Merge SAP firmware paths + MARKET_SEGMENT + MODULE_FORM_FACTOR
+                tmptravl_constants.update(sap_constant_dict)
+
+                tmptravl_path = tmptravl_gen.generate(
                     mid=mid,
                     step=step,
-                    lot=lot_prefix,
-                    cfgpn=cfgpn,
-                    site="SINGAPORE",  # Will be parameterized in Phase 3B
-                    dib_type=dib_type,
-                    machine_model=hw_config.get_machine_model(step),
-                    machine_vendor=hw_config.get_machine_vendor(step),
-                    step_name=mam_step,
-                    step_id=cfgpn_step_id,
+                    mam_dict=mam_attrs if mam_attrs else None,
+                    cfgpn_dict=cfgpn_attrs if cfgpn_attrs else None,
+                    mcto_dict=mcto_attrs if mcto_attrs else None,
+                    constant_dict=tmptravl_constants,
                 )
                 _log(logger, f"✓ Tmptravl: {os.path.basename(tmptravl_path)}", log_callback)
             except Exception as e:
                 _log(logger, f"⚠ Tmptravl generation failed (non-fatal): {e}", log_callback, "warning")
                 tmptravl_path = ""
 
-        # ── Recipe selection via subprocess or fallback ────────────────
+        # ── Recipe selection via subprocess or fallback ──────────────
         selector = RecipeSelector(recipe_folder=recipe_folder, python2_exe=python2_exe)
         recipe_result = selector.select_recipe_or_fallback(tmptravl_path, step)
         recipe = recipe_result.recipe_name or r"RECIPE:PEREGRINE\ON_NEOSEM_ABIT.XML"
         _log(logger, f"Recipe: {recipe} (success={recipe_result.success})", log_callback)
-
-        # ── MAM attribute query (optional) ──────────────────────────
-        mam_attrs = {}
-        if lot_prefix and site:
-            mam_attrs = query_mam_attributes(lot_prefix, site=site, log_callback=log_callback)
-            if mam_attrs:
-                # Use MAM CFGPN if not already provided
-                if not cfgpn and mam_attrs.get("CFGPN"):
-                    cfgpn = mam_attrs["CFGPN"]
-                    _log(logger, f"Using CFGPN from MAM: {cfgpn}", log_callback)
-                # Log MCTO if available (informational)
-                if mam_attrs.get("MCTO"):
-                    _log(logger, f"MAM MCTO: {mam_attrs['MCTO']}", log_callback)
 
         # ── RecipeFile ────────────────────────────────────────────────
         ET.SubElement(profile, "RecipeFile").text = recipe
 
         # ── TempTraveler — confirmed rows from FullAutoStart.md [24] ──
         tt = ET.SubElement(profile, "TempTraveler")
+        # Base attributes (always present)
         for section, name, value in [
             ("MAM",       "STEP",          mam_step),
-            ("MAM",       "NAND_OPTION",   "BAD_PLANE"),
+            ("MAM",       "NAND_OPTION",   mam_attrs.get("NAND_OPTION", "BAD_PLANE")),
             ("CFGPN",     "STEP_ID",       cfgpn_step_id),
-            ("CFGPN",     "SEC_PROCESS",   "ABIT_REQ0"),
+            ("CFGPN",     "SEC_PROCESS",   cfgpn_attrs.get("SEC_PROCESS", "ABIT_REQ0")),
             ("EQUIPMENT", "DIB_TYPE",      dib_type),
             ("EQUIPMENT", "DIB_TYPE_NAME", dib_type),
         ]:
@@ -543,6 +630,37 @@ def generate_slate_xml(
             a.set("Section", section)
             a.set("Name",    name)
             a.set("Value",   value)
+
+        # SAP CFGPN attributes (when available)
+        for key, value in cfgpn_attrs.items():
+            if key not in ("CFGPN", "STEP_ID", "SEC_PROCESS"):  # avoid duplicates
+                a = ET.SubElement(tt, "Attribute")
+                a.set("Section", "CFGPN")
+                a.set("Name",    key)
+                a.set("Value",   str(value))
+
+        # SAP MCTO attributes (when available)
+        for key, value in mcto_attrs.items():
+            if key != "CFGPN":  # avoid duplicate
+                a = ET.SubElement(tt, "Attribute")
+                a.set("Section", "MCTO")
+                a.set("Name",    key)
+                a.set("Value",   str(value))
+
+        # SAP firmware paths in constant section
+        for key in SAP_FIRMWARE_KEYS:
+            if key in sap_constant_dict:
+                a = ET.SubElement(tt, "Attribute")
+                a.set("Section", "CONSTANT")
+                a.set("Name",    key)
+                a.set("Value",   sap_constant_dict[key])
+
+        # MARKET_SEGMENT from SAP
+        if "MARKET_SEGMENT" in sap_constant_dict:
+            a = ET.SubElement(tt, "Attribute")
+            a.set("Section", "CONSTANT")
+            a.set("Name",    "MARKET_SEGMENT")
+            a.set("Value",   sap_constant_dict["MARKET_SEGMENT"])
 
         # ── MaterialInfo — user-provided DUT locations or auto-generate
         mat       = ET.SubElement(profile, "MaterialInfo")
@@ -1038,6 +1156,7 @@ def run_checkout(
     timeout_seconds: int   = CHECKOUT_TIMEOUT_SECONDS,
     notify_teams:    bool  = True,
     webhook_url:     str   = "",
+    sap_instance:    str   = "PR1",
     log_callback           = None,
     phase_callback         = None,
     cancel_event:    Optional[threading.Event] = None,
@@ -1131,6 +1250,7 @@ def run_checkout(
             label         = label,
             hostname      = hostname,
             output_dir    = _queue,      # ← P:\temp\BENTO\CHECKOUT_QUEUE
+            sap_instance  = sap_instance,
             logger        = logger,
             log_callback  = log_callback,
         )

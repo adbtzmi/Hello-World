@@ -111,20 +111,27 @@ class CheckoutTab(BaseTab):
     }
 
     _CRT_TO_PROFILE_MAP = {
-        "Material description": "Material_Desc",
-        "CFGPN":                "CFGPN",
-        "MCTO_#1":              "MCTO_#1",
-        "Form_Factor":          "Form_Factor",
-        "Dummy_Lot":            "Dummy_Lot",
-        "Step Name":            "Step",
-        "Step Status":          "Step",
-        "Material_Desc":        "Material_Desc",
-        "Step":                 "Step",
-        "MID":                  "MID",
-        "Tester":               "Tester",
-        "Primitive":            "Primitive",
-        "Dut":                  "Dut",
-        "ATTR_OVERWRITE":       "ATTR_OVERWRITE",
+        "Material description":  "Material_Desc",
+        "Material Description":  "Material_Desc",
+        "Material_Description":  "Material_Desc",
+        "Material_Desc":         "Material_Desc",
+        "Material_desc":         "Material_Desc",
+        "CFGPN":                 "CFGPN",
+        "MCTO_#1":               "MCTO_#1",
+        "Form_Factor":           "Form_Factor",
+        "Form Factor":           "Form_Factor",
+        "Dummy_Lot":             "Dummy_Lot",
+        "Dummy Lot":             "Dummy_Lot",
+        "Step Name":             "Step",
+        "Step Status":           "Step",
+        "Step":                  "Step",
+        "MID":                   "MID",
+        "Tester":                "Tester",
+        "Primitive":             "Primitive",
+        "Dut":                   "Dut",
+        "DUT":                   "Dut",
+        "ATTR_OVERWRITE":        "ATTR_OVERWRITE",
+        "Attr_Overwrite":        "ATTR_OVERWRITE",
     }
 
     def __init__(self, notebook, context):
@@ -673,9 +680,26 @@ class CheckoutTab(BaseTab):
             engine = "openpyxl" if path.endswith(".xlsx") else "xlrd"
             df = pd.read_excel(path, engine=engine, dtype=str).fillna("")
             cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
+
+            # Build a normalised lookup for fuzzy column matching
+            # Normalise: lowercase, strip, collapse whitespace/underscores
+            def _norm(s: str) -> str:
+                import re
+                return re.sub(r'[\s_]+', '_', s.strip().lower())
+
+            norm_map = {}                       # normalised_key -> grid_col
+            for src, dst in self._CRT_TO_PROFILE_MAP.items():
+                norm_map[_norm(src)] = dst
+            for col in cols:                    # also map grid col names
+                norm_map[_norm(col)] = col
+
             excel_to_grid = {}
             for excel_col in df.columns:
+                # 1) Exact match in the explicit map
                 grid_col = self._CRT_TO_PROFILE_MAP.get(excel_col)
+                # 2) Normalised fallback (handles case / space / underscore variants)
+                if not grid_col:
+                    grid_col = norm_map.get(_norm(excel_col))
                 if grid_col and grid_col in cols:
                     excel_to_grid[excel_col] = grid_col
             self._profile_data = []

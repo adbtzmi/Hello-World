@@ -37,7 +37,9 @@
         "timeout_minutes":        30,
         "recipe_folder":          "",
         "python2_exe":            "",
-        "mam_site":               ""
+        "mam_site":               "",
+        "sap_instance":           "PR1",
+        "sap_enabled":            true
     },
     "notifications": {
         "teams_webhook_url":  "",
