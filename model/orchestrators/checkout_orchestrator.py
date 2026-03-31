@@ -580,13 +580,6 @@ def generate_slate_xml(
             if mcto_attrs:
                 _log(logger, f"✓ SAP MCTO attributes: {len(mcto_attrs)} keys", log_callback)
 
-        # If MCTO query failed/skipped but CFGPN has PRODUCT_GROUP, inject it
-        # so that MCTO.PRODUCT_GROUP vs CFGPN.PRODUCT_GROUP check passes.
-        if not mcto_attrs.get("PRODUCT_GROUP") and cfgpn_attrs.get("PRODUCT_GROUP"):
-            mcto_attrs["PRODUCT_GROUP"] = cfgpn_attrs["PRODUCT_GROUP"]
-            logger.info("DIAG: Injected PRODUCT_GROUP into mcto_attrs from cfgpn_attrs: %s",
-                        cfgpn_attrs["PRODUCT_GROUP"])
-
         # ── Optional: Generate tmptravl for recipe selection ─────────
         tmptravl_path = ""
         if generate_tmptravl:
@@ -607,42 +600,6 @@ def generate_slate_xml(
                 # Merge SAP firmware paths + MARKET_SEGMENT + MODULE_FORM_FACTOR
                 tmptravl_constants.update(sap_constant_dict)
 
-                # Cross-populate critical MAM attributes from SAP CFGPN data
-                # when PyMIPC is unavailable (BENTO checkout without factory MAM access).
-                # recipe_selection.py eval_rules() compares MAM vs CFGPN values;
-                # without these keys in the [MAM] section, critical attribute checks fail.
-                # setdefault() ensures real MAM values take precedence when available.
-                CFGPN_TO_MAM_CRITICAL_MAPPING = {
-                    # CFGPN key           → MAM key (where names differ)
-                    "PCB_DESIGN_ID":       "PCB_DESIGN_ID",
-                    "COMP1_DESIGN_ID":     "DESIGN_ID",
-                    "COMP2_DESIGN_ID":     "DIE2_DESIGN_ID",
-                    "PCB_ARTWORK_REV":     "PCB_ARTWORK_REV",
-                    "PRODUCT_GROUP":       "PRODUCT_GROUP",
-                }
-
-                if mam_attrs is None:
-                    mam_attrs = {}
-
-                # Inject critical attributes from CFGPN into MAM
-                for cfgpn_key, mam_key in CFGPN_TO_MAM_CRITICAL_MAPPING.items():
-                    if cfgpn_attrs.get(cfgpn_key):
-                        mam_attrs.setdefault(mam_key, cfgpn_attrs[cfgpn_key])
-                        logger.info("DIAG: Cross-populated MAM[%s] = CFGPN[%s] = %s",
-                                    mam_key, cfgpn_key, cfgpn_attrs[cfgpn_key])
-
-                # Inject MARKET_SEGMENT and MODULE_FORM_FACTOR from sap_constant_dict
-                # so they appear in the [MAM] section of the tmptravl file.
-                # recipe_selection.py accesses tmptravl['MAM']['MARKET_SEGMENT']
-                # for critical attribute check config selection.
-                if sap_constant_dict.get("MARKET_SEGMENT"):
-                    mam_attrs.setdefault("MARKET_SEGMENT", sap_constant_dict["MARKET_SEGMENT"])
-                if sap_constant_dict.get("MODULE_FORM_FACTOR"):
-                    mam_attrs.setdefault("MODULE_FORM_FACTOR", sap_constant_dict["MODULE_FORM_FACTOR"])
-
-                logger.info("DIAG: Final mam_attrs keys after cross-population: %s",
-                            list(mam_attrs.keys()) if mam_attrs else "empty")
-
                 tmptravl_path = tmptravl_gen.generate(
                     mid=mid,
                     step=step,
@@ -652,46 +609,21 @@ def generate_slate_xml(
                     constant_dict=tmptravl_constants,
                 )
                 _log(logger, f"✓ Tmptravl: {os.path.basename(tmptravl_path)}", log_callback)
-                logger.info("DIAG: tmptravl generated at: %s", tmptravl_path)
-                logger.info("DIAG: tmptravl file exists: %s", os.path.exists(tmptravl_path))
             except Exception as e:
                 _log(logger, f"⚠ Tmptravl generation failed (non-fatal): {e}", log_callback, "warning")
                 tmptravl_path = ""
 
         # ── Recipe selection via subprocess or fallback ──────────────
         selector = RecipeSelector(recipe_folder=recipe_folder, python2_exe=python2_exe)
-        _log(logger, f"RecipeSelector: folder={recipe_folder!r}, python2={python2_exe!r}, "
-             f"available={selector.is_available}, tmptravl={tmptravl_path!r}", log_callback)
-        logger.info("DIAG: Calling recipe selection - folder=%s, python2=%s, tmptravl=%s", recipe_folder, python2_exe, tmptravl_path)
         recipe_result = selector.select_recipe_or_fallback(tmptravl_path, step)
         recipe = recipe_result.recipe_name or r"RECIPE:PEREGRINE\ON_NEOSEM_ABIT.XML"
-        _log(logger, f"DIAG: Recipe: {recipe} (success={recipe_result.success}, source={recipe_result.source})", log_callback)
-        logger.info("DIAG: Recipe result - success=%s, recipe=%s, test_program=%s, source=%s", recipe_result.success, recipe_result.recipe_name, recipe_result.test_program_path, recipe_result.source)
-        logger.info("DIAG: Recipe file_copy_paths count=%d, paths=%s", len(recipe_result.file_copy_paths), recipe_result.file_copy_paths)
-        if recipe_result.file_copy_paths:
-            _log(logger, f"  file_copy_paths: {recipe_result.file_copy_paths}", log_callback)
-        else:
-            _log(logger, f"  file_copy_paths: EMPTY — AddtionalFileFolder will be empty", log_callback, "warning")
-        if recipe_result.source == "fallback" and len(recipe_result.file_copy_paths) == 0:
-            logger.warning("DIAG: file_copy_paths EMPTY because fallback was used (subprocess failed) — AddtionalFileFolder will be empty")
-        if recipe_result.error:
-            _log(logger, f"  recipe error: {recipe_result.error}", log_callback, "warning")
-            logger.warning("DIAG: Recipe selection error: %s", recipe_result.error)
-        if recipe_result.raw_output:
-            _log(logger, f"  recipe raw_output (first 500 chars): {recipe_result.raw_output[:500]}", log_callback)
-            logger.info("DIAG: Recipe raw output: %s", recipe_result.raw_output[:500])
+        _log(logger, f"Recipe: {recipe} (success={recipe_result.success})", log_callback)
 
-        # ── Set TestJobArchive — user-selected TGZ takes priority ─────
-        # Priority: 1) User-selected tgz_path  2) Recipe selection result  3) empty
-        if tgz_path and tgz_path.strip():
-            tja_elem.text = _normalize_tester_path(tgz_path)
-            logger.info("DIAG: TestJobArchive = user-selected tgz_path: %s", tja_elem.text)
-        elif recipe_result.success and recipe_result.test_program_path:
+        # ── Set TestJobArchive — prefer recipe selection result ────────
+        if recipe_result.success and recipe_result.test_program_path:
             tja_elem.text = recipe_result.test_program_path  # Already uppercased by recipe_selector
-            logger.info("DIAG: TestJobArchive = recipe selection result: %s", tja_elem.text)
         else:
-            tja_elem.text = ""
-            logger.warning("DIAG: TestJobArchive is EMPTY — no tgz_path and no recipe selection result")
+            tja_elem.text = _normalize_tester_path(tgz_path)
 
         # ── RecipeFile ────────────────────────────────────────────────
         ET.SubElement(profile, "RecipeFile").text = recipe.upper() if recipe else ""
@@ -720,27 +652,14 @@ def generate_slate_xml(
         # ── AddtionalFileFolder — firmware/config file copy paths ─────
         # Note: "AddtionalFileFolder" is intentionally misspelled — matches CAT production spelling
         aff = ET.SubElement(profile, "AddtionalFileFolder")
-        logger.info("DIAG: AddtionalFileFolder - recipe_success=%s, file_copy_paths_count=%d", recipe_result.success, len(recipe_result.file_copy_paths))
         if recipe_result.success and recipe_result.file_copy_paths:
             for key in sorted(recipe_result.file_copy_paths.keys()):
                 path_entry = recipe_result.file_copy_paths[key]
-                if "|" in path_entry:
-                    source, dest = path_entry.split("|", 1)
-                elif "," in path_entry:
+                if "," in path_entry:
                     source, dest = path_entry.split(",", 1)
-                else:
-                    logger.warning("DIAG: file_copy_path entry '%s' has no recognized delimiter (expected '|' or ','): %s", key, path_entry)
-                    continue
-                file_elem = ET.SubElement(aff, "File")
-                file_elem.set("source", source.strip())
-                file_elem.set("dest", dest.strip())
-
-            file_count = len(aff)
-            logger.info("DIAG: AddtionalFileFolder populated with %d File element(s) from %d file_copy_paths entries",
-                        file_count, len(recipe_result.file_copy_paths))
-            if len(recipe_result.file_copy_paths) > 0 and file_count == 0:
-                logger.warning("DIAG: All %d file_copy_paths entries were dropped — check delimiter format",
-                               len(recipe_result.file_copy_paths))
+                    file_elem = ET.SubElement(aff, "File")
+                    file_elem.set("source", source.strip())
+                    file_elem.set("dest", dest.strip())
 
         # ── MaterialInfo — ONE entry per XML (CAT generates one XML per MID)
         mat       = ET.SubElement(profile, "MaterialInfo")
@@ -1247,10 +1166,6 @@ def run_checkout(
     webhook_url:     str   = "",
     sap_instance:    str   = "PR1",
     autostart:       str   = "False",
-    generate_tmptravl: bool = False,
-    recipe_folder:   str   = "",
-    python2_exe:     str   = "",
-    site:            str   = "",
     log_callback           = None,
     phase_callback         = None,
     cancel_event:    Optional[threading.Event] = None,
@@ -1332,26 +1247,22 @@ def run_checkout(
         # NOT to C:\test_program\playground_queue
         # (that path only exists on the tester machine) [39]
         xml_path = generate_slate_xml(
-            jira_key          = jira_key,
-            mid               = mid,
-            cfgpn             = cfgpn,
-            fw_ver            = fw_ver,
-            dut_slots         = dut_slots,
-            tgz_path          = tgz_path,
-            env               = env,
-            lot_prefix        = lot_prefix,
-            dut_locations     = dut_locations,
-            label             = label,
-            hostname          = hostname,
-            output_dir        = _queue,      # ← P:\temp\BENTO\CHECKOUT_QUEUE
-            generate_tmptravl = generate_tmptravl,
-            recipe_folder     = recipe_folder,
-            python2_exe       = python2_exe,
-            site              = site,
-            sap_instance      = sap_instance,
-            autostart         = autostart,
-            logger            = logger,
-            log_callback      = log_callback,
+            jira_key      = jira_key,
+            mid           = mid,
+            cfgpn         = cfgpn,
+            fw_ver        = fw_ver,
+            dut_slots     = dut_slots,
+            tgz_path      = tgz_path,
+            env           = env,
+            lot_prefix    = lot_prefix,
+            dut_locations = dut_locations,
+            label         = label,
+            hostname      = hostname,
+            output_dir    = _queue,      # ← P:\temp\BENTO\CHECKOUT_QUEUE
+            sap_instance  = sap_instance,
+            autostart     = autostart,
+            logger        = logger,
+            log_callback  = log_callback,
         )
 
         if not xml_path:
