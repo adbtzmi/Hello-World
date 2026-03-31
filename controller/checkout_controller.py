@@ -484,29 +484,33 @@ class CheckoutController(object):
                     # ── Per-MID tracking ──────────────────────────────
                     mid_results = {}
 
+                    # Read generate_tmptravl from checkout config
+                    generate_tmptravl = self._config.get("checkout", {}).get("generate_tmptravl", False)
+
                     if profile_table:
                         # Multi-MID mode: generate XML per MID
                         for row in profile_table:
                             mid = row.get("mid", params.get("mid", ""))
                             try:
                                 xml_path = generate_slate_xml(
-                                    jira_key      = params.get("jira_key", "TSESSD-XXXX"),
-                                    mid           = mid,
-                                    cfgpn         = row.get("cfgpn", params.get("cfgpn", "")),
-                                    fw_ver        = params.get("fw_ver", ""),
-                                    dut_slots     = params.get("dut_slots", 4),
-                                    tgz_path      = params.get("tgz_path", ""),
-                                    env           = env,
-                                    lot_prefix    = row.get("lot", params.get("lot_prefix", "JAANTJB")),
-                                    dut_locations = params.get("dut_locations"),
-                                    label         = label,
-                                    hostname      = hostname,
-                                    form_factor   = row.get("form_factor", ""),
-                                    output_dir    = output_dir,
-                                    recipe_folder = self._config.get("checkout", {}).get("recipe_folder", ""),
-                                    python2_exe   = self._config.get("checkout", {}).get("python2_exe", ""),
-                                    site          = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
-                                    log_callback  = log_cb,
+                                    jira_key          = params.get("jira_key", "TSESSD-XXXX"),
+                                    mid               = mid,
+                                    cfgpn             = row.get("cfgpn", params.get("cfgpn", "")),
+                                    fw_ver            = params.get("fw_ver", ""),
+                                    dut_slots         = params.get("dut_slots", 4),
+                                    tgz_path          = params.get("tgz_path", ""),
+                                    env               = env,
+                                    lot_prefix        = row.get("lot", params.get("lot_prefix", "JAANTJB")),
+                                    dut_locations     = params.get("dut_locations"),
+                                    label             = label,
+                                    hostname          = hostname,
+                                    form_factor       = row.get("form_factor", ""),
+                                    output_dir        = output_dir,
+                                    generate_tmptravl = generate_tmptravl,
+                                    recipe_folder     = self._config.get("checkout", {}).get("recipe_folder", ""),
+                                    python2_exe       = self._config.get("checkout", {}).get("python2_exe", ""),
+                                    site              = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
+                                    log_callback      = log_cb,
                                 )
                                 if xml_path:
                                     mid_results[mid] = {"status": "success", "xml_path": xml_path, "detail": ""}
@@ -522,22 +526,23 @@ class CheckoutController(object):
                         mid = params.get("mid", "")
                         try:
                             xml_path = generate_slate_xml(
-                                jira_key      = params.get("jira_key", "TSESSD-XXXX"),
-                                mid           = mid,
-                                cfgpn         = params.get("cfgpn", ""),
-                                fw_ver        = params.get("fw_ver", ""),
-                                dut_slots     = params.get("dut_slots", 4),
-                                tgz_path      = params.get("tgz_path", ""),
-                                env           = env,
-                                lot_prefix    = params.get("lot_prefix", "JAANTJB"),
-                                dut_locations = params.get("dut_locations"),
-                                label         = label,
-                                hostname      = hostname,
-                                output_dir    = output_dir,
-                                recipe_folder = self._config.get("checkout", {}).get("recipe_folder", ""),
-                                python2_exe   = self._config.get("checkout", {}).get("python2_exe", ""),
-                                site          = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
-                                log_callback  = log_cb,
+                                jira_key          = params.get("jira_key", "TSESSD-XXXX"),
+                                mid               = mid,
+                                cfgpn             = params.get("cfgpn", ""),
+                                fw_ver            = params.get("fw_ver", ""),
+                                dut_slots         = params.get("dut_slots", 4),
+                                tgz_path          = params.get("tgz_path", ""),
+                                env               = env,
+                                lot_prefix        = params.get("lot_prefix", "JAANTJB"),
+                                dut_locations     = params.get("dut_locations"),
+                                label             = label,
+                                hostname          = hostname,
+                                output_dir        = output_dir,
+                                generate_tmptravl = generate_tmptravl,
+                                recipe_folder     = self._config.get("checkout", {}).get("recipe_folder", ""),
+                                python2_exe       = self._config.get("checkout", {}).get("python2_exe", ""),
+                                site              = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
+                                log_callback      = log_cb,
                             )
                             if xml_path:
                                 mid_results[mid or "default"] = {"status": "success", "xml_path": xml_path, "detail": ""}

@@ -35,8 +35,9 @@
         "memory_collect_exe":     "C:\\tools\\memory_collect.exe",
         "memory_collect_timeout": 600,
         "timeout_minutes":        30,
-        "recipe_folder":          "",
-        "python2_exe":            "",
+        "recipe_folder":          "\\\\sifsmodauto\\modauto\\release\\ssd\\recipe_selection",
+        "python2_exe":            "C:\\Python27\\python.exe",
+        "generate_tmptravl":      true,
         "mam_site":               "",
         "sap_instance":           "PR1",
         "sap_enabled":            true
