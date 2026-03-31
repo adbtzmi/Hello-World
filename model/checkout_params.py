@@ -25,8 +25,7 @@ class TestCaseConfig(BaseModel):
 class AttrOverwrite(BaseModel):
     """Single attribute override entry.
 
-    Supports both BENTO legacy sections (MAM, MCTO, etc.) and
-    CAT/SLATE profile sections (RecipeFile, MaterialInfo, etc.).
+    Supports CRT automation tool sections (MAM, MCTO, CFGPN, EQUIPMENT).
     """
     section: str = Field(..., description="Profile section name")
     name: str = Field(..., description="Attribute name")
@@ -223,12 +222,9 @@ def validate_attr_overwrite_string(value: str) -> Tuple[bool, str]:
             f"Found {len(parts)} parts, which is not divisible by 3."
         )
 
-    # Valid XML section names from SLATE profile schema
+    # Valid section names matching CRT automation tool dropdown
     valid_sections = {
-        "RecipeFile", "TempTraveler", "MaterialInfo", "TestJobArchive",
-        "AutoStart", "DutInfo", "TestProgramInfo", "General",
-        # BENTO legacy sections
-        "MAM", "MCTO", "CFGPN", "EQUIPMENT", "DRIVE_INFO",
+        "MAM", "MCTO", "CFGPN", "EQUIPMENT",
     }
 
     errors = []

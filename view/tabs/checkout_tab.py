@@ -813,9 +813,7 @@ class CheckoutTab(BaseTab):
             row=0, column=0, sticky=tk.W, padx=(0, 6), pady=2)
         section_var = tk.StringVar()
         ttk.Combobox(input_frame, textvariable=section_var,
-                     values=["RecipeFile", "TempTraveler", "MaterialInfo",
-                             "TestJobArchive", "AutoStart", "DutInfo",
-                             "TestProgramInfo", "General"],
+                     values=["MAM", "MCTO", "CFGPN", "EQUIPMENT"],
                      width=18).grid(row=0, column=1, sticky="we", pady=2)
 
         ttk.Label(input_frame, text="Attr Name:").grid(
