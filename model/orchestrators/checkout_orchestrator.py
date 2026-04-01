@@ -505,16 +505,16 @@ def generate_slate_xml(
     if logger is None:
         logger = _get_logger()
 
-    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
     # Filename MUST contain hostname + env so checkout_watcher.py can filter
     # by env_tag ("_ENV_") and hostname_tag ("_HOSTNAME_") in the filename.
     # JIRA key is also included so _parse_jira_from_xml_name() can extract it.
-    # Format: Profile_{JIRA}_{HOSTNAME}_{ENV}_{MID}_{Lot}_{timestamp}.xml
+    # Format: Profile_{JIRA}_{HOSTNAME}_{ENV}_{MID}_{Lot}.xml
+    # NOTE: timestamp removed to keep filename shorter
     if mid and lot_prefix:
-        parts    = [p for p in ["Profile", jira_key, hostname, env.upper() if env else None, mid, lot_prefix, timestamp] if p]
+        parts    = [p for p in ["Profile", jira_key, hostname, env.upper() if env else None, mid, lot_prefix] if p]
         xml_name = "_".join(parts) + ".xml"
     else:
-        parts      = [p for p in ["checkout", jira_key, hostname, env.upper() if env else None, timestamp, label] if p]
+        parts      = [p for p in ["checkout", jira_key, hostname, env.upper() if env else None, label] if p]
         xml_name   = "_".join(parts) + ".xml"
     out_dir    = output_dir or CHECKOUT_QUEUE_FOLDER
 

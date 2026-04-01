@@ -1086,8 +1086,19 @@ class CheckoutTab(BaseTab):
                 attr_overwrites=overwrites,
             ))
 
+        # ── Read JIRA key from shared issue_var ──────────────────────
+        jira_key = self.context.get_var('issue_var').get().strip().upper()
+        if not jira_key or jira_key.endswith("-"):
+            # Fallback: try to extract JIRA key from TGZ filename
+            # e.g. TSESSD-14270_IBIR-0383_ABIT_passing.tgz
+            import re
+            tgz_base = os.path.basename(tgz_path)
+            m = re.search(r'([A-Za-z]+-\d+)', tgz_base)
+            jira_key = m.group(1) if m else ""
+
         try:
             params = CheckoutParams(
+                jira_key=jira_key if jira_key else "TSESSD-XXXX",
                 tgz_path=tgz_path,
                 hot_folder=hot_folder or r"C:\test_program\playground_queue",
                 hostnames=hostnames,
