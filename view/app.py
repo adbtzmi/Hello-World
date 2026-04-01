@@ -225,11 +225,29 @@ class BentoApp:
     def compile_completed(self, hostname: str, env: str, result: dict):
         """Called by CompileController when a compile job finishes."""
         status = result.get("status", "unknown").upper()
+        detail = result.get("detail", "")
+        tgz    = result.get("tgz_file", "")
         self._log_message(
             f"{'✓' if status == 'SUCCESS' else '✗'} "
-            f"Compile {status} → {hostname} ({env}): {result.get('detail', '')}")
+            f"Compile {status} → {hostname} ({env}): {detail}")
         if hasattr(self, "implementation_tab"):
             self.implementation_tab.on_compile_completed(hostname, env, result)
+
+        # ── Show popup notification for compilation result ────────────
+        def _show_popup():
+            if status == "SUCCESS":
+                msg = (f"Compilation successful!\n\n"
+                       f"Tester: {hostname} ({env})\n"
+                       f"{('TGZ: ' + tgz) if tgz else ''}\n"
+                       f"{detail}")
+                messagebox.showinfo("Compilation Success", msg.strip())
+            else:
+                msg = (f"Compilation {status}.\n\n"
+                       f"Tester: {hostname} ({env})\n"
+                       f"{detail}")
+                messagebox.showerror("Compilation Failed", msg.strip())
+
+        self.root.after(0, _show_popup)
 
     def checkout_started(self, hostname: str):
         """Called by CheckoutController when checkout automation begins."""
