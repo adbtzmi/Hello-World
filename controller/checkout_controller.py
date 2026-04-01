@@ -508,6 +508,9 @@ class CheckoutController(object):
                             else:
                                 row_dut_locations = params.get("dut_locations")
 
+                            # Extract non-standard TempTraveler attributes
+                            row_attr_overwrites = row.get("attr_overwrites", [])
+
                             try:
                                 xml_path = generate_slate_xml(
                                     jira_key          = params.get("jira_key", "TSESSD-XXXX"),
@@ -527,6 +530,7 @@ class CheckoutController(object):
                                     recipe_folder     = self._config.get("checkout", {}).get("recipe_folder", ""),
                                     python2_exe       = self._config.get("checkout", {}).get("python2_exe", ""),
                                     site              = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
+                                    attr_overwrites   = row_attr_overwrites,
                                     log_callback      = log_cb,
                                 )
                                 if xml_path:
@@ -787,6 +791,9 @@ class CheckoutController(object):
                     else:
                         row_dut_locations = params.get("dut_locations")
 
+                    # Extract non-standard TempTraveler attributes
+                    row_attr_overwrites = row.get("attr_overwrites", [])
+
                     log_callback(f"[~] Starting checkout for MID={mid} CFGPN={cfgpn}...")
 
                     try:
@@ -811,6 +818,7 @@ class CheckoutController(object):
                             recipe_folder     = self._config.get("checkout", {}).get("recipe_folder", ""),
                             python2_exe       = self._config.get("checkout", {}).get("python2_exe", ""),
                             site              = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
+                            attr_overwrites   = row_attr_overwrites,
                             log_callback      = log_callback,
                             phase_callback    = phase_callback,
                             cancel_event      = self._cancel_event,

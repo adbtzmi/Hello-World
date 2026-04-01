@@ -646,7 +646,8 @@ def _dismiss_slate_popups(win):
 
     Dismissible popup title keywords:
       "Error", "Warning", "Confirm", "Overwrite", "Exist",
-      "Replace", "Alert", "Question", "Notice"
+      "Replace", "Alert", "Question", "Notice",
+      "Profile Finished", "Loaded DUT", "Success", "Information"
 
     Dismiss button priority order:
       "Yes" > "OK" > "Overwrite" > "Replace" > "Continue" > "Close"
@@ -660,6 +661,7 @@ def _dismiss_slate_popups(win):
     dismiss_title_keywords = [
         "Error", "Warning", "Confirm", "Overwrite",
         "Exist", "Replace", "Alert", "Question", "Notice",
+        "Profile Finished", "Loaded DUT", "Success", "Information",
     ]
     dismiss_btn_order = [
         "Yes", "OK", "Overwrite", "Replace", "Continue", "Close",

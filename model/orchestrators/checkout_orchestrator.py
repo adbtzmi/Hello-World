@@ -489,6 +489,7 @@ def generate_slate_xml(
     site:          str  = "",
     sap_instance:  str  = "PR1",
     autostart:     str  = "False",
+    attr_overwrites: Optional[list] = None,
     logger               = None,
     log_callback         = None,
 ) -> Optional[str]:
@@ -743,6 +744,24 @@ def generate_slate_xml(
             a.set("section", "RECIPE_SELECTION")
             a.set("attr",    "RECIPE_SEL_TEST_PROGRAM_PATH")
             a.set("value",   recipe_result.test_program_path)  # Already uppercased
+
+        # ── Non-standard TempTraveler attributes from ATTR_OVERWRITE ───
+        # These are additional attributes imported from an existing XML
+        # or manually entered by the user (e.g. NAND_OPTION, SEC_PROCESS,
+        # MOD_TST_SWR_NUMBER).  Each entry is a dict with section/name/value.
+        if attr_overwrites:
+            for ow in attr_overwrites:
+                sect = ow.get("section", "")
+                name = ow.get("name", "")
+                val  = ow.get("value", "")
+                if sect and name:
+                    a = ET.SubElement(tt, "Attribute")
+                    a.set("section", sect)
+                    a.set("attr",    name)
+                    a.set("value",   val)
+            _log(logger,
+                 f"  Added {len(attr_overwrites)} non-standard TempTraveler attribute(s)",
+                 log_callback)
 
         # ── AddtionalFileFolder — firmware/config file copy paths ─────
         # Note: "AddtionalFileFolder" is intentionally misspelled — matches CAT production spelling
@@ -1315,6 +1334,7 @@ def run_checkout(
     recipe_folder:   str   = "",
     python2_exe:     str   = "",
     site:            str   = "",
+    attr_overwrites: Optional[list] = None,
     log_callback           = None,
     phase_callback         = None,
     cancel_event:    Optional[threading.Event] = None,
@@ -1414,6 +1434,7 @@ def run_checkout(
             site              = site,
             sap_instance      = sap_instance,
             autostart         = autostart,
+            attr_overwrites   = attr_overwrites,
             logger            = logger,
             log_callback      = log_callback,
         )
