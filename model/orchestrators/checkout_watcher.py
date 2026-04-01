@@ -2007,21 +2007,44 @@ def watch(env, logger):
         logger.warning("Startup cleanup error: " + str(e))
 
     # ── Snapshot pre-existing XMLs (path-based, clock-skew safe) ─────────────
-    # Record the exact set of XML paths that exist RIGHT NOW and skip only
-    # those. Any XML that arrives after this snapshot is processed normally.
+    # Record the exact set of XML paths that exist RIGHT NOW along with their
+    # modification times. Any XML that arrives after this snapshot OR any
+    # pre-existing XML that gets replaced (new mtime) is processed normally.
     # This replaces the broken mtime vs watcher_start_time comparison which
     # fails when the local PC clock and tester clock differ.
+    #
+    # IMPORTANT: Only skip pre-existing XMLs that already have a terminal
+    # status (.checkout_status with "success" or "failed"). XMLs without a
+    # status file or with "queued"/"in_progress" status are eligible for
+    # processing — they may have been generated before the watcher started
+    # and are waiting to be picked up.
     pre_existing = set()
     if os.path.isdir(CHECKOUT_QUEUE_FOLDER):
         for _f in os.listdir(CHECKOUT_QUEUE_FOLDER):
             if _f.lower().endswith(".xml") and ".checkout_" not in _f:
-                pre_existing.add(
-                    os.path.join(CHECKOUT_QUEUE_FOLDER, _f)
-                )
+                _xml_path = os.path.join(CHECKOUT_QUEUE_FOLDER, _f)
+                # Check if this XML already has a terminal status
+                _status_path = _xml_path + ".checkout_status"
+                _has_terminal_status = False
+                if os.path.exists(_status_path):
+                    try:
+                        with open(_status_path, "r") as _sf:
+                            _status_data = json.load(_sf)
+                        _st = _status_data.get("status", "")
+                        if _st in ("success", "failed"):
+                            _has_terminal_status = True
+                    except Exception:
+                        pass
+                if _has_terminal_status:
+                    pre_existing.add(_xml_path)
+                else:
+                    logger.info(
+                        "Startup: will process pre-existing XML (no terminal status): " + _f
+                    )
         logger.info(
             "Startup: ignoring "
             + str(len(pre_existing))
-            + " pre-existing XML(s) already in queue."
+            + " pre-existing XML(s) with terminal status."
         )
 
     logger.info(
