@@ -17,9 +17,11 @@ start_checkout():
 """
 
 import os
+import re
 import json
 import logging
 import threading
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -458,13 +460,32 @@ class CheckoutController(object):
                         )
                         continue
 
-                    # ── Save to XML_OUTPUT folder (NOT CHECKOUT_QUEUE) ─
+                    # ── Save to XML_OUTPUT subfolder (NOT CHECKOUT_QUEUE) ─
                     # CHECKOUT_QUEUE is monitored by checkout_watcher.py
                     # which would auto-start the checkout process.
                     # XML_OUTPUT is a separate folder for inspection only.
-                    output_dir = _XML_OUTPUT_FOLDER
+                    # Each "Generate XML" click creates a new subfolder so
+                    # all MIDs from one batch are grouped together.
+                    jira_key = params.get("jira_key", "TSESSD-XXXX")
+                    tgz_base = os.path.basename(
+                        params.get("tgz_path", "")
+                    )
+                    # Extract IBIR key from TGZ filename
+                    # e.g. TSESSD-14270_IBIR-0383_ABIT_passing.tgz
+                    ibir_match = re.search(r'(IBIR-\d+)', tgz_base, re.IGNORECASE)
+                    ibir_key = ibir_match.group(1).upper() if ibir_match else ""
 
-                    # Auto-create XML_OUTPUT folder
+                    # Build subfolder name: IBIR-0383_TSESSD-14270_20260401_151300
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    folder_parts = [
+                        p for p in [ibir_key, jira_key, timestamp] if p
+                    ]
+                    subfolder_name = "_".join(folder_parts)
+                    output_dir = os.path.join(
+                        _XML_OUTPUT_FOLDER, subfolder_name
+                    )
+
+                    # Auto-create XML_OUTPUT subfolder
                     try:
                         os.makedirs(output_dir, exist_ok=True)
                         log_cb(
