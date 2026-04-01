@@ -959,6 +959,8 @@ class CheckoutTab(BaseTab):
         for i, (hostname, env) in enumerate(testers):
             var = tk.BooleanVar(value=True)
             self._tester_vars[hostname] = var
+            # Auto-fill Tester column when checkbox is toggled
+            var.trace_add("write", lambda *_a: self._sync_tester_column())
 
             ttk.Checkbutton(self._tester_frame,
                              text=f"{hostname}  ({env})",
@@ -975,6 +977,26 @@ class CheckoutTab(BaseTab):
                                    foreground="#555555", font=("Segoe UI", 8))
             phase_lbl.grid(row=i, column=2, sticky=tk.W, pady=2)
             self._phase_labels[hostname] = phase_lbl
+
+        # Sync tester column with the initial checkbox state
+        self._sync_tester_column()
+
+    def _sync_tester_column(self):
+        """Update the 'Tester' column in every profile row with selected hostnames."""
+        selected = [h for h, var in self._tester_vars.items() if var.get()]
+        tester_value = ", ".join(selected)
+
+        if not self._profile_data:
+            return
+
+        changed = False
+        for row in self._profile_data:
+            if row.get("Tester") != tester_value:
+                row["Tester"] = tester_value
+                changed = True
+
+        if changed:
+            self._refresh_profile_grid()
 
     # ──────────────────────────────────────────────────────────────────────
     # USER ACTIONS
@@ -1167,6 +1189,7 @@ class CheckoutTab(BaseTab):
     def on_profile_data_loaded(self, profile_rows: List[Dict]):
         self._profile_data = profile_rows
         self._refresh_profile_grid()
+        self._sync_tester_column()
         self._update_profile_status()
         self.log(f"✓ Profile table loaded: {len(profile_rows)} row(s) from CRT data")
 
@@ -1189,6 +1212,7 @@ class CheckoutTab(BaseTab):
         if not self._profile_data:
             self._profile_add_default_row()
         self._refresh_profile_grid()
+        self._sync_tester_column()
         self._update_profile_status()
         self.log(f"✓ Profile table loaded from CRT: {crt_data.get('count', 0)} row(s)")
 
@@ -1203,6 +1227,7 @@ class CheckoutTab(BaseTab):
         # ── Populate profile grid from material_rows ──────────────────
         material_rows = data.get("material_rows", [])
         env = data.get("env", "")
+        attr_overwrite = data.get("attr_overwrite", "")
         if material_rows:
             self._profile_data = []
             for mrow in material_rows:
@@ -1217,9 +1242,10 @@ class CheckoutTab(BaseTab):
                     "Tester":         "",
                     "Primitive":      mrow.get("primitive", ""),
                     "Dut":            mrow.get("dut", ""),
-                    "ATTR_OVERWRITE": "",
+                    "ATTR_OVERWRITE": attr_overwrite,
                 })
             self._refresh_profile_grid()
+            self._sync_tester_column()
             self._update_profile_status()
 
         # ── Log summary ───────────────────────────────────────────────

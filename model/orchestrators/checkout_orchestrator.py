@@ -864,7 +864,16 @@ def parse_slate_xml(xml_path: str) -> dict:
                 result["env"] = env_key
                 break
 
-    # TempTraveler -> MAM/STEP overrides env if present
+    # TempTraveler -> MAM/STEP overrides env if present + collect ATTR_OVERWRITE
+    # Standard attributes handled by profile generator (excluded from ATTR_OVERWRITE)
+    _STANDARD_ATTRS = {
+        ("MAM", "STEP"),
+        ("CFGPN", "STEP_ID"),
+        ("EQUIPMENT", "DIB_TYPE"),
+        ("EQUIPMENT", "DIB_TYPE_NAME"),
+        ("RECIPE_SELECTION", "RECIPE_SEL_TEST_PROGRAM_PATH"),
+    }
+    attr_overwrite_parts = []
     tt = root.find("TempTraveler")
     if tt is not None:
         for attr in tt.findall("Attribute"):
@@ -875,7 +884,12 @@ def parse_slate_xml(xml_path: str) -> dict:
                 val_upper = val.strip().upper()
                 if val_upper in ("ABIT", "SFN2", "CNFG"):
                     result["env"] = val_upper
-                break
+            # Collect non-standard attributes for ATTR_OVERWRITE
+            if (sec.upper(), name.upper()) not in _STANDARD_ATTRS and sec and name:
+                attr_overwrite_parts.extend([sec, name, val])
+
+    # Build semicolon-delimited ATTR_OVERWRITE string
+    result["attr_overwrite"] = ";".join(attr_overwrite_parts) if attr_overwrite_parts else ""
 
     # MaterialInfo -> mid, lot_prefix, dut_locations, material_rows
     import re as _re
