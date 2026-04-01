@@ -476,19 +476,6 @@ class CheckoutTab(BaseTab):
         timeout_spin.grid(row=1, column=1, sticky=tk.W, padx=(6, 0), pady=(0, 4))
         _tip(timeout_spin, "Maximum wait time per tester (minutes). Range: 5–480.")
 
-        teams_cb = ttk.Checkbutton(detect_frame, text="Teams",
-                        variable=self.context.get_var('checkout_notify_teams'))
-        teams_cb.grid(row=1, column=2, padx=(8, 0), sticky=tk.W, pady=(0, 4))
-        _tip(teams_cb, "Send a Microsoft Teams notification when checkout completes.")
-
-        ttk.Label(detect_frame, text="Webhook:").grid(
-            row=2, column=0, sticky=tk.W, pady=(0, 2))
-        webhook_entry = ttk.Entry(detect_frame,
-                  textvariable=self.context.get_var('checkout_webhook_url'))
-        webhook_entry.grid(row=3, column=0, columnspan=3, sticky="we", pady=(0, 2))
-        _tip(webhook_entry,
-             "Microsoft Teams incoming webhook URL.\nLeave blank to disable Teams alerts.")
-
         # ── Tester Selection ──────────────────────────────────────────────
         tester_outer = ttk.LabelFrame(side_frame, text="  Tester Selection  ",
                                       padding=(8, 6, 8, 8))

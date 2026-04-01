@@ -135,6 +135,29 @@ class HomeTab(BaseTab):
         save_cred_btn.pack(side=tk.LEFT, padx=2)
         self.context.lockable_buttons.append(save_cred_btn)
 
+        # ── Notifications Section ──────────────────────────────────────────
+        notif_frame = ttk.LabelFrame(self, text="Notifications", padding="10")
+        notif_frame.grid(row=3, column=0, columnspan=3, sticky="we", pady=5)
+        notif_frame.columnconfigure(1, weight=1)
+
+        # Initialise notification variables here (Home tab is built before Checkout tab)
+        if self.context.get_var('checkout_notify_teams') is None:
+            self.context.set_var('checkout_notify_teams', tk.BooleanVar(value=True))
+        if self.context.get_var('checkout_webhook_url') is None:
+            self.context.set_var('checkout_webhook_url', tk.StringVar(
+                value=self.context.config.get('notifications', {}).get('teams_webhook_url', '')))
+
+        ttk.Checkbutton(notif_frame, text="Enable Teams Notification",
+                        variable=self.context.get_var('checkout_notify_teams')).grid(
+            row=0, column=0, columnspan=2, sticky=tk.W, pady=2)
+
+        ttk.Label(notif_frame, text="Webhook URL:").grid(
+            row=1, column=0, sticky=tk.W, pady=2)
+        webhook_entry = ttk.Entry(notif_frame,
+                                  textvariable=self.context.get_var('checkout_webhook_url'),
+                                  width=70)
+        webhook_entry.grid(row=1, column=1, pady=2, sticky=tk.W)
+
         # ── Task / Workflow Section ────────────────────────────────────────
         task_frame = ttk.LabelFrame(self, text="Task Details - Full Workflow", padding="10")
         task_frame.grid(row=2, column=0, columnspan=3, sticky="we", pady=5)
@@ -181,7 +204,7 @@ class HomeTab(BaseTab):
 
         # Status label
         self.status_label = ttk.Label(self, text="")
-        self.status_label.grid(row=4, column=0, sticky=tk.W, pady=2)
+        self.status_label.grid(row=5, column=0, sticky=tk.W, pady=2)
 
     # ──────────────────────────────────────────────────────────────────────
     # USER ACTIONS
@@ -361,23 +384,6 @@ class HomeTab(BaseTab):
 
         self.context.controller.credential_controller.save_credentials(
             email, jira_token, bb_token, model_key, _on_saved)
-
-    def _toggle_debug_mode(self, *args):
-        """Toggle debug mode indicator and update analyzer"""
-        enabled = self.context.get_var('debug_var').get()
-        
-        if enabled:
-            # Show debug indicator
-            self.debug_indicator.grid(row=3, column=0, sticky=tk.W, pady=2)
-            self.log("🐛 DEBUG MODE ENABLED")
-        else:
-            # Hide debug indicator
-            self.debug_indicator.grid_forget()
-            self.log("DEBUG MODE DISABLED")
-        
-        # Update analyzer debug mode
-        if self.context.controller.credential_controller:
-            self.context.controller.credential_controller.toggle_debug_mode(enabled)
 
     def _load_workflow(self):
         """Load a workflow file"""
