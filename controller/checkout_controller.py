@@ -491,22 +491,6 @@ class CheckoutController(object):
                         # Multi-MID mode: generate XML per MID
                         for row in profile_table:
                             mid = row.get("mid", params.get("mid", ""))
-
-                            # ── Build per-row dut_locations from Primitive + Dut ──
-                            # CRT Excel provides Primitive and Dut per MID row.
-                            # DutLocation format: "{tester_flag},{primitive},{dut}"
-                            row_primitive = str(row.get("primitive", "")).strip()
-                            row_dut       = str(row.get("dut", "")).strip()
-                            row_step      = str(row.get("step", "ABIT")).strip().upper()
-                            tester_flag   = "0" if row_step == "SFN2" else "1"
-
-                            if row_primitive and row_dut:
-                                row_dut_locations = [f"{tester_flag},{row_primitive},{row_dut}"]
-                                log_cb(f"  DutLocation for {mid}: {row_dut_locations[0]} (from CRT Primitive={row_primitive}, Dut={row_dut})")
-                            else:
-                                row_dut_locations = params.get("dut_locations")  # fallback to global
-                                log_cb(f"  DutLocation for {mid}: using {'global' if row_dut_locations else 'auto-generated'} (Primitive/Dut not in profile row)")
-
                             try:
                                 xml_path = generate_slate_xml(
                                     jira_key          = params.get("jira_key", "TSESSD-XXXX"),
@@ -517,7 +501,7 @@ class CheckoutController(object):
                                     tgz_path          = params.get("tgz_path", ""),
                                     env               = env,
                                     lot_prefix        = row.get("lot", params.get("lot_prefix", "JAANTJB")),
-                                    dut_locations     = row_dut_locations,
+                                    dut_locations     = params.get("dut_locations"),
                                     label             = label,
                                     hostname          = hostname,
                                     form_factor       = row.get("form_factor", ""),
