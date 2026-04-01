@@ -1196,12 +1196,38 @@ class CheckoutTab(BaseTab):
         self.log(f"✓ Auto-filled: MID={mid}  CFGPN={cfgpn}  FW={fw_ver}")
 
     def on_xml_imported(self, data: dict):
+        # ── Auto-fill TGZ path ────────────────────────────────────────
         if data.get("tgz_path"):
             self.context.get_var('checkout_tgz_path').set(data["tgz_path"])
+
+        # ── Populate profile grid from material_rows ──────────────────
+        material_rows = data.get("material_rows", [])
+        env = data.get("env", "")
+        if material_rows:
+            self._profile_data = []
+            for mrow in material_rows:
+                self._profile_data.append({
+                    "Form_Factor":    "",
+                    "Material_Desc":  "",
+                    "CFGPN":          "",
+                    "MCTO_#1":        "",
+                    "Dummy_Lot":      mrow.get("lot", ""),
+                    "Step":           env,
+                    "MID":            mrow.get("mid", ""),
+                    "Tester":         "",
+                    "Primitive":      mrow.get("primitive", ""),
+                    "Dut":            mrow.get("dut", ""),
+                    "ATTR_OVERWRITE": "",
+                })
+            self._refresh_profile_grid()
+            self._update_profile_status()
+
+        # ── Log summary ───────────────────────────────────────────────
         filled = []
         if data.get("tgz_path"):   filled.append("TGZ")
         if data.get("env"):        filled.append(f"ENV={data['env']}")
-        if data.get("mid"):        filled.append(f"MID={data['mid']}")
+        if material_rows:          filled.append(f"{len(material_rows)} MID(s)")
+        elif data.get("mid"):      filled.append(f"MID={data['mid']}")
         if data.get("lot_prefix"): filled.append(f"Lot={data['lot_prefix']}")
         summary = "  ".join(filled) if filled else "(nothing recognised)"
         self.log(f"✓ XML imported: {summary}")

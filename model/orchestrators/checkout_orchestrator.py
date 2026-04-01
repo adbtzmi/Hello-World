@@ -824,11 +824,13 @@ def parse_slate_xml(xml_path: str) -> dict:
       <TempTraveler>/<Attribute Section="MAM" Name="STEP"> -> env
       <MaterialInfo>/<Attribute Lot="..." MID="..." DutLocation="...">
                          -> lot_prefix (strip trailing digits), mid,
-                            dut_locations list
+                            dut_locations list, material_rows list
       <AutoStart>        -> (informational)
 
     Returns dict with keys:
-      tgz_path, env, mid, lot_prefix, dut_locations (list[str]), dut_slots (int)
+      tgz_path, env, mid, lot_prefix, dut_locations (list[str]), dut_slots (int),
+      material_rows (list[dict]) — one dict per <Attribute> in <MaterialInfo>
+        each with keys: mid, lot, dut_location, primitive, dut
     Raises FileNotFoundError / ET.ParseError on bad input.
     """
     if not os.path.exists(xml_path):
@@ -838,12 +840,13 @@ def parse_slate_xml(xml_path: str) -> dict:
     root = tree.getroot()
 
     result: dict = {
-        "tgz_path":      "",
-        "env":           "",
-        "mid":           "",
-        "lot_prefix":    "",
-        "dut_locations": [],
-        "dut_slots":     1,
+        "tgz_path":       "",
+        "env":            "",
+        "mid":            "",
+        "lot_prefix":     "",
+        "dut_locations":  [],
+        "dut_slots":      1,
+        "material_rows":  [],
     }
 
     # TestJobArchive
@@ -874,11 +877,12 @@ def parse_slate_xml(xml_path: str) -> dict:
                     result["env"] = val_upper
                 break
 
-    # MaterialInfo -> mid, lot_prefix, dut_locations
+    # MaterialInfo -> mid, lot_prefix, dut_locations, material_rows
     import re as _re
     mat = root.find("MaterialInfo")
     if mat is not None:
         locs = []
+        material_rows = []
         for attr in mat.findall("Attribute"):
             mid_val = attr.get("MID", "").strip()
             loc_val = attr.get("DutLocation", "").strip()
@@ -894,8 +898,27 @@ def parse_slate_xml(xml_path: str) -> dict:
                 m = _re.match(r"^(.*?)(\d+)$", lot_val)
                 result["lot_prefix"] = m.group(1) if m else lot_val
 
-        result["dut_locations"] = locs
-        result["dut_slots"]     = len(locs) if locs else 1
+            # Build per-MID row for profile grid population
+            # DutLocation format: "tester_flag,primitive,dut"
+            primitive = ""
+            dut = ""
+            if loc_val:
+                parts = loc_val.split(",")
+                if len(parts) == 3:
+                    primitive = parts[1].strip()
+                    dut = parts[2].strip()
+
+            material_rows.append({
+                "mid":          mid_val,
+                "lot":          lot_val,
+                "dut_location": loc_val,
+                "primitive":    primitive,
+                "dut":          dut,
+            })
+
+        result["dut_locations"]  = locs
+        result["dut_slots"]      = len(locs) if locs else 1
+        result["material_rows"]  = material_rows
 
     return result
 
