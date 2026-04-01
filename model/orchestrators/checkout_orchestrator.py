@@ -1486,22 +1486,19 @@ def run_checkout(
              log_callback)
 
     # ── Memory collection after ALL test cases ────────────────────────
-    # SKIPPED: memory_collect.exe is not available on testers yet.
-    # When the tool is ready, uncomment the block below.
-    # _phase(logger, "Collecting DUT memory…", log_callback, phase_callback)
-    # mem_output = os.path.join(
-    #     CHECKOUT_RESULTS_FOLDER, f"{jira_key}_{hostname}"
-    # )
-    # mem_result = collect_dut_memory(
-    #     hostname       = hostname,
-    #     jira_key       = jira_key,
-    #     dut_slots      = dut_slots,
-    #     output_folder  = mem_output,
-    #     logger         = logger,
-    #     log_callback   = log_callback,
-    #     phase_callback = phase_callback,
-    # )
-    _log(logger, "ℹ Memory collection skipped (not configured)", log_callback)
+    _phase(logger, "Collecting DUT memory…", log_callback, phase_callback)
+    mem_output = os.path.join(
+        CHECKOUT_RESULTS_FOLDER, f"{jira_key}_{hostname}"
+    )
+    mem_result = collect_dut_memory(
+        hostname       = hostname,
+        jira_key       = jira_key,
+        dut_slots      = dut_slots,
+        output_folder  = mem_output,
+        logger         = logger,
+        log_callback   = log_callback,
+        phase_callback = phase_callback,
+    )
 
     # ── Teams notification ────────────────────────────────────────────
     final_status  = ("success"
@@ -1537,7 +1534,7 @@ def run_checkout(
         "detail":     final_detail,
         "elapsed":    final_elapsed,
         "test_cases": all_tc_results,
-        "memory":     {"status": "skipped", "detail": "memory collection not configured"},
+        "memory":     mem_result,
     }
 
 

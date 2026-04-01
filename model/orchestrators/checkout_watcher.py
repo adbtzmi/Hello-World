@@ -1782,22 +1782,22 @@ def process_checkout_xml(xml_path, env, logger):
         + ": " + fname
     )
 
-    # Step 5: Memory collection — SKIPPED
-    # memory_collect.exe is not available on testers yet.
-    # When the tool is ready, uncomment the block below.
-    # logger.info("[~] Starting memory collection for all DUTs...")
-    # mem_result = trigger_memory_collection(
-    #     xml_path, jira_key, logger,
-    #     hostname=hostname, env=env
-    # )
-    logger.info("[~] Memory collection skipped (not configured)")
+    # Step 5: Memory collection — triggered immediately after playground creation
+    # No test run happens during checkout; memory collection runs right after
+    # the playground is confirmed created.
+    logger.info("[~] Starting memory collection for all DUTs...")
+    mem_result = trigger_memory_collection(
+        xml_path, jira_key, logger,
+        hostname=hostname, env=env
+    )
 
     # Step 6: Write success status -> orchestrator wakes up
     write_status(
         xml_path, "success",
         "Checkout complete (playground created via "
         + monitor.completion_method + "). "
-        + "MemCollect: skipped"
+        + "MemCollect: " + mem_result["status"]
+        + " (" + mem_result["detail"] + ")"
     )
     logger.info("[OK] Status written: success - " + fname)
 
