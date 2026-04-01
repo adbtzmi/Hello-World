@@ -544,7 +544,9 @@ class CheckoutTab(BaseTab):
         gen_btn = ttk.Button(btn_frame, text="Generate XML Only", width=18,
                    command=self._generate_xml_only)
         gen_btn.pack(side=tk.LEFT, padx=(0, 3))
-        _tip(gen_btn, "Build SLATE XML profile(s) without starting a checkout run.")
+        _tip(gen_btn, "Build SLATE XML profile(s) and save to XML_OUTPUT folder.\n"
+                      "Does NOT trigger checkout. Inspect XML, then copy to\n"
+                      "CHECKOUT_QUEUE manually when ready.")
 
         imp_btn = ttk.Button(btn_frame, text="📥 Import XML", width=14,
                    command=self._import_xml)

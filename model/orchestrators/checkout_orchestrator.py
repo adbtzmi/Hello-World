@@ -15,7 +15,8 @@ Runs on the LOCAL PC. Full flow:
 
 KEY FIX:
   run_checkout()     -> saves XML to CHECKOUT_QUEUE (shared P: drive)
-  generate_xml_only  -> saves XML directly to hot_folder (playground_queue)
+  generate_xml_only  -> saves XML to XML_OUTPUT (P:\temp\BENTO\XML_OUTPUT)
+                        NOT to CHECKOUT_QUEUE (avoids auto-triggering checkout)
   Both auto-create their target folders with os.makedirs(exist_ok=True)
 
 Mirrors compilation_orchestrator.py pattern exactly. [15]
@@ -510,13 +511,35 @@ def generate_slate_xml(
     # JIRA key is also included so _parse_jira_from_xml_name() can extract it.
     # Format: Profile_{JIRA}_{HOSTNAME}_{ENV}_{MID}_{Lot}_{timestamp}.xml
     # Timestamp ensures each generation creates a NEW file (never overwrites).
+    #
+    # CRITICAL: Never silently drop hostname/env/jira_key — the watcher
+    # checks for "_ENV_" and "_HOSTNAME_" tags in the filename.  If any
+    # critical part is empty, use a placeholder so the filename structure
+    # stays intact and the watcher can still match.
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _jira  = jira_key.strip()  if jira_key  else ""
+    _host  = hostname.strip()  if hostname  else ""
+    _env   = env.strip().upper() if env     else ""
+
+    if not _jira:
+        _log(logger, "WARNING: jira_key is empty — using placeholder 'TSESSD-XXXX'",
+             log_callback, "warning")
+        _jira = "TSESSD-XXXX"
+    if not _host:
+        _log(logger, "WARNING: hostname is empty — filename will lack hostname tag; "
+             "checkout_watcher may not detect this XML",
+             log_callback, "warning")
+    if not _env:
+        _log(logger, "WARNING: env is empty — filename will lack env tag; "
+             "checkout_watcher may not detect this XML",
+             log_callback, "warning")
+
     if mid and lot_prefix:
-        parts    = [p for p in ["Profile", jira_key, hostname, env.upper() if env else None, mid, lot_prefix, ts] if p]
-        xml_name = "_".join(parts) + ".xml"
+        parts    = ["Profile", _jira, _host, _env, mid, lot_prefix, ts]
+        xml_name = "_".join(p for p in parts if p) + ".xml"
     else:
-        parts      = [p for p in ["checkout", jira_key, hostname, env.upper() if env else None, label, ts] if p]
-        xml_name   = "_".join(parts) + ".xml"
+        parts    = ["checkout", _jira, _host, _env, label, ts]
+        xml_name = "_".join(p for p in parts if p) + ".xml"
     out_dir    = output_dir or CHECKOUT_QUEUE_FOLDER
 
     # ── Auto-create output directory ──────────────────────────────────

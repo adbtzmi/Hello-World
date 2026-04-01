@@ -7,10 +7,9 @@ Checkout Controller - Phase 2
 Bridges CheckoutTab (View) <-> checkout_orchestrator.py (Model).
 
 generate_xml_only():
-  - Saves XML to CHECKOUT_QUEUE (P: shared drive)
-  - NOT to C:\\test_program\\playground_queue (tester-only path)
-  - BENTO runs on LOCAL PC — cannot write to tester paths directly
-  - checkout_watcher.py on tester picks up from CHECKOUT_QUEUE
+  - Saves XML to XML_OUTPUT (P:\\temp\\BENTO\\XML_OUTPUT)
+  - NOT to CHECKOUT_QUEUE (which is monitored by checkout_watcher.py)
+  - Engineer inspects XML, then manually copies to CHECKOUT_QUEUE if needed
 
 start_checkout():
   - Saves XML to CHECKOUT_QUEUE via run_checkout()
@@ -32,6 +31,10 @@ _REGISTRY_PATH      = r"P:\temp\BENTO\bento_testers.json"
 _CRT_EXCEL_DEFAULT  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Documents", "incoming_crt.xlsx")
 _DEFAULT_HOT_FOLDER = r"C:\test_program\playground_queue"
 _CHECKOUT_QUEUE     = r"P:\temp\BENTO\CHECKOUT_QUEUE"
+# ── XML-only output folder (NOT monitored by checkout_watcher) ────────────────
+# generate_xml_only() saves here so the watcher does NOT auto-start checkout.
+# Engineers can inspect the XML and manually copy to CHECKOUT_QUEUE when ready.
+_XML_OUTPUT_FOLDER  = r"P:\temp\BENTO\XML_OUTPUT"
 
 # ── CONFIRMED COLUMN NAMES from crt_excel_template.json ──────────────────────
 # "Product  Name" has DOUBLE SPACE - confirmed in CAT.py
@@ -51,8 +54,8 @@ class CheckoutController(object):
     Bridges CheckoutTab <-> checkout_orchestrator.py.
 
     Two modes:
-      generate_xml_only() - saves to CHECKOUT_QUEUE (shared P: drive)
-                            NOT to playground_queue (tester-only path)
+      generate_xml_only() - saves to XML_OUTPUT (P:\\temp\\BENTO\\XML_OUTPUT)
+                            NOT to CHECKOUT_QUEUE (avoids auto-checkout)
       start_checkout()    - full flow via CHECKOUT_QUEUE + watcher
     """
 
@@ -413,19 +416,19 @@ class CheckoutController(object):
     # ── GENERATE XML ONLY ─────────────────────────────────────────────────────
     def generate_xml_only(self, params):
         """
-        Generate XML and save to CHECKOUT_QUEUE (shared P: drive).
+        Generate XML and save to XML_OUTPUT folder (P:\\temp\\BENTO\\XML_OUTPUT).
 
-        WHY NOT C:\\test_program\\playground_queue?
-          BENTO runs on LOCAL PC.
-          C:\\test_program\\playground_queue only exists on the TESTER machine.
-          We CANNOT write there directly from the local PC.
+        WHY NOT CHECKOUT_QUEUE?
+          CHECKOUT_QUEUE is monitored by checkout_watcher.py on the tester.
+          Saving there would auto-trigger the checkout process.
+          XML_OUTPUT is a separate folder for inspection only.
 
         CORRECT FLOW:
           LOCAL PC -> generates XML
-                   -> saves to P:\\temp\\BENTO\\CHECKOUT_QUEUE\\ (shared)
+                   -> saves to P:\\temp\\BENTO\\XML_OUTPUT\\ (not monitored)
                    -> Engineer inspects XML there
-                   -> checkout_watcher.py on tester picks it up automatically
-                      and copies it to C:\\test_program\\playground_queue
+                   -> If ready, engineer copies XML to CHECKOUT_QUEUE
+                   -> checkout_watcher.py on tester picks it up and starts checkout
         """
         def _gen():
             try:
@@ -455,20 +458,21 @@ class CheckoutController(object):
                         )
                         continue
 
-                    # ── Save to CHECKOUT_QUEUE (shared P: drive) ──────
-                    # NOT to C:\test_program\playground_queue
-                    # (that path is on the TESTER machine, not local PC)
-                    output_dir = _CHECKOUT_QUEUE
+                    # ── Save to XML_OUTPUT folder (NOT CHECKOUT_QUEUE) ─
+                    # CHECKOUT_QUEUE is monitored by checkout_watcher.py
+                    # which would auto-start the checkout process.
+                    # XML_OUTPUT is a separate folder for inspection only.
+                    output_dir = _XML_OUTPUT_FOLDER
 
-                    # Auto-create CHECKOUT_QUEUE folder
+                    # Auto-create XML_OUTPUT folder
                     try:
                         os.makedirs(output_dir, exist_ok=True)
                         log_cb(
-                            "[OK] Queue folder ready: " + output_dir
+                            "[OK] XML output folder ready: " + output_dir
                         )
                     except Exception as e:
                         log_cb(
-                            "[!] Cannot create queue folder "
+                            "[!] Cannot create XML output folder "
                             + output_dir + ": " + str(e)
                         )
                         continue
@@ -587,10 +591,10 @@ class CheckoutController(object):
 
                     if success_count > 0 and error_count == 0:
                         log_cb(
-                            "[OK] XML saved to shared queue:\n"
-                            "     checkout_watcher.py on tester will\n"
-                            "     pick this up and copy to:\n"
-                            "     " + _DEFAULT_HOT_FOLDER
+                            "[OK] XML saved to output folder:\n"
+                            "     " + output_dir + "\n"
+                            "     To start checkout, copy XML to:\n"
+                            "     " + _CHECKOUT_QUEUE
                         )
 
                     # Notify UI with per-MID results (XML generation only)
