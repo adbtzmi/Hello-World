@@ -506,13 +506,16 @@ def generate_slate_xml(
         logger = _get_logger()
 
     timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Filename: Profile_{MID}_{Lot}.xml — matches CAT convention
-    # Fall back to checkout_... pattern if MID is not available
+    # Filename MUST contain hostname + env so checkout_watcher.py can filter
+    # by env_tag ("_ENV_") and hostname_tag ("_HOSTNAME_") in the filename.
+    # JIRA key is also included so _parse_jira_from_xml_name() can extract it.
+    # Format: Profile_{JIRA}_{HOSTNAME}_{ENV}_{MID}_{Lot}_{timestamp}.xml
     if mid and lot_prefix:
-        xml_name = f"Profile_{mid}_{lot_prefix}.xml"
+        parts    = [p for p in ["Profile", jira_key, hostname, env.upper() if env else None, mid, lot_prefix, timestamp] if p]
+        xml_name = "_".join(parts) + ".xml"
     else:
-        parts      = [p for p in [jira_key, hostname, env.upper() if env else None, timestamp, label] if p]
-        xml_name   = "checkout_" + "_".join(parts) + ".xml"
+        parts      = [p for p in ["checkout", jira_key, hostname, env.upper() if env else None, timestamp, label] if p]
+        xml_name   = "_".join(parts) + ".xml"
     out_dir    = output_dir or CHECKOUT_QUEUE_FOLDER
 
     # ── Auto-create output directory ──────────────────────────────────

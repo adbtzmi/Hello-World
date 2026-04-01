@@ -1623,8 +1623,23 @@ def trigger_memory_collection(xml_path, jira_key, logger, hostname="", env=""):
 
 # ── PARSE JIRA FROM FILENAME ──────────────────────────────────────────────────
 def _parse_jira_from_xml_name(fname):
-    """Extract JIRA key from filename. e.g. checkout_TSESSD-123_... -> TSESSD-123"""
+    """Extract JIRA key from filename.
+
+    Matches JIRA-style keys like TSESSD-14270 (uppercase letters + dash + digits).
+    Skips hostname-like parts (e.g. IBIR-0383, MPT3HVM-0156) by requiring
+    the prefix to be all-alpha (no digits before the dash).
+
+    Examples:
+      checkout_TSESSD-14270_IBIR-0383_ABIT_...  -> TSESSD-14270
+      Profile_IBIR-0383_ABIT_T0H074V2E_...      -> UNKNOWN (no JIRA in name)
+    """
+    import re
     parts = fname.replace(".xml", "").split("_")
+    # First pass: strict JIRA pattern — all-alpha prefix + dash + digits
+    for p in parts:
+        if re.match(r'^[A-Za-z]+-\d+$', p):
+            return p
+    # Second pass: any part with dash + digits (legacy fallback)
     for p in parts:
         if "-" in p and any(c.isdigit() for c in p):
             return p

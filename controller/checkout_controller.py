@@ -739,7 +739,14 @@ class CheckoutController(object):
     def _checkout_one(self, hostname, env, params):
         """
         Run full checkout for one tester.
-        Calls run_checkout() which saves XML to CHECKOUT_QUEUE.
+
+        Iterates profile_table rows (multi-MID mode) just like
+        generate_xml_only() does.  Each MID gets its own run_checkout()
+        call which generates XML → saves to CHECKOUT_QUEUE → polls for
+        watcher completion → memory collection → Teams notification.
+
+        Falls back to single-MID mode when profile_table is empty
+        (backward compatibility with legacy callers).
         """
         try:
             from model.orchestrators.checkout_orchestrator import run_checkout
@@ -753,32 +760,120 @@ class CheckoutController(object):
             # Read generate_tmptravl from checkout config (same as generate_xml_only)
             generate_tmptravl = self._config.get("checkout", {}).get("generate_tmptravl", False)
 
-            result = run_checkout(
-                jira_key          = params["jira_key"],
-                hostname          = hostname,
-                env               = env,
-                tgz_path          = params.get("tgz_path", ""),
-                hot_folder        = params.get("hot_folder", ""),
-                mid               = params.get("mid", ""),
-                cfgpn             = params.get("cfgpn", ""),
-                fw_ver            = params.get("fw_ver", ""),
-                dut_slots         = params.get("dut_slots", 4),
-                lot_prefix        = params.get("lot_prefix", "JAANTJB"),
-                dut_locations     = params.get("dut_locations"),
-                test_cases        = params.get("test_cases"),
-                detect_method     = params.get("detect_method", "AUTO"),
-                timeout_seconds   = params.get("timeout_seconds", 3600),
-                notify_teams      = params.get("notify_teams", True),
-                webhook_url       = webhook_url,
-                generate_tmptravl = generate_tmptravl,
-                recipe_folder     = self._config.get("checkout", {}).get("recipe_folder", ""),
-                python2_exe       = self._config.get("checkout", {}).get("python2_exe", ""),
-                site              = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
-                log_callback      = log_callback,
-                phase_callback    = phase_callback,
-                cancel_event      = self._cancel_event,
-            )
-            return result
+            profile_table = params.get("profile_table", [])
+
+            # ── Multi-MID mode: iterate profile_table rows ────────────
+            if profile_table:
+                mid_results = {}
+                for row in profile_table:
+                    mid   = row.get("mid", params.get("mid", ""))
+                    cfgpn = row.get("cfgpn", params.get("cfgpn", ""))
+                    lot   = row.get("lot", params.get("lot_prefix", "JAANTJB"))
+                    step  = str(row.get("step", "ABIT")).strip().upper()
+
+                    if not mid:
+                        log_callback("[SKIP] Empty MID in profile row — skipping")
+                        continue
+
+                    # Build per-row dut_locations from Primitive + Dut
+                    row_primitive = str(row.get("primitive", "")).strip()
+                    row_dut       = str(row.get("dut", "")).strip()
+                    tester_flag   = "0" if step == "SFN2" else "1"
+
+                    if row_primitive and row_dut:
+                        row_dut_locations = [f"{tester_flag},{row_primitive},{row_dut}"]
+                        log_callback(f"  DutLocation for {mid}: {row_dut_locations[0]}")
+                    else:
+                        row_dut_locations = params.get("dut_locations")
+
+                    log_callback(f"[~] Starting checkout for MID={mid} CFGPN={cfgpn}...")
+
+                    try:
+                        result = run_checkout(
+                            jira_key          = params["jira_key"],
+                            hostname          = hostname,
+                            env               = env,
+                            tgz_path          = params.get("tgz_path", ""),
+                            hot_folder        = params.get("hot_folder", ""),
+                            mid               = mid,
+                            cfgpn             = cfgpn,
+                            fw_ver            = params.get("fw_ver", ""),
+                            dut_slots         = params.get("dut_slots", 4),
+                            lot_prefix        = lot,
+                            dut_locations     = row_dut_locations,
+                            test_cases        = params.get("test_cases"),
+                            detect_method     = params.get("detect_method", "AUTO"),
+                            timeout_seconds   = params.get("timeout_seconds", 3600),
+                            notify_teams      = params.get("notify_teams", True),
+                            webhook_url       = webhook_url,
+                            generate_tmptravl = generate_tmptravl,
+                            recipe_folder     = self._config.get("checkout", {}).get("recipe_folder", ""),
+                            python2_exe       = self._config.get("checkout", {}).get("python2_exe", ""),
+                            site              = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
+                            log_callback      = log_callback,
+                            phase_callback    = phase_callback,
+                            cancel_event      = self._cancel_event,
+                        )
+                        mid_results[mid] = result
+                        icon = "✓" if result.get("status") == "success" else "✗"
+                        log_callback(f"  {icon} MID {mid}: {result.get('status', 'unknown')}")
+                    except Exception as e:
+                        mid_results[mid] = {
+                            "status": "failed", "detail": str(e),
+                            "elapsed": 0, "test_cases": []
+                        }
+                        log_callback(f"  ✗ MID {mid}: {e}")
+
+                    # Respect cancellation between MIDs
+                    if self._cancel_event and self._cancel_event.is_set():
+                        log_callback("[!] Checkout cancelled — stopping remaining MIDs")
+                        break
+
+                # Aggregate results
+                success_count = sum(1 for r in mid_results.values() if r.get("status") == "success")
+                error_count   = sum(1 for r in mid_results.values() if r.get("status") != "success")
+                log_callback(
+                    f"[SUMMARY] {hostname}: {success_count} success, "
+                    f"{error_count} errors out of {len(mid_results)} MID(s)"
+                )
+                return {
+                    "status":      "success" if error_count == 0 else (
+                        "partial" if success_count > 0 else "failed"
+                    ),
+                    "detail":      f"{success_count}/{len(mid_results)} MIDs completed",
+                    "elapsed":     sum(r.get("elapsed", 0) for r in mid_results.values()),
+                    "test_cases":  [],
+                    "mid_results": mid_results,
+                }
+
+            # ── Single-MID fallback (legacy / no profile_table) ───────
+            else:
+                result = run_checkout(
+                    jira_key          = params["jira_key"],
+                    hostname          = hostname,
+                    env               = env,
+                    tgz_path          = params.get("tgz_path", ""),
+                    hot_folder        = params.get("hot_folder", ""),
+                    mid               = params.get("mid", ""),
+                    cfgpn             = params.get("cfgpn", ""),
+                    fw_ver            = params.get("fw_ver", ""),
+                    dut_slots         = params.get("dut_slots", 4),
+                    lot_prefix        = params.get("lot_prefix", "JAANTJB"),
+                    dut_locations     = params.get("dut_locations"),
+                    test_cases        = params.get("test_cases"),
+                    detect_method     = params.get("detect_method", "AUTO"),
+                    timeout_seconds   = params.get("timeout_seconds", 3600),
+                    notify_teams      = params.get("notify_teams", True),
+                    webhook_url       = webhook_url,
+                    generate_tmptravl = generate_tmptravl,
+                    recipe_folder     = self._config.get("checkout", {}).get("recipe_folder", ""),
+                    python2_exe       = self._config.get("checkout", {}).get("python2_exe", ""),
+                    site              = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
+                    log_callback      = log_callback,
+                    phase_callback    = phase_callback,
+                    cancel_event      = self._cancel_event,
+                )
+                return result
 
         except Exception as e:
             logger.error("_checkout_one [" + hostname + "]: " + str(e))

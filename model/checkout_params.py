@@ -56,7 +56,7 @@ class AttrOverwrite(BaseModel):
 
 class ProfileRowParams(BaseModel):
     """Parameters for a single profile row (MID)."""
-    mid: str = Field(..., min_length=1)
+    mid: str = Field(default="", min_length=0)
     lot: str = Field(default="")
     cfgpn: str = Field(default="")
     mcto: str = Field(default="")
