@@ -21,21 +21,30 @@ logger = logging.getLogger(__name__)
 # may produce "recipe\\Peregrine_neosem_ABIT.xml" (different case/format).
 # To verify: Run the subprocess manually with a known-good tmptravl and compare
 # the RECIPE_SEL_PROGRAM_RECIPE value against these fallback entries.
-_FALLBACK_RECIPE_MAP: Dict[str, str] = {
-    "ABIT": r"RECIPE\PEREGRINE\ON_NEOSEM_ABIT.XML",
-    "SFN2": r"RECIPE\PEREGRINE\ON_NEOSEM_SFN2.XML",
-    "CNFG": r"RECIPE\PEREGRINE\ON_NEOSEM_CNFG.XML",
+# Fallback recipe map — includes file_copy_paths so <AddtionalFileFolder> is
+# populated even when the subprocess is unavailable.
+# NOTE: These paths are captured from a known-good subprocess run (PION_U2_172E.xml).
+# If upstream recipe_selection.py changes its output, update these entries.
+_FALLBACK_RECIPE_MAP: Dict[str, dict] = {
+    "ABIT": {
+        "recipe_name": r"RECIPE\PEREGRINE\ON_NEOSEM_ABIT.XML",
+        "file_copy_paths": {
+            "RECIPE_SEL_FILE_COPY_PATHS_01": r"\\pgfsmodauto\modauto\release\ssd\config|OS\config",
+        },
+    },
+    "SFN2": {
+        "recipe_name": r"RECIPE\PEREGRINE\ON_NEOSEM_SFN2.XML",
+        "file_copy_paths": {
+            "RECIPE_SEL_FILE_COPY_PATHS_01": r"\\pgfsmodauto\modauto\release\ssd\config|OS\config",
+        },
+    },
+    "CNFG": {
+        "recipe_name": r"RECIPE\PEREGRINE\ON_NEOSEM_CNFG.XML",
+        "file_copy_paths": {
+            "RECIPE_SEL_FILE_COPY_PATHS_01": r"\\pgfsmodauto\modauto\release\ssd\config|OS\config",
+        },
+    },
 }
-# TODO (Fix 5 - DEFERRED): Consider adding static file_copy_paths to fallback map.
-# Currently, when fallback is used, file_copy_paths is always empty, meaning
-# <AddtionalFileFolder> will be empty in the generated Slate XML.
-# If file copies ARE needed during fallback, change this map from Dict[str, str]
-# to Dict[str, dict] with structure:
-#   {"recipe_name": "...", "file_copy_paths": {"RECIPE_SEL_FILE_COPY_PATHS_01": "source|dest", ...}}
-# Then update select_recipe_or_fallback() to populate result.file_copy_paths from the map.
-# RISK: Hardcoded paths become stale if upstream recipe_selection.py changes.
-# PREREQUISITE: Capture subprocess stdout when it succeeds to get actual
-# RECIPE_SEL_FILE_COPY_PATHS_## values for each step.
 
 
 class RecipeResult:
@@ -324,18 +333,19 @@ class RecipeSelector:
             logger.warning("DIAG: Subprocess recipe selection SKIPPED - is_available=%s, tmptravl_path=%r, tmptravl_exists=%s",
                            self.is_available, tmptravl_path, os.path.isfile(tmptravl_path) if tmptravl_path else False)
 
-        # Fallback to static map
-        logger.warning("DIAG: Using FALLBACK recipe map (file_copy_paths will be EMPTY)")
+        # Fallback to static map (now includes file_copy_paths)
         result = RecipeResult()
         step_upper = step.upper() if step else ""
-        recipe = _FALLBACK_RECIPE_MAP.get(step_upper, "")
-        if recipe:
-            result.recipe_name = recipe
+        fallback_entry = _FALLBACK_RECIPE_MAP.get(step_upper)
+        if fallback_entry:
+            result.recipe_name = fallback_entry["recipe_name"]
+            result.file_copy_paths = dict(fallback_entry.get("file_copy_paths", {}))
             result.success = True
             result.source = "fallback"
-            logger.info(f"Using fallback recipe for step '{step_upper}': {recipe}")
-            logger.warning("DIAG: Using fallback recipe_name='%s' for step='%s' — verify this matches .rul file output",
-                           recipe, step)
+            logger.info(f"Using fallback recipe for step '{step_upper}': {result.recipe_name}")
+            logger.warning("DIAG: Using fallback recipe_name='%s' for step='%s', "
+                           "file_copy_paths_count=%d — verify paths match .rul file output",
+                           result.recipe_name, step, len(result.file_copy_paths))
         else:
             result.error = f"No fallback recipe found for step: {step_upper}"
             logger.warning(result.error)
