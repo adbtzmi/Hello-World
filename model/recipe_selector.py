@@ -13,33 +13,33 @@ from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-# Fallback static map — copied from checkout_orchestrator.py lines ~102-106
-# TODO: VERIFY fallback recipe names against actual .rul file output.
-# Known discrepancy: These fallback names may not match what the subprocess
-# recipe_selection.py returns via RECIPE_SEL_PROGRAM_RECIPE.
-# Example: Fallback has "RECIPE\PEREGRINE\ON_NEOSEM_ABIT.XML" but .rul files
-# may produce "recipe\\Peregrine_neosem_ABIT.xml" (different case/format).
-# To verify: Run the subprocess manually with a known-good tmptravl and compare
-# the RECIPE_SEL_PROGRAM_RECIPE value against these fallback entries.
-# Fallback recipe map — includes file_copy_paths so <AddtionalFileFolder> is
-# populated even when the subprocess is unavailable.
-# NOTE: These paths are captured from a known-good subprocess run (PION_U2_172E.xml).
+# Fallback static map — used when recipe_selection.py subprocess is unavailable.
+# IMPORTANT: Recipe names MUST match the actual file paths on the tester.
+# Verified against working tester XML (PION_U2_172E.xml):
+#   RecipeFile = "RECIPE\PEREGRINEION_NEOSEM_ABIT.XML"
+# The product name is "PEREGRINEION" (one word), NOT "PEREGRINE\ON" (subfolder).
 # If upstream recipe_selection.py changes its output, update these entries.
 _FALLBACK_RECIPE_MAP: Dict[str, dict] = {
     "ABIT": {
-        "recipe_name": r"RECIPE\PEREGRINE\ON_NEOSEM_ABIT.XML",
+        "recipe_name": r"RECIPE\PEREGRINEION_NEOSEM_ABIT.XML",
         "file_copy_paths": {
             "RECIPE_SEL_FILE_COPY_PATHS_01": r"\\pgfsmodauto\modauto\release\ssd\config|OS\config",
         },
     },
     "SFN2": {
-        "recipe_name": r"RECIPE\PEREGRINE\ON_NEOSEM_SFN2.XML",
+        "recipe_name": r"RECIPE\PEREGRINEION_NEOSEM_SFN2.XML",
         "file_copy_paths": {
             "RECIPE_SEL_FILE_COPY_PATHS_01": r"\\pgfsmodauto\modauto\release\ssd\config|OS\config",
         },
     },
     "CNFG": {
-        "recipe_name": r"RECIPE\PEREGRINE\ON_NEOSEM_CNFG.XML",
+        "recipe_name": r"RECIPE\PEREGRINEION_NEOSEM_CNFG.XML",
+        "file_copy_paths": {
+            "RECIPE_SEL_FILE_COPY_PATHS_01": r"\\pgfsmodauto\modauto\release\ssd\config|OS\config",
+        },
+    },
+    "SCHP": {
+        "recipe_name": r"RECIPE\PEREGRINEION_NEOSEM_SCHP.XML",
         "file_copy_paths": {
             "RECIPE_SEL_FILE_COPY_PATHS_01": r"\\pgfsmodauto\modauto\release\ssd\config|OS\config",
         },
