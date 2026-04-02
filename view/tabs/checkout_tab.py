@@ -185,6 +185,7 @@ class CheckoutTab(BaseTab):
         _bv('checkout_notify_teams', True)
         _sv('checkout_form_factor', '')
         _bv('checkout_gen_tmptravl', False)
+        _bv('checkout_autostart', False)
 
     # ──────────────────────────────────────────────────────────────────────
     # BUILD UI — scrollable canvas wrapper
@@ -374,6 +375,17 @@ class CheckoutTab(BaseTab):
         _tip(gen_tt_cb,
              "Generate a TempTraveler .dat file for each MID.\n"
              "Uses the template in model/resources/template_tmptravl.dat.")
+
+        # Auto Start checkbox — mirrors CAT's autostart_checkbox
+        autostart_cb = ttk.Checkbutton(
+            frm, text="Auto Start",
+            variable=self.context.get_var('checkout_autostart'))
+        autostart_cb.grid(row=0, column=5, sticky=tk.W, padx=(16, 0), pady=(0, 4))
+        _tip(autostart_cb,
+             "Set AutoStart=True in the generated XML profile.\n"
+             "When enabled, SLATE automatically starts the test without\n"
+             "requiring a manual 'Run Test' click.\n"
+             "Mirrors CAT's Auto Start checkbox.")
 
         # TGZ row
         ttk.Label(frm, text="TGZ:").grid(
@@ -1054,6 +1066,7 @@ class CheckoutTab(BaseTab):
         site        = self.context.get_var('checkout_site').get().strip()
         form_factor = self.context.get_var('checkout_form_factor').get().strip()
         gen_tmptravl = self.context.get_var('checkout_gen_tmptravl').get()
+        autostart   = self.context.get_var('checkout_autostart').get()
         hostnames   = [h for h, v in self._tester_vars.items() if v.get()]
         webhook_url = self.context.get_var('checkout_webhook_url').get().strip()
 
@@ -1121,6 +1134,7 @@ class CheckoutTab(BaseTab):
                 notify_teams=bool(notify),
                 webhook_url=webhook_url,
                 generate_tmptravl=bool(gen_tmptravl),
+                autostart="True" if autostart else "False",
             )
         except ValidationError as e:
             # Show user-friendly validation errors
