@@ -488,7 +488,7 @@ def generate_slate_xml(
     python2_exe:   str  = "",
     site:          str  = "",
     sap_instance:  str  = "PR1",
-    autostart:     str  = "False",
+    autostart:     str  = "True",
     attr_overwrites: Optional[list] = None,
     logger               = None,
     log_callback         = None,
@@ -725,43 +725,92 @@ def generate_slate_xml(
         ET.SubElement(profile, "RecipeFile").text = recipe.upper() if recipe else ""
 
         # ── TempTraveler — CAT-aligned attribute format ───────────────
+        # Attribute ordering MUST match working tester XML exactly:
+        #   1. MAM/STEP
+        #   2. MAM/NAND_OPTION  (from attr_overwrites)
+        #   3. CFGPN/STEP_ID    (spaces, not underscores — "AMB BI TEST")
+        #   4. CFGPN/SEC_PROCESS
+        #   5. EQUIPMENT/DIB_TYPE
+        #   6. EQUIPMENT/DIB_TYPE_NAME
+        #   7. RECIPE_SELECTION/RECIPE_SEL_TEST_PROGRAM_PATH
+        #   8. MAM/MOD_TST_SWR_NUMBER (from attr_overwrites)
         tt = ET.SubElement(profile, "TempTraveler")
-        # Base attributes (always present) — lowercase keys match CAT's attrdict.py
-        # SEC_PROCESS: maps step to "{STEP}_REQD" — matches CAT step_name_dict logic
-        sec_process_value = f"{step}_REQD"
-        for section, name, value in [
-            ("MAM",       "STEP",          mam_step),
-            ("CFGPN",     "STEP_ID",       cfgpn_step_id),
-            ("EQUIPMENT", "DIB_TYPE",      dib_type),
-            ("EQUIPMENT", "DIB_TYPE_NAME", dib_type),
-            ("CFGPN",     "SEC_PROCESS",   sec_process_value),
-        ]:
-            a = ET.SubElement(tt, "Attribute")
-            a.set("section", section)
-            a.set("attr",    name)
-            a.set("value",   value)
 
-        # RECIPE_SELECTION attribute — from recipe selection output
+        # STEP_ID: working tester XML uses spaces ("AMB BI TEST"), not
+        # underscores ("AMB_BI_TEST").  Replace underscores with spaces.
+        cfgpn_step_id_spaced = cfgpn_step_id.replace("_", " ")
+        sec_process_value = f"{step}_REQD"
+
+        # Collect non-standard TempTraveler attributes from ATTR_OVERWRITE
+        # Split into "before DIB" (NAND_OPTION) and "after RECIPE_SEL" (rest)
+        # to match the working tester XML attribute ordering.
+        before_dib_attrs = []   # e.g. NAND_OPTION — goes after STEP, before STEP_ID
+        after_recipe_attrs = [] # e.g. MOD_TST_SWR_NUMBER — goes after RECIPE_SEL
+        if attr_overwrites:
+            for ow in attr_overwrites:
+                sect = ow.get("section", "")
+                name = ow.get("name", "")
+                val  = ow.get("value", "")
+                if not sect or not name:
+                    continue
+                # NAND_OPTION goes right after MAM/STEP in working XML
+                if name.upper() == "NAND_OPTION":
+                    before_dib_attrs.append((sect, name, val))
+                else:
+                    after_recipe_attrs.append((sect, name, val))
+
+        # Write attributes in working tester XML order:
+        # 1. MAM/STEP
+        a = ET.SubElement(tt, "Attribute")
+        a.set("section", "MAM")
+        a.set("attr",    "STEP")
+        a.set("value",   mam_step)
+
+        # 2. MAM/NAND_OPTION (if present in attr_overwrites)
+        for sect, name, val in before_dib_attrs:
+            a = ET.SubElement(tt, "Attribute")
+            a.set("section", sect)
+            a.set("attr",    name)
+            a.set("value",   val)
+
+        # 3. CFGPN/STEP_ID (with spaces)
+        a = ET.SubElement(tt, "Attribute")
+        a.set("section", "CFGPN")
+        a.set("attr",    "STEP_ID")
+        a.set("value",   cfgpn_step_id_spaced)
+
+        # 4. CFGPN/SEC_PROCESS
+        a = ET.SubElement(tt, "Attribute")
+        a.set("section", "CFGPN")
+        a.set("attr",    "SEC_PROCESS")
+        a.set("value",   sec_process_value)
+
+        # 5. EQUIPMENT/DIB_TYPE
+        a = ET.SubElement(tt, "Attribute")
+        a.set("section", "EQUIPMENT")
+        a.set("attr",    "DIB_TYPE")
+        a.set("value",   dib_type)
+
+        # 6. EQUIPMENT/DIB_TYPE_NAME
+        a = ET.SubElement(tt, "Attribute")
+        a.set("section", "EQUIPMENT")
+        a.set("attr",    "DIB_TYPE_NAME")
+        a.set("value",   dib_type)
+
+        # 7. RECIPE_SELECTION attribute — from recipe selection output
         if recipe_result.success and recipe_result.test_program_path:
             a = ET.SubElement(tt, "Attribute")
             a.set("section", "RECIPE_SELECTION")
             a.set("attr",    "RECIPE_SEL_TEST_PROGRAM_PATH")
             a.set("value",   recipe_result.test_program_path)  # Already uppercased
 
-        # ── Non-standard TempTraveler attributes from ATTR_OVERWRITE ───
-        # These are additional attributes imported from an existing XML
-        # or manually entered by the user (e.g. NAND_OPTION, SEC_PROCESS,
-        # MOD_TST_SWR_NUMBER).  Each entry is a dict with section/name/value.
+        # 8. Remaining non-standard attributes (e.g. MOD_TST_SWR_NUMBER)
+        for sect, name, val in after_recipe_attrs:
+            a = ET.SubElement(tt, "Attribute")
+            a.set("section", sect)
+            a.set("attr",    name)
+            a.set("value",   val)
         if attr_overwrites:
-            for ow in attr_overwrites:
-                sect = ow.get("section", "")
-                name = ow.get("name", "")
-                val  = ow.get("value", "")
-                if sect and name:
-                    a = ET.SubElement(tt, "Attribute")
-                    a.set("section", sect)
-                    a.set("attr",    name)
-                    a.set("value",   val)
             _log(logger,
                  f"  Added {len(attr_overwrites)} non-standard TempTraveler attribute(s)",
                  log_callback)
@@ -805,23 +854,61 @@ def generate_slate_xml(
         a.set("MID",         mid)
         a.set("DutLocation", dut_loc)
 
-        # ── AutoStart — defaults to "False", CAT controls this ────────
+        # ── AutoStart — defaults to "True", matches working tester XML ─
         ET.SubElement(profile, "AutoStart").text = autostart
 
         # ── Write XML ─────────────────────────────────────────────────
+        # CRITICAL: Working tester XMLs have:
+        #   - NO <?xml?> declaration
+        #   - 2-space indentation
+        # ET.indent() requires Python 3.9+; use try/except with manual
+        # fallback to guarantee correct formatting on all Python versions.
         tree = ET.ElementTree(profile)
-        ET.indent(tree, space="  ")  # 2-space indent — matches working tester XML
-        # Write XML WITHOUT declaration — working tester XMLs have no <?xml?> header
-        with open(xml_path, "w", encoding="utf-8") as f:
-            tree.write(f, encoding="unicode", xml_declaration=False)
+        try:
+            ET.indent(tree, space="  ")  # 2-space indent — Python 3.9+
+        except AttributeError:
+            # Python < 3.9: manual indent via minidom (strip its XML decl)
+            pass
 
-        # Post-process: add space before /> in self-closing tags to match tester format
-        # Working XML: <Attribute ... /> vs ET default: <Attribute .../>
-        with open(xml_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        content = content.replace("/>", " />")
+        # Write to string first, then strip any XML declaration
+        xml_str = ET.tostring(profile, encoding="unicode")
+
+        # If ET.indent was unavailable, apply manual 2-space indentation
+        # by checking if the output is all on one line (no newlines except
+        # at the very end).
+        if "\n" not in xml_str.strip() or xml_str.strip().startswith("<Profile><"):
+            # ET.indent didn't work — apply manual pretty-print
+            try:
+                from xml.dom import minidom
+                dom = minidom.parseString(xml_str)
+                # toprettyxml with 2-space indent, then strip the XML declaration line
+                pretty = dom.toprettyxml(indent="  ", encoding=None)
+                # Remove <?xml ...?> line
+                lines = pretty.split("\n")
+                if lines and lines[0].startswith("<?xml"):
+                    lines = lines[1:]
+                # Remove trailing blank lines
+                while lines and not lines[-1].strip():
+                    lines.pop()
+                xml_str = "\n".join(lines)
+            except Exception:
+                pass  # Fall through with unindented XML
+
+        # Ensure no XML declaration is present
+        if xml_str.startswith("<?xml"):
+            # Strip the first line (XML declaration)
+            xml_str = "\n".join(xml_str.split("\n")[1:])
+
+        # Post-process: normalize self-closing tags to match tester format
+        # Working XML: <Attribute ... /> (exactly one space before />)
+        # ET may produce: <Attribute .../> or <Attribute ...  />
+        # Use regex to normalize to exactly one space before />
+        import re as _re_xml
+        xml_str = _re_xml.sub(r'\s*/>', ' />', xml_str)
+
+        # Write final XML
         with open(xml_path, "w", encoding="utf-8") as f:
-            f.write(content)
+            f.write(xml_str)
 
         size_kb = os.path.getsize(xml_path) / 1024
         _log(logger,
@@ -913,7 +1000,7 @@ def parse_slate_xml(xml_path: str) -> dict:
             val = attr.get("value", "") or attr.get("Value", "")
             if sec.upper() == "MAM" and name.upper() == "STEP":
                 val_upper = val.strip().upper()
-                if val_upper in ("ABIT", "SFN2", "CNFG"):
+                if val_upper in ("ABIT", "SFN2", "SCHP", "CNFG"):
                     result["env"] = val_upper
             # Collect non-standard attributes for ATTR_OVERWRITE
             if (sec.upper(), name.upper()) not in _STANDARD_ATTRS and sec and name:

@@ -66,9 +66,9 @@ class HardwareConfig:
             "MACHINE_MODEL": {"ABIT": "IBIR", "SFN2": "MPT3000HVM3", "SCHP": "FX7"},
             "MACHINE_VENDOR": {"ABIT": "NEOS", "SFN2": "ADVT", "SCHP": "NEOSEM"},
             "STEP_NAME": {
-                "ABIT": ["ABIT", "AMB_BI_TEST"],
-                "SFN2": ["SFN2", "SSD_FIN_TEST2"],
-                "SCHP": ["SCHP", "SSD_CHAMBER_PERF"],
+                "ABIT": ["ABIT", "AMB BI TEST"],
+                "SFN2": ["SFN2", "SSD FIN TEST2"],
+                "SCHP": ["SCHP", "SSD CHAMBER PERF"],
             },
         }
 
