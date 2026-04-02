@@ -727,11 +727,14 @@ def generate_slate_xml(
         # ── TempTraveler — CAT-aligned attribute format ───────────────
         tt = ET.SubElement(profile, "TempTraveler")
         # Base attributes (always present) — lowercase keys match CAT's attrdict.py
+        # SEC_PROCESS: maps step to "{STEP}_REQD" — matches CAT step_name_dict logic
+        sec_process_value = f"{step}_REQD"
         for section, name, value in [
             ("MAM",       "STEP",          mam_step),
             ("CFGPN",     "STEP_ID",       cfgpn_step_id),
             ("EQUIPMENT", "DIB_TYPE",      dib_type),
             ("EQUIPMENT", "DIB_TYPE_NAME", dib_type),
+            ("CFGPN",     "SEC_PROCESS",   sec_process_value),
         ]:
             a = ET.SubElement(tt, "Attribute")
             a.set("section", section)
@@ -807,11 +810,18 @@ def generate_slate_xml(
 
         # ── Write XML ─────────────────────────────────────────────────
         tree = ET.ElementTree(profile)
-        ET.indent(tree, space="    ")
-        # Write XML with double-quote declaration matching CAT format
+        ET.indent(tree, space="  ")  # 2-space indent — matches working tester XML
+        # Write XML WITHOUT declaration — working tester XMLs have no <?xml?> header
         with open(xml_path, "w", encoding="utf-8") as f:
-            f.write('<?xml version="1.0" ?>\n')
             tree.write(f, encoding="unicode", xml_declaration=False)
+
+        # Post-process: add space before /> in self-closing tags to match tester format
+        # Working XML: <Attribute ... /> vs ET default: <Attribute .../>
+        with open(xml_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        content = content.replace("/>", " />")
+        with open(xml_path, "w", encoding="utf-8") as f:
+            f.write(content)
 
         size_kb = os.path.getsize(xml_path) / 1024
         _log(logger,
@@ -878,7 +888,8 @@ def parse_slate_xml(xml_path: str) -> dict:
     rf = root.find("RecipeFile")
     if rf is not None and rf.text:
         recipe_text = rf.text.strip().upper()
-        for env_key, recipe_val in _FALLBACK_RECIPE_MAP.items():
+        for env_key, entry in _FALLBACK_RECIPE_MAP.items():
+            recipe_val = entry["recipe_name"] if isinstance(entry, dict) else entry
             if recipe_val.upper() in recipe_text or env_key in recipe_text:
                 result["env"] = env_key
                 break
@@ -888,6 +899,7 @@ def parse_slate_xml(xml_path: str) -> dict:
     _STANDARD_ATTRS = {
         ("MAM", "STEP"),
         ("CFGPN", "STEP_ID"),
+        ("CFGPN", "SEC_PROCESS"),
         ("EQUIPMENT", "DIB_TYPE"),
         ("EQUIPMENT", "DIB_TYPE_NAME"),
         ("RECIPE_SELECTION", "RECIPE_SEL_TEST_PROGRAM_PATH"),
