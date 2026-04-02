@@ -10,9 +10,17 @@ The tmptravl file has sections delimited by markers:
   $$_BEGIN_SECTION_MCTO / $$_END_SECTION_MCTO
   $$_BEGIN_SECTION_EQUIPMENT / $$_END_SECTION_EQUIPMENT
   $$_BEGIN_SECTION_DRIVE_INFO / $$_END_SECTION_DRIVE_INFO
+  $$_BEGIN_SECTION_RAW_VALUES / $$_END_SECTION_RAW_VALUES
+  $$_BEGIN_SECTION_RECIPE_SELECTION / $$_END_SECTION_RECIPE_SELECTION
 
 Within each section, attributes are written as "KEY: VALUE" lines.
 Outside sections, specific keys can be replaced via a constant_dict.
+
+IMPORTANT: The RAW_VALUES section contains nested MCTO and CFGPN sub-sections
+with space-separated values (vs underscore-separated in the main sections).
+These must be rebuilt from the actual data to avoid stale template data leaking
+through. The RECIPE_SELECTION section is cleared so recipe_selection.py can
+write fresh results at runtime.
 """
 import os
 import re
@@ -21,6 +29,18 @@ import logging
 from typing import Dict, Optional, List, Tuple
 
 logger = logging.getLogger("bento_app")
+
+# Keys whose SAP values use underscores but RAW_VALUES needs spaces.
+# e.g. SAP returns "MASS_FLASH" but RAW_VALUES needs "MASS FLASH".
+_RAW_VALUE_SPACE_KEYS = {
+    "ARCHITECTURE", "FAMILY", "I_O_SUPPLY_VOLTAGE", "MFG_PLANNING_GROUP",
+    "MICRON_DEVICE_NAME", "PRODUCT_FAMILY", "PRODUCT_GROUP",
+    "PRODUCT_TECHNOLOGY", "PROJECT_NAME", "SUPPLY_VOLTAGE",
+    "CUST_SERIAL_FORMAT", "FIDB_CERTIFICATION_NUM_2",
+    "FIDB_MARKING_ON_TRAY", "FIDB_MODULE_SPEED", "FIDB_MOD_FORM_FACTOR",
+    "FIDB_PRODUCT_NAME", "FIDB_SN_BYTE_PAD", "LED_BEHAVIOR",
+    "MICRON_SERIAL_FORMAT", "BUILDDAT",
+}
 
 # Path to template
 _RESOURCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources")
@@ -97,6 +117,18 @@ class TmptravlGenerator:
 
         # Step 2: Customize sections
         # Mirrors CAT's CustomiseTmptravl line-by-line parsing
+        #
+        # CRITICAL: The template has a $$_BEGIN_SECTION_RAW_VALUES section that
+        # contains NESTED $$_BEGIN_SECTION_MCTO and $$_BEGIN_SECTION_CFGPN
+        # sub-sections.  Without tracking RAW_VALUES, the nested sections get
+        # replaced with real data while the RAW_VALUES header retains stale
+        # template data — causing recipe_selection.py to see contradictory
+        # attributes and fail.
+        #
+        # Fix: Track within_raw_values.  When inside RAW_VALUES, rebuild the
+        # entire section from actual CFGPN/MCTO data (with space-separated
+        # values matching the RAW_VALUES format).  Also clear the
+        # RECIPE_SELECTION section so recipe_selection.py writes fresh results.
         with open(output_path, 'r+') as f:
             content = f.readlines()
             f.seek(0)
@@ -107,9 +139,57 @@ class TmptravlGenerator:
             within_mcto = False
             within_equipment = False
             within_drive_info = False
+            within_raw_values = False
+            within_recipe_selection = False
 
             for line in content:
-                # ── CFGPN Section ──
+                # ── RAW_VALUES Section ──
+                # This section contains nested MCTO/CFGPN sub-sections with
+                # space-separated values.  We rebuild it entirely from actual
+                # data to prevent stale template data from leaking through.
+                if "$$_BEGIN_SECTION_RAW_VALUES" in line:
+                    within_raw_values = True
+                    f.write(line)
+                    # Write RAW_VALUES header: space-separated versions of
+                    # select CFGPN attributes (mirrors CAT's raw value format)
+                    self._write_raw_values_header(f, cfgpn_dict, mam_dict)
+                    f.write("\n")
+                    # Write nested MCTO sub-section with space-separated values
+                    f.write("$$_BEGIN_SECTION_MCTO\n")
+                    self._write_raw_values_mcto(f, mcto_dict)
+                    f.write("$$_END_SECTION_MCTO\n")
+                    f.write("\n")
+                    # Write nested CFGPN sub-section with space-separated values
+                    f.write("$$_BEGIN_SECTION_CFGPN\n")
+                    self._write_raw_values_cfgpn(f, cfgpn_dict, mam_dict)
+                    f.write("$$_END_SECTION_CFGPN\n")
+                    continue
+                elif "$$_END_SECTION_RAW_VALUES" in line:
+                    within_raw_values = False
+                    f.write(line)
+                    continue
+                elif within_raw_values:
+                    # Skip all template content inside RAW_VALUES — we already
+                    # wrote the rebuilt content above.
+                    continue
+
+                # ── RECIPE_SELECTION Section ──
+                # Clear this section so recipe_selection.py writes fresh
+                # results at runtime.  Keep the section markers but remove
+                # all stale content between them.
+                if "$$_BEGIN_SECTION_RECIPE_SELECTION" in line:
+                    within_recipe_selection = True
+                    f.write(line)
+                    continue
+                elif "$$_END_SECTION_RECIPE_SELECTION" in line:
+                    within_recipe_selection = False
+                    f.write(line)
+                    continue
+                elif within_recipe_selection:
+                    # Skip stale recipe selection content
+                    continue
+
+                # ── CFGPN Section (top-level only) ──
                 if "$$_BEGIN_SECTION_CFGPN" in line:
                     within_cfgpn = True
                     f.write(line)
@@ -122,7 +202,7 @@ class TmptravlGenerator:
                     within_cfgpn = False
                     f.write(line)
 
-                # ── MCTO Section ──
+                # ── MCTO Section (top-level only) ──
                 elif "$$_BEGIN_SECTION_MCTO" in line:
                     within_mcto = True
                     f.write(line)
@@ -158,6 +238,92 @@ class TmptravlGenerator:
 
         logger.info(f"Customised tmptravl written: {output_path}")
         return output_path
+
+    @staticmethod
+    def _to_raw_value(key: str, value: str) -> str:
+        """Convert an underscore-separated SAP value to space-separated RAW_VALUES format.
+
+        RAW_VALUES uses human-readable space-separated values, e.g.:
+          SAP:        MASS_FLASH  →  RAW_VALUES: MASS FLASH
+          SAP:        7600_MAX    →  RAW_VALUES: 7600 MAX
+
+        Only keys in _RAW_VALUE_SPACE_KEYS are converted; others pass through as-is.
+        """
+        if key in _RAW_VALUE_SPACE_KEYS:
+            return value.replace("_", " ")
+        return value
+
+    @staticmethod
+    def _write_raw_values_header(
+        f,
+        cfgpn_dict: Dict[str, str],
+        mam_dict: Dict[str, str],
+    ):
+        """Write the RAW_VALUES header block (non-nested attributes).
+
+        These are space-separated versions of select CFGPN/MAM attributes.
+        Mirrors the structure seen in production tmptravl files.
+        """
+        # Keys to include in the RAW_VALUES header, sourced from CFGPN first,
+        # then MAM as fallback.  Order matches production files.
+        _HEADER_KEYS = [
+            "ARCHITECTURE", "FAMILY", "I_O_SUPPLY_VOLTAGE",
+            "MFG_PLANNING_GROUP", "MICRON_DEVICE_NAME", "PRODUCT_FAMILY",
+            "PRODUCT_GROUP", "PRODUCT_TECHNOLOGY", "PROJECT_NAME",
+            "SUPPLY_VOLTAGE", "CUST_SERIAL_FORMAT",
+            "FIDB_CERTIFICATION_NUM_2", "FIDB_MARKING_ON_TRAY",
+            "FIDB_MODULE_SPEED", "FIDB_MOD_FORM_FACTOR",
+            "FIDB_PRODUCT_NAME", "FIDB_SN_BYTE_PAD", "LED_BEHAVIOR",
+            "MICRON_SERIAL_FORMAT", "BUILDDAT",
+        ]
+        for key in _HEADER_KEYS:
+            value = cfgpn_dict.get(key) or mam_dict.get(key, "")
+            if value:
+                f.write(f"{key}: {TmptravlGenerator._to_raw_value(key, value)}\n")
+
+    @staticmethod
+    def _write_raw_values_mcto(f, mcto_dict: Dict[str, str]):
+        """Write the nested MCTO sub-section inside RAW_VALUES.
+
+        Uses space-separated values for keys in _RAW_VALUE_SPACE_KEYS.
+        Only includes the subset of MCTO keys that appear in RAW_VALUES.
+        """
+        _MCTO_RAW_KEYS = [
+            "ARCHITECTURE", "FAMILY", "I_O_SUPPLY_VOLTAGE",
+            "MFG_PLANNING_GROUP", "MICRON_DEVICE_NAME", "PRODUCT_FAMILY",
+            "PRODUCT_GROUP", "PRODUCT_TECHNOLOGY", "PROJECT_NAME",
+            "SUPPLY_VOLTAGE",
+        ]
+        for key in _MCTO_RAW_KEYS:
+            value = mcto_dict.get(key, "")
+            if value:
+                f.write(f"{key}: {TmptravlGenerator._to_raw_value(key, value)}\n")
+
+    @staticmethod
+    def _write_raw_values_cfgpn(
+        f,
+        cfgpn_dict: Dict[str, str],
+        mam_dict: Dict[str, str],
+    ):
+        """Write the nested CFGPN sub-section inside RAW_VALUES.
+
+        Uses space-separated values for keys in _RAW_VALUE_SPACE_KEYS.
+        Sources from cfgpn_dict first, then mam_dict as fallback.
+        """
+        _CFGPN_RAW_KEYS = [
+            "ARCHITECTURE", "CUST_SERIAL_FORMAT", "FAMILY",
+            "FIDB_CERTIFICATION_NUM_2", "FIDB_MARKING_ON_TRAY",
+            "FIDB_MODULE_SPEED", "FIDB_MOD_FORM_FACTOR",
+            "FIDB_PRODUCT_NAME", "FIDB_SN_BYTE_PAD",
+            "I_O_SUPPLY_VOLTAGE", "LED_BEHAVIOR", "MFG_PLANNING_GROUP",
+            "MICRON_DEVICE_NAME", "MICRON_SERIAL_FORMAT", "PRODUCT_FAMILY",
+            "PRODUCT_GROUP", "PRODUCT_TECHNOLOGY", "PROJECT_NAME",
+            "SUPPLY_VOLTAGE", "BUILDDAT",
+        ]
+        for key in _CFGPN_RAW_KEYS:
+            value = cfgpn_dict.get(key) or mam_dict.get(key, "")
+            if value:
+                f.write(f"{key}: {TmptravlGenerator._to_raw_value(key, value)}\n")
 
     def generate_for_checkout(
         self,
