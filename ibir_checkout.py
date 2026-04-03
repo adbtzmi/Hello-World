@@ -79,17 +79,26 @@ CONFIG = {
 # CONSTANTS
 # ===========================================================================
 
-SCRIPT_VERSION = '1.0.0'
+SCRIPT_VERSION = '1.1.0'
 SCRIPT_NAME = 'IBIR Checkout Automation'
 
 WORKSPACE_BASE = r'C:\Tanisys\DNA2\User\Workspace'
 H4_EXE_PATH = r'C:\Program Files (x86)\DNA2\R1.10\Bin\H4.exe'
-TSUM_STAGING = r'D:\test_program\summary_staging'
 RPYC_LOG_DIR = r'C:\rpyc_logs'
 PROFILE_LOG_DIR = r'C:\test_program\profile_logs'
 DIAG_LOG_DIR = r'C:\Tanisys\DNA2\User\diagnostics'
 TESTER_CTRL_XML = r'C:\ModAuto\SSDTesterCtrlr\SSDTesterCtrlr.xml'
 LAST_CONFIG_PATH = r'C:\temp\BENTO\last_checkout_config.json'
+
+# Engineering checkout result paths (from actual IBIR-0383 tester)
+ENG_SUMMARY_PATH = r'C:\test_program\eng_summary_staging'
+ENG_CACHE_PATH = r'C:\test_program\eng_cache'
+PROD_SUMMARY_PATH = r'D:\test_program\summary_staging'
+PLAYGROUND_QUEUE_PATH = r'C:\test_program\playground_queue'
+
+# Blade SN prefixes — used to distinguish blade workspace folders
+# from product workspace folders (e.g. 6500_Vintage_ABIT)
+BLADE_SN_PREFIXES = ('ANSKR', 'ENSKR', 'CNSKR')
 
 # H4 GUI control auto_ids (from pywinauto inspection)
 H4_CONTROLS = {
@@ -348,7 +357,9 @@ def print_config(config):
     print('  Workspace:    %s' % ws)
     print('  Recipe:       %s' % recipe)
     print('  Dwelling:     %s' % dwelling)
-    print('  TSUM staging: %s' % TSUM_STAGING)
+    print('  Eng Summary:  %s' % ENG_SUMMARY_PATH)
+    print('  Eng Cache:    %s' % ENG_CACHE_PATH)
+    print('  Prod Summary: %s' % PROD_SUMMARY_PATH)
     print('--- END PATHS ---')
     print('')
 
@@ -391,7 +402,16 @@ def _detect_tester_model():
 
 def _find_newest_workspace():
     """
-    Scan WORKSPACE_BASE for the most recently created *-x-x folder.
+    Scan WORKSPACE_BASE for the most recently modified blade workspace folder.
+
+    Workspace folder naming (from actual IBIR-0383 tester):
+      {BLADE_SN}-{PRIMITIVE}-{SLOT}          e.g. ANSKR20215608072200-1-0
+      {BLADE_SN}-{PRIMITIVE}-{SLOT}-{SUFFIX}  e.g. ANSKR20215608072200-1-0-MN2
+      {BLADE_SN}-{PRIMITIVE}-{SLOT}_{SUFFIX}  e.g. ANSKR20215608072200-1-0_MUN2
+
+    Blade SN prefixes: ANSKR, ENSKR, CNSKR
+    Non-blade folders (skipped): 6500_Vintage_ABIT, 7500_Vintage_SF, etc.
+
     Returns (workspace_path, blade_sn) or (None, None).
     """
     if not os.path.isdir(WORKSPACE_BASE):
@@ -400,31 +420,43 @@ def _find_newest_workspace():
 
     blade_folders = []
     for f in os.listdir(WORKSPACE_BASE):
-        if f.endswith('-x-x') and os.path.isdir(
-            os.path.join(WORKSPACE_BASE, f)
-        ):
-            blade_folders.append(f)
+        full = os.path.join(WORKSPACE_BASE, f)
+        if not os.path.isdir(full):
+            continue
+        # Match blade SN prefixes only (skip product folders)
+        starts_with_blade = False
+        for prefix in BLADE_SN_PREFIXES:
+            if f.startswith(prefix):
+                starts_with_blade = True
+                break
+        if starts_with_blade and '-' in f:
+            mtime = os.path.getmtime(full)
+            blade_folders.append((f, mtime, full))
 
     if not blade_folders:
-        log('No *-x-x workspace folders found in %s' % WORKSPACE_BASE,
+        log('No blade workspace folders found in %s' % WORKSPACE_BASE,
             'WARNING')
         return None, None
 
-    # Sort by creation time, newest first
-    blade_folders.sort(
-        key=lambda f: os.path.getctime(
-            os.path.join(WORKSPACE_BASE, f)
-        ),
-        reverse=True
-    )
+    # Sort by modification time, newest first
+    blade_folders.sort(key=lambda x: x[1], reverse=True)
 
-    newest = blade_folders[0]
-    ws_path = os.path.join(WORKSPACE_BASE, newest)
-    blade_sn = newest.replace('-x-x', '')
+    newest_name = blade_folders[0][0]
+    ws_path = blade_folders[0][2]
 
-    log('Found newest workspace: %s' % newest)
+    # Extract blade SN (first part before first dash)
+    # ANSKR20285608083800-1-3 -> ANSKR20285608083800
+    blade_sn = newest_name.split('-')[0]
+
+    log('Found newest workspace: %s' % newest_name)
+    log('  Blade SN: %s' % blade_sn)
     if len(blade_folders) > 1:
-        log('  (%d total workspaces found)' % len(blade_folders))
+        log('  (%d total blade workspaces found)' % len(blade_folders))
+        # Show top 5 for reference
+        for fname, mt, fp in blade_folders[:5]:
+            mt_str = datetime.datetime.fromtimestamp(mt).strftime(
+                '%Y-%m-%d %H:%M')
+            log('    [%s] %s' % (mt_str, fname))
 
     return ws_path, blade_sn
 
@@ -746,15 +778,23 @@ def auto_extract_config(xml_path=None, mid=None, lot_id=None,
     ws_path = None
 
     if blade_sn:
-        # If blade_sn provided, construct path directly
-        folder_name = '%s-x-x' % blade_sn
-        candidate = os.path.join(WORKSPACE_BASE, folder_name)
-        if os.path.isdir(candidate):
-            ws_path = candidate
-            log('  Workspace found (from blade_sn): %s' % ws_path)
-        else:
-            log('  Workspace not found for blade_sn=%s' % blade_sn,
-                'WARNING')
+        # If blade_sn provided, find the newest matching workspace
+        # Pattern: {BLADE_SN}-{PRIMITIVE}-{SLOT}[optional suffix]
+        if os.path.isdir(WORKSPACE_BASE):
+            matches = []
+            for f in os.listdir(WORKSPACE_BASE):
+                if f.startswith(blade_sn + '-') and os.path.isdir(
+                    os.path.join(WORKSPACE_BASE, f)
+                ):
+                    fp = os.path.join(WORKSPACE_BASE, f)
+                    matches.append((f, os.path.getmtime(fp), fp))
+            if matches:
+                matches.sort(key=lambda x: x[1], reverse=True)
+                ws_path = matches[0][2]
+                log('  Workspace found (from blade_sn): %s' % ws_path)
+            else:
+                log('  No workspace matching blade_sn=%s' % blade_sn,
+                    'WARNING')
 
     if not ws_path:
         ws_path, detected_blade_sn = _find_newest_workspace()
@@ -770,9 +810,14 @@ def auto_extract_config(xml_path=None, mid=None, lot_id=None,
                 blade_sn or ''
             )
             if blade_sn:
-                ws_path = os.path.join(
-                    WORKSPACE_BASE, '%s-x-x' % blade_sn
-                )
+                # Try to find any matching folder
+                if os.path.isdir(WORKSPACE_BASE):
+                    for f in os.listdir(WORKSPACE_BASE):
+                        if f.startswith(blade_sn) and os.path.isdir(
+                            os.path.join(WORKSPACE_BASE, f)
+                        ):
+                            ws_path = os.path.join(WORKSPACE_BASE, f)
+                            break
 
     config['BLADE_SN'] = blade_sn or ''
 
@@ -816,12 +861,76 @@ def auto_extract_config(xml_path=None, mid=None, lot_id=None,
     config['PRODUCT'] = product
 
     # ---------------------------------------------------------------
-    # 0f) Set MID, LOT_ID, DUT_SLOT from args or XML
+    # 0f) Parse playground queue for MID/LOT/JIRA (FIX 3)
     # ---------------------------------------------------------------
-    log('--- 0f) Set MID / LOT / DUT ---')
+    log('--- 0f) Parse Playground Queue ---')
+    pq_mid = ''
+    pq_lot = ''
+    pq_jira = ''
+    pq_tester = ''
+    if os.path.isdir(PLAYGROUND_QUEUE_PATH):
+        pq_files = os.listdir(PLAYGROUND_QUEUE_PATH)
+        # Find Profile_*.xml files (contain MID and LOT in filename)
+        profile_files = [
+            f for f in pq_files
+            if f.startswith('Profile_') and f.lower().endswith('.xml')
+        ]
+        if profile_files:
+            # Sort by modification time, newest first
+            profile_files.sort(
+                key=lambda f: os.path.getmtime(
+                    os.path.join(PLAYGROUND_QUEUE_PATH, f)
+                ),
+                reverse=True
+            )
+            newest_profile = profile_files[0]
+            log('  Newest playground profile: %s' % newest_profile)
 
-    config['MID'] = mid or xml_data.get('MID', '')
-    config['LOT_ID'] = lot_id or xml_data.get('LOT_ID', '')
+            # Parse filename:
+            # Profile_TSESSD-14270_IBIR-0383_ABIT_T1B21FR5T_JAANTJ4001_20260401_104558.xml
+            name_no_ext = newest_profile.replace('.xml', '')
+            parts = name_no_ext.split('_')
+            # parts[0] = 'Profile'
+            # parts[1] = 'TSESSD-14270'    (JIRA)
+            # parts[2] = 'IBIR-0383'       (TESTER)
+            # parts[3] = 'ABIT'            (PLATFORM)
+            # parts[4] = 'T1B21FR5T'       (MID)
+            # parts[5] = 'JAANTJ4001'      (LOT)
+            # parts[6] = '20260401'        (DATE)
+            # parts[7] = '104558'          (TIME)
+            if len(parts) >= 8:
+                pq_jira = parts[1]
+                pq_tester = parts[2]
+                pq_mid = parts[4]
+                pq_lot = parts[5]
+                log('  From profile filename:')
+                log('    JIRA:    %s' % pq_jira)
+                log('    Tester:  %s' % pq_tester)
+                log('    MID:     %s' % pq_mid)
+                log('    LOT:     %s' % pq_lot)
+            elif len(parts) >= 6:
+                # Shorter format — try best effort
+                pq_jira = parts[1]
+                pq_tester = parts[2]
+                log('  Partial parse: JIRA=%s Tester=%s' % (
+                    pq_jira, pq_tester))
+        else:
+            log('  No Profile_*.xml files in playground queue')
+    else:
+        log('  Playground queue not found: %s' % PLAYGROUND_QUEUE_PATH,
+            'WARNING')
+
+    # Update tester ID from playground queue if not already set
+    if pq_tester and not config.get('TESTER_ID'):
+        config['TESTER_ID'] = pq_tester
+
+    # ---------------------------------------------------------------
+    # 0g) Set MID, LOT_ID, DUT_SLOT from args, XML, or playground queue
+    # ---------------------------------------------------------------
+    log('--- 0g) Set MID / LOT / DUT ---')
+
+    config['MID'] = mid or xml_data.get('MID', '') or pq_mid
+    config['LOT_ID'] = lot_id or xml_data.get('LOT_ID', '') or pq_lot
 
     if dut_slot is not None:
         config['DUT_SLOT'] = dut_slot
@@ -1149,6 +1258,8 @@ def run_post_playground(xml_path=None, mid=None, lot_id=None,
         'completed': False,
         'duration_minutes': 0,
         'tsum_file': None,
+        'result_folder': None,
+        'detection_method': None,
         'result': 'UNKNOWN',
         'error_message': '',
         'start_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -1194,8 +1305,10 @@ def run_post_playground(xml_path=None, mid=None, lot_id=None,
     print('  Total Script: %s' % format_duration(overall_elapsed))
     if results_dir:
         print('  Results:      %s' % results_dir)
-    if test_result.get('tsum_file'):
-        print('  TSUM:         %s' % test_result['tsum_file'])
+    if test_result.get('result_folder'):
+        print('  Result Dir:   %s' % test_result['result_folder'])
+    if test_result.get('detection_method'):
+        print('  Detected By:  %s' % test_result['detection_method'])
     if test_result.get('error_message'):
         print('  Error:        %s' % test_result['error_message'])
     print('=' * 60)
@@ -2035,7 +2148,21 @@ def run_test_h4(config):
 
 def monitor_test_completion(config):
     """
-    Monitor for test completion by watching TSUM files and logs.
+    Monitor for test completion by watching engineering result folders.
+
+    Detection methods (from actual IBIR-0383 tester):
+      1. PRIMARY: Watch C:\\test_program\\eng_summary_staging\\ for new
+         ENGSUMM-{LOT}_ABIT folders
+      2. SECONDARY: Watch C:\\test_program\\eng_cache\\ for new
+         {LOT}_ABIT folders
+      3. BACKUP: Watch D:\\test_program\\summary_staging\\ for new
+         SUMM-{LOT}_ABIT folders (production lots)
+      4. RPYC LOG: Watch C:\\rpyc_logs\\rpyc_log_{date}.log for
+         completion/error keywords
+
+    NOTE: No .tsum files exist on IBIR testers. Engineering results
+    are stored as FOLDERS, not files.
+
     Returns a result dictionary.
     """
     log_step(4, 'Monitor Test Completion')
@@ -2050,31 +2177,48 @@ def monitor_test_completion(config):
         'completed': False,
         'duration_minutes': 0,
         'tsum_file': None,
+        'result_folder': None,
         'result': 'UNKNOWN',
         'error_message': '',
         'start_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'end_time': '',
+        'detection_method': '',
     }
 
     # ---------------------------------------------------------------
-    # 4a) Snapshot existing TSUM files
+    # 4a) Snapshot existing result folders
     # ---------------------------------------------------------------
-    log('--- 4a) Snapshot TSUM Files ---')
-    existing_tsums = set()
-    if os.path.isdir(TSUM_STAGING):
-        for f in os.listdir(TSUM_STAGING):
-            if f.lower().endswith('.tsum'):
-                existing_tsums.add(f)
-        log('  Found %d existing TSUM files (will ignore these)' %
-            len(existing_tsums))
+    log('--- 4a) Snapshot Result Folders ---')
+
+    snapshot_eng_summary = set()
+    if os.path.isdir(ENG_SUMMARY_PATH):
+        snapshot_eng_summary = set(os.listdir(ENG_SUMMARY_PATH))
+        log('  eng_summary_staging: %d existing folders' %
+            len(snapshot_eng_summary))
     else:
-        log('  TSUM staging directory not found: %s' % TSUM_STAGING,
+        log('  eng_summary_staging not found: %s' % ENG_SUMMARY_PATH,
             'WARNING')
-        log('  Will rely on log monitoring only.')
+
+    snapshot_eng_cache = set()
+    if os.path.isdir(ENG_CACHE_PATH):
+        snapshot_eng_cache = set(os.listdir(ENG_CACHE_PATH))
+        log('  eng_cache: %d existing folders' % len(snapshot_eng_cache))
+    else:
+        log('  eng_cache not found: %s' % ENG_CACHE_PATH, 'WARNING')
+
+    snapshot_prod_summary = set()
+    if os.path.isdir(PROD_SUMMARY_PATH):
+        snapshot_prod_summary = set(os.listdir(PROD_SUMMARY_PATH))
+        log('  prod_summary_staging: %d existing folders' %
+            len(snapshot_prod_summary))
+    else:
+        log('  prod_summary_staging not found: %s' % PROD_SUMMARY_PATH,
+            'WARNING')
 
     log('--- Monitoring Started ---')
     log('  Timeout: %s' % format_duration(timeout_sec))
     log('  Poll interval: %ds' % poll_sec)
+    log('  Watching for LOT: %s' % config.get('LOT_ID', 'ANY'))
     log('  Press Ctrl+C to interrupt monitoring')
     print('')
 
@@ -2087,7 +2231,6 @@ def monitor_test_completion(config):
                 log('WARNING: Test has exceeded timeout of %s!' %
                     format_duration(timeout_sec), 'WARNING')
                 if ask_user('Continue waiting?', 'n'):
-                    # Extend timeout by another hour
                     timeout_sec += 3600
                     log('Timeout extended by 1 hour.')
                 else:
@@ -2100,42 +2243,105 @@ def monitor_test_completion(config):
                     return result
 
             # -------------------------------------------------------
-            # 4a) Check for new TSUM files
+            # 4b) Check for new engineering summary folders
             # -------------------------------------------------------
-            if os.path.isdir(TSUM_STAGING):
-                current_tsums = set()
-                for f in os.listdir(TSUM_STAGING):
-                    if f.lower().endswith('.tsum'):
-                        current_tsums.add(f)
+            if os.path.isdir(ENG_SUMMARY_PATH):
+                current = set(os.listdir(ENG_SUMMARY_PATH))
+                new_folders = current - snapshot_eng_summary
+                if new_folders:
+                    # Filter for ENGSUMM-* pattern
+                    eng_folders = [
+                        f for f in new_folders
+                        if f.startswith('ENGSUMM-')
+                    ]
+                    if eng_folders:
+                        result_folder = sorted(eng_folders)[0]
+                        result_path = os.path.join(
+                            ENG_SUMMARY_PATH, result_folder)
+                        log('NEW ENG SUMMARY DETECTED: %s' % result_folder)
+                        log('  Path: %s' % result_path)
 
-                new_tsums = current_tsums - existing_tsums
-                if new_tsums:
-                    tsum_file = sorted(new_tsums)[0]
-                    tsum_path = os.path.join(TSUM_STAGING, tsum_file)
-                    log('NEW TSUM FILE DETECTED: %s' % tsum_file)
-                    log('  Path: %s' % tsum_path)
-
-                    result['completed'] = True
-                    result['tsum_file'] = tsum_path
-                    result['duration_minutes'] = int(elapsed / 60)
-                    result['end_time'] = datetime.datetime.now().strftime(
-                        '%Y-%m-%d %H:%M:%S')
-
-                    # Try to determine PASS/FAIL from TSUM filename
-                    tsum_upper = tsum_file.upper()
-                    if 'PASS' in tsum_upper:
-                        result['result'] = 'PASS'
-                    elif 'FAIL' in tsum_upper:
-                        result['result'] = 'FAIL'
-                    else:
+                        result['completed'] = True
+                        result['result_folder'] = result_path
+                        result['duration_minutes'] = int(elapsed / 60)
+                        result['end_time'] = (
+                            datetime.datetime.now().strftime(
+                                '%Y-%m-%d %H:%M:%S'))
                         result['result'] = 'COMPLETE'
+                        result['detection_method'] = 'eng_summary_staging'
 
-                    log('Test COMPLETED! Result: %s' % result['result'])
-                    log('Duration: %s' % format_duration(elapsed))
-                    return result
+                        log('Test COMPLETED! (eng_summary_staging)')
+                        log('Duration: %s' % format_duration(elapsed))
+                        return result
 
             # -------------------------------------------------------
-            # 4b) Check RPYC log for completion/error keywords
+            # 4c) Check for new engineering cache folders
+            # -------------------------------------------------------
+            if os.path.isdir(ENG_CACHE_PATH):
+                current = set(os.listdir(ENG_CACHE_PATH))
+                new_folders = current - snapshot_eng_cache
+                if new_folders:
+                    # Filter for {LOT}_ABIT pattern
+                    lot_id = config.get('LOT_ID', '')
+                    cache_folders = []
+                    for f in new_folders:
+                        if lot_id and f.startswith(lot_id):
+                            cache_folders.append(f)
+                        elif f.endswith('_ABIT'):
+                            cache_folders.append(f)
+                    if cache_folders:
+                        result_folder = sorted(cache_folders)[0]
+                        result_path = os.path.join(
+                            ENG_CACHE_PATH, result_folder)
+                        log('NEW ENG CACHE DETECTED: %s' % result_folder)
+                        log('  Path: %s' % result_path)
+
+                        result['completed'] = True
+                        result['result_folder'] = result_path
+                        result['duration_minutes'] = int(elapsed / 60)
+                        result['end_time'] = (
+                            datetime.datetime.now().strftime(
+                                '%Y-%m-%d %H:%M:%S'))
+                        result['result'] = 'COMPLETE'
+                        result['detection_method'] = 'eng_cache'
+
+                        log('Test COMPLETED! (eng_cache)')
+                        log('Duration: %s' % format_duration(elapsed))
+                        return result
+
+            # -------------------------------------------------------
+            # 4d) Check for new production summary folders
+            # -------------------------------------------------------
+            if os.path.isdir(PROD_SUMMARY_PATH):
+                current = set(os.listdir(PROD_SUMMARY_PATH))
+                new_folders = current - snapshot_prod_summary
+                if new_folders:
+                    summ_folders = [
+                        f for f in new_folders
+                        if f.startswith('SUMM-')
+                    ]
+                    if summ_folders:
+                        result_folder = sorted(summ_folders)[0]
+                        result_path = os.path.join(
+                            PROD_SUMMARY_PATH, result_folder)
+                        log('NEW PROD SUMMARY DETECTED: %s' % result_folder)
+                        log('  Path: %s' % result_path)
+
+                        result['completed'] = True
+                        result['result_folder'] = result_path
+                        result['duration_minutes'] = int(elapsed / 60)
+                        result['end_time'] = (
+                            datetime.datetime.now().strftime(
+                                '%Y-%m-%d %H:%M:%S'))
+                        result['result'] = 'COMPLETE'
+                        result['detection_method'] = 'prod_summary_staging'
+
+                        log('Test COMPLETED! (prod_summary_staging)')
+                        log('Duration: %s' % format_duration(elapsed))
+                        return result
+
+            # -------------------------------------------------------
+            # 4e) Check RPYC log for completion/error keywords
             # -------------------------------------------------------
             rpyc_log = get_rpyc_log_path()
             if os.path.isfile(rpyc_log):
@@ -2153,26 +2359,18 @@ def monitor_test_completion(config):
                                 'Error keyword "%s" found in RPYC log' %
                                 err_kw
                             )
-                            # Don't immediately stop - some errors are
-                            # recoverable. Just alert.
                             break
 
                     # Check for completion
                     for comp_kw in COMPLETION_KEYWORDS:
                         if comp_kw.upper() in line_upper:
-                            # Check if this is a recent line (within last
-                            # poll interval)
-                            # We can't easily parse timestamps in all
-                            # formats, so just flag it
                             if 'Result Received' in line:
                                 log('Completion keyword found: %s' %
                                     line.strip()[:100])
-                                # Don't return yet - wait for TSUM file
-                                # as confirmation
                                 break
 
             # -------------------------------------------------------
-            # 4c) Status update
+            # 4f) Status update
             # -------------------------------------------------------
             now = time.time()
             if now - last_status_time >= status_interval:
@@ -2257,34 +2455,147 @@ def collect_results(config, test_result):
             return None
 
     # ---------------------------------------------------------------
-    # 5b) Copy result files
+    # 5b) Copy result files (engineering folders, not .tsum files)
     # ---------------------------------------------------------------
     log('--- 5b) Copy Result Files ---')
     collected = {}
 
-    # TSUM files
-    tsum_dst = os.path.join(results_dir, 'summary')
+    # Engineering summary folders (ENGSUMM-* from eng_summary_staging)
+    eng_summ_dst = os.path.join(results_dir, 'eng_summary')
     try:
-        if not os.path.isdir(tsum_dst):
-            os.makedirs(tsum_dst)
-        tsum_count = 0
-        tsum_size = 0
-        if os.path.isdir(TSUM_STAGING):
-            for f in os.listdir(TSUM_STAGING):
-                if f.lower().endswith('.tsum'):
-                    src = os.path.join(TSUM_STAGING, f)
-                    # Only copy files modified in the last 24 hours
+        if not os.path.isdir(eng_summ_dst):
+            os.makedirs(eng_summ_dst)
+        eng_summ_count = 0
+        eng_summ_size = 0
+        if os.path.isdir(ENG_SUMMARY_PATH):
+            lot_id = config.get('LOT_ID', '')
+            for f in os.listdir(ENG_SUMMARY_PATH):
+                src = os.path.join(ENG_SUMMARY_PATH, f)
+                if not os.path.isdir(src):
+                    continue
+                # Match ENGSUMM-{LOT}_ABIT or any folder modified recently
+                is_match = False
+                if lot_id and lot_id in f:
+                    is_match = True
+                elif f.startswith('ENGSUMM-'):
                     mtime = os.path.getmtime(src)
                     if time.time() - mtime < 86400:
-                        shutil.copy2(src, os.path.join(tsum_dst, f))
-                        tsum_count += 1
-                        tsum_size += os.path.getsize(src)
-        collected['summary'] = (tsum_count, tsum_size)
-        log('  summary/: %d files (%s)' % (
-            tsum_count, format_size(tsum_size)))
+                        is_match = True
+                if is_match:
+                    dst_folder = os.path.join(eng_summ_dst, f)
+                    try:
+                        copy_tree_contents(src, dst_folder)
+                        fc, fs = count_files_in_dir(dst_folder)
+                        eng_summ_count += fc
+                        eng_summ_size += fs
+                    except (IOError, OSError) as ce:
+                        log('  Failed to copy eng_summary folder %s: %s' % (
+                            f, str(ce)), 'WARNING')
+        collected['eng_summary'] = (eng_summ_count, eng_summ_size)
+        log('  eng_summary/: %d files (%s)' % (
+            eng_summ_count, format_size(eng_summ_size)))
     except (IOError, OSError) as e:
-        log('  Failed to copy TSUM files: %s' % str(e), 'WARNING')
-        collected['summary'] = (0, 0)
+        log('  Failed to copy eng_summary files: %s' % str(e), 'WARNING')
+        collected['eng_summary'] = (0, 0)
+
+    # Engineering cache folders ({LOT}_ABIT from eng_cache)
+    eng_cache_dst = os.path.join(results_dir, 'eng_cache')
+    try:
+        if not os.path.isdir(eng_cache_dst):
+            os.makedirs(eng_cache_dst)
+        eng_cache_count = 0
+        eng_cache_size = 0
+        if os.path.isdir(ENG_CACHE_PATH):
+            lot_id = config.get('LOT_ID', '')
+            for f in os.listdir(ENG_CACHE_PATH):
+                src = os.path.join(ENG_CACHE_PATH, f)
+                if not os.path.isdir(src):
+                    continue
+                # Match {LOT}_ABIT folders or recently modified
+                is_match = False
+                if lot_id and f.startswith(lot_id):
+                    is_match = True
+                elif '_ABIT' in f:
+                    mtime = os.path.getmtime(src)
+                    if time.time() - mtime < 86400:
+                        is_match = True
+                if is_match:
+                    dst_folder = os.path.join(eng_cache_dst, f)
+                    try:
+                        copy_tree_contents(src, dst_folder)
+                        fc, fs = count_files_in_dir(dst_folder)
+                        eng_cache_count += fc
+                        eng_cache_size += fs
+                    except (IOError, OSError) as ce:
+                        log('  Failed to copy eng_cache folder %s: %s' % (
+                            f, str(ce)), 'WARNING')
+        collected['eng_cache'] = (eng_cache_count, eng_cache_size)
+        log('  eng_cache/: %d files (%s)' % (
+            eng_cache_count, format_size(eng_cache_size)))
+    except (IOError, OSError) as e:
+        log('  Failed to copy eng_cache files: %s' % str(e), 'WARNING')
+        collected['eng_cache'] = (0, 0)
+
+    # Production summary folders (SUMM-* from summary_staging, if present)
+    prod_summ_dst = os.path.join(results_dir, 'prod_summary')
+    try:
+        if not os.path.isdir(prod_summ_dst):
+            os.makedirs(prod_summ_dst)
+        prod_summ_count = 0
+        prod_summ_size = 0
+        if os.path.isdir(PROD_SUMMARY_PATH):
+            lot_id = config.get('LOT_ID', '')
+            for f in os.listdir(PROD_SUMMARY_PATH):
+                src = os.path.join(PROD_SUMMARY_PATH, f)
+                if not os.path.isdir(src):
+                    continue
+                is_match = False
+                if lot_id and lot_id in f:
+                    is_match = True
+                elif f.startswith('SUMM-'):
+                    mtime = os.path.getmtime(src)
+                    if time.time() - mtime < 86400:
+                        is_match = True
+                if is_match:
+                    dst_folder = os.path.join(prod_summ_dst, f)
+                    try:
+                        copy_tree_contents(src, dst_folder)
+                        fc, fs = count_files_in_dir(dst_folder)
+                        prod_summ_count += fc
+                        prod_summ_size += fs
+                    except (IOError, OSError) as ce:
+                        log('  Failed to copy prod_summary folder %s: %s' % (
+                            f, str(ce)), 'WARNING')
+        collected['prod_summary'] = (prod_summ_count, prod_summ_size)
+        log('  prod_summary/: %d files (%s)' % (
+            prod_summ_count, format_size(prod_summ_size)))
+    except (IOError, OSError) as e:
+        log('  Failed to copy prod_summary files: %s' % str(e), 'WARNING')
+        collected['prod_summary'] = (0, 0)
+
+    # Playground queue XMLs (Profile_*.xml)
+    pq_dst = os.path.join(results_dir, 'playground_queue')
+    try:
+        if not os.path.isdir(pq_dst):
+            os.makedirs(pq_dst)
+        pq_count = 0
+        pq_size = 0
+        if os.path.isdir(PLAYGROUND_QUEUE_PATH):
+            for f in os.listdir(PLAYGROUND_QUEUE_PATH):
+                if f.lower().startswith('profile_') and f.lower().endswith('.xml'):
+                    src = os.path.join(PLAYGROUND_QUEUE_PATH, f)
+                    if os.path.isfile(src):
+                        mtime = os.path.getmtime(src)
+                        if time.time() - mtime < 86400:
+                            shutil.copy2(src, os.path.join(pq_dst, f))
+                            pq_count += 1
+                            pq_size += os.path.getsize(src)
+        collected['playground_queue'] = (pq_count, pq_size)
+        log('  playground_queue/: %d files (%s)' % (
+            pq_count, format_size(pq_size)))
+    except (IOError, OSError) as e:
+        log('  Failed to copy playground queue files: %s' % str(e), 'WARNING')
+        collected['playground_queue'] = (0, 0)
 
     # RPYC logs
     rpyc_dst = os.path.join(results_dir, 'rpyc_logs')
@@ -2362,7 +2673,8 @@ def collect_results(config, test_result):
         'Test End:    %s' % test_result.get('end_time', 'N/A'),
         'Duration:    %s' % duration_str,
         'Result:      %s' % test_result.get('result', 'UNKNOWN'),
-        'TSUM File:   %s' % (test_result.get('tsum_file') or 'N/A'),
+        'Result Folder: %s' % (test_result.get('result_folder') or 'N/A'),
+        'Detection:   %s' % (test_result.get('detection_method') or 'N/A'),
         '',
     ]
 
@@ -2601,6 +2913,8 @@ def main():
         'completed': False,
         'duration_minutes': 0,
         'tsum_file': None,
+        'result_folder': None,
+        'detection_method': None,
         'result': 'UNKNOWN',
         'error_message': '',
         'start_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -2652,8 +2966,10 @@ def main():
     print('  Total Script: %s' % format_duration(overall_elapsed))
     if results_dir:
         print('  Results:      %s' % results_dir)
-    if test_result.get('tsum_file'):
-        print('  TSUM:         %s' % test_result['tsum_file'])
+    if test_result.get('result_folder'):
+        print('  Result Dir:   %s' % test_result['result_folder'])
+    if test_result.get('detection_method'):
+        print('  Detected By:  %s' % test_result['detection_method'])
     if test_result.get('error_message'):
         print('  Error:        %s' % test_result['error_message'])
     print('=' * 60)
