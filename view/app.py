@@ -14,6 +14,7 @@ Tab order:
   7. 📋 Validation & Risk   (view/tabs/validation_tab.py)
 
 Checkout lives inside the Implementation sub-notebook (injected by main.py).
+Result collection (Task 2) is embedded as Section 6 inside CheckoutTab.
 """
 
 import tkinter as tk

@@ -47,6 +47,7 @@ class BentoController(metaclass=SingletonMeta):
         self.repo_controller     = None
         self.test_controller     = None
         self.force_fail_controller = None
+        self.result_controller   = None   # Task 2: result collection
 
         _logger.info("BentoController ready (Phase 2 controllers pending set_view).")
 
@@ -137,11 +138,15 @@ class BentoController(metaclass=SingletonMeta):
             self.validation_controller
         )
 
+        # Task 2: Result collection controller
+        from controller.result_controller import ResultController
+        self.result_controller = ResultController(view.context)
+
         # Wire view into compile/checkout controllers
         self.compile_controller.set_view(view)
         self.checkout_controller.set_view(view)
 
-        logger.info("BentoController: all controllers wired (Phase 3C/3D complete).")
+        logger.info("BentoController: all controllers wired (Phase 3C/3D + Task 2 complete).")
 
     # ──────────────────────────────────────────────────────────────────────
     # ACTIVE TASK GUARD
@@ -166,6 +171,8 @@ class BentoController(metaclass=SingletonMeta):
             checks.append(self.force_fail_controller.is_running())
         if hasattr(self, 'full_workflow_controller') and self.full_workflow_controller:
             checks.append(self.full_workflow_controller.is_running())
+        if hasattr(self, 'result_controller') and self.result_controller:
+            checks.append(self.result_controller.is_running())
         return any(checks)
 
     # ──────────────────────────────────────────────────────────────────────
