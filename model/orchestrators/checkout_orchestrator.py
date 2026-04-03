@@ -490,6 +490,7 @@ def generate_slate_xml(
     sap_instance:  str  = "PR1",
     autostart:     str  = "True",
     attr_overwrites: Optional[list] = None,
+    recipe_override: str = "",
     logger               = None,
     log_callback         = None,
 ) -> Optional[str]:
@@ -690,8 +691,13 @@ def generate_slate_xml(
         selector = RecipeSelector(recipe_folder=recipe_folder, python2_exe=python2_exe)
         _log(logger, f"RecipeSelector: folder={recipe_folder!r}, python2={python2_exe!r}, "
              f"available={selector.is_available}, tmptravl={tmptravl_path!r}", log_callback)
-        logger.info("DIAG: Calling recipe selection - folder=%s, python2=%s, tmptravl=%s", recipe_folder, python2_exe, tmptravl_path)
-        recipe_result = selector.select_recipe_or_fallback(tmptravl_path, step)
+        logger.info("DIAG: Calling recipe selection - folder=%s, python2=%s, tmptravl=%s, tgz=%s, recipe_override=%s",
+                     recipe_folder, python2_exe, tmptravl_path, tgz_path, recipe_override)
+        recipe_result = selector.select_recipe_or_fallback(
+            tmptravl_path, step,
+            tgz_path=tgz_path,
+            recipe_override=recipe_override,
+        )
         recipe = recipe_result.recipe_name or r"RECIPE\PEREGRINEION_NEOSEM_ABIT.XML"
         _log(logger, f"DIAG: Recipe: {recipe} (success={recipe_result.success}, source={recipe_result.source})", log_callback)
         logger.info("DIAG: Recipe result - success=%s, recipe=%s, test_program=%s, source=%s", recipe_result.success, recipe_result.recipe_name, recipe_result.test_program_path, recipe_result.source)
@@ -1434,6 +1440,7 @@ def run_checkout(
     python2_exe:     str   = "",
     site:            str   = "",
     attr_overwrites: Optional[list] = None,
+    recipe_override: str   = "",
     log_callback           = None,
     phase_callback         = None,
     cancel_event:    Optional[threading.Event] = None,
@@ -1534,6 +1541,7 @@ def run_checkout(
             sap_instance      = sap_instance,
             autostart         = autostart,
             attr_overwrites   = attr_overwrites,
+            recipe_override   = recipe_override,
             logger            = logger,
             log_callback      = log_callback,
         )

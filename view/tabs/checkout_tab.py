@@ -168,6 +168,7 @@ class CheckoutTab(BaseTab):
 
         _sv('checkout_site', 'SINGAPORE')
         _sv('checkout_tgz_path')
+        _sv('checkout_recipe_override')
         _sv('checkout_hot_folder',
             ctx.config.get('checkout', {}).get(
                 'hot_folder', r'C:\test_program\playground_queue'))
@@ -404,13 +405,35 @@ class CheckoutTab(BaseTab):
         tgz_btn.grid(row=1, column=2, padx=(6, 0), pady=(0, 4))
         _tip(tgz_btn, "Browse for a compiled TGZ archive.")
 
+        # Recipe override row
+        ttk.Label(frm, text="Recipe:").grid(
+            row=2, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
+        recipe_frame = ttk.Frame(frm)
+        recipe_frame.grid(row=2, column=1, columnspan=2, sticky="we", pady=(0, 4))
+        self._recipe_combo = ttk.Combobox(
+            recipe_frame,
+            textvariable=self.context.get_var('checkout_recipe_override'),
+            width=40,
+            state="normal",
+        )
+        self._recipe_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        _tip(self._recipe_combo,
+             "Recipe file override. Leave empty for auto-detection.\n"
+             "Click 'Scan' to list available recipes from the TGZ archive.\n"
+             "Format: RECIPE\\ProductName_neosem_STEP.XML")
+        scan_btn = ttk.Button(recipe_frame, text="Scan TGZ", width=9,
+                              command=self._scan_tgz_recipes)
+        scan_btn.pack(side=tk.LEFT, padx=(6, 0))
+        _tip(scan_btn, "Scan the selected TGZ archive for available recipe files\n"
+             "and populate the dropdown list.")
+
         # Separator
         ttk.Separator(frm, orient=tk.HORIZONTAL).grid(
-            row=2, column=0, columnspan=3, sticky="we", pady=(0, 4))
+            row=3, column=0, columnspan=3, sticky="we", pady=(0, 4))
 
         # Test Cases row
         tc_frame = ttk.Frame(frm)
-        tc_frame.grid(row=3, column=0, columnspan=3, sticky="we", pady=(0, 4))
+        tc_frame.grid(row=4, column=0, columnspan=3, sticky="we", pady=(0, 4))
 
         ttk.Label(tc_frame, text="TC:").pack(side=tk.LEFT, padx=(0, 8))
 
@@ -444,13 +467,13 @@ class CheckoutTab(BaseTab):
 
         # Separator
         ttk.Separator(frm, orient=tk.HORIZONTAL).grid(
-            row=4, column=0, columnspan=3, sticky="we", pady=(0, 4))
+            row=5, column=0, columnspan=3, sticky="we", pady=(0, 4))
 
         # Hot Folder row
         ttk.Label(frm, text="Hot Folder:").grid(
-            row=5, column=0, sticky=tk.W, padx=(0, 8))
+            row=6, column=0, sticky=tk.W, padx=(0, 8))
         hot_entry = ttk.Entry(frm, textvariable=self.context.get_var('checkout_hot_folder'))
-        hot_entry.grid(row=5, column=1, columnspan=2, sticky="we")
+        hot_entry.grid(row=6, column=1, columnspan=2, sticky="we")
         _tip(hot_entry, "Path to the SLATE hot folder where XML profiles are dropped.\n"
              "Default: C:\\test_program\\playground_queue")
 
@@ -1016,6 +1039,47 @@ class CheckoutTab(BaseTab):
             filetypes=[("TGZ archives", "*.tgz"), ("All files", "*.*")])
         if path:
             self.context.get_var('checkout_tgz_path').set(path)
+            # Auto-scan recipes when TGZ is selected
+            self._scan_tgz_recipes()
+
+    def _scan_tgz_recipes(self):
+        """Scan the selected TGZ archive for available recipe files."""
+        tgz_path = self.context.get_var('checkout_tgz_path').get().strip()
+        if not tgz_path:
+            messagebox.showwarning("No TGZ Selected",
+                                   "Please select a TGZ archive first.")
+            return
+
+        if not os.path.isfile(tgz_path):
+            messagebox.showwarning("TGZ Not Found",
+                                   f"TGZ file not found:\n{tgz_path}")
+            return
+
+        try:
+            from model.recipe_selector import scan_tgz_recipes
+            recipes = scan_tgz_recipes(tgz_path)
+            if recipes:
+                # Format as RECIPE\filename for the combobox
+                recipe_values = [f"RECIPE\\{r}" for r in recipes]
+                self._recipe_combo['values'] = recipe_values
+                # If current value is empty, don't auto-select — leave for auto-detection
+                current = self.context.get_var('checkout_recipe_override').get().strip()
+                if not current:
+                    # Show count but don't auto-select
+                    messagebox.showinfo(
+                        "Recipes Found",
+                        f"Found {len(recipes)} recipe(s) in TGZ.\n"
+                        f"Select one from the dropdown to override auto-detection,\n"
+                        f"or leave empty for automatic recipe selection.")
+            else:
+                self._recipe_combo['values'] = []
+                messagebox.showwarning(
+                    "No Recipes Found",
+                    f"No recipe XML files found in:\n{tgz_path}\n\n"
+                    f"The TGZ may not contain a recipe/ folder.")
+        except Exception as e:
+            messagebox.showerror("Scan Error",
+                                 f"Failed to scan TGZ:\n{e}")
 
     def _browse_excel(self):
         path = filedialog.askopenfilename(
@@ -1126,6 +1190,9 @@ class CheckoutTab(BaseTab):
             m = re.search(r'([A-Za-z]+-\d+)', tgz_base)
             jira_key = m.group(1) if m else ""
 
+        # ── Read recipe override from GUI combobox ────────────────────
+        recipe_override = self.context.get_var('checkout_recipe_override').get().strip()
+
         try:
             params = CheckoutParams(
                 jira_key=jira_key if jira_key else "TSESSD-XXXX",
@@ -1141,6 +1208,7 @@ class CheckoutTab(BaseTab):
                 webhook_url=webhook_url,
                 generate_tmptravl=bool(gen_tmptravl),
                 autostart="True" if autostart else "False",
+                recipe_override=recipe_override,
             )
         except ValidationError as e:
             # Show user-friendly validation errors

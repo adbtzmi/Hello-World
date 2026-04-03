@@ -2,14 +2,15 @@
 
 Mirrors CAT ProfileDump/main.py ProfileRecipe() and Extract() methods.
 When recipe_selection.py is not available (e.g., dev environments), falls back
-to the static RECIPE_MAP that currently lives in checkout_orchestrator.py.
+to scanning the TGZ for matching recipe files, then to the static RECIPE_MAP.
 """
 
 import os
 import sys
 import subprocess
 import logging
-from typing import Optional, Dict, Any
+import tarfile
+from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
@@ -298,8 +299,11 @@ class RecipeSelector:
 
         return result
 
-    def select_recipe_or_fallback(self, tmptravl_path: str, step: str, timeout: int = 120) -> RecipeResult:
-        """Try subprocess recipe selection; fall back to static map if unavailable.
+    def select_recipe_or_fallback(self, tmptravl_path: str, step: str,
+                                  timeout: int = 120,
+                                  tgz_path: str = "",
+                                  recipe_override: str = "") -> RecipeResult:
+        """Try subprocess recipe selection; fall back to TGZ scan, then static map.
 
         Parameters
         ----------
@@ -309,15 +313,37 @@ class RecipeSelector:
             Step name (e.g., 'ABIT', 'SFN2') for fallback lookup.
         timeout : int
             Subprocess timeout in seconds.
+        tgz_path : str
+            Path to the TGZ archive. Used for TGZ recipe scanning when
+            subprocess recipe selection is unavailable.
+        recipe_override : str
+            User-specified recipe override (e.g., "RECIPE\\Condor_neosem_ABIT.XML").
+            When provided, skips all recipe selection logic and uses this directly.
 
         Returns
         -------
         RecipeResult
-            Recipe selection result (from subprocess or fallback).
+            Recipe selection result (from override, subprocess, TGZ scan, or fallback).
         """
-        logger.info("DIAG: select_recipe_or_fallback called - is_available=%s, tmptravl_path=%s, tmptravl_exists=%s, step=%s",
-                     self.is_available, tmptravl_path, os.path.isfile(tmptravl_path) if tmptravl_path else False, step)
+        logger.info("DIAG: select_recipe_or_fallback called - is_available=%s, tmptravl_path=%s, "
+                     "tmptravl_exists=%s, step=%s, tgz_path=%s, recipe_override=%s",
+                     self.is_available, tmptravl_path,
+                     os.path.isfile(tmptravl_path) if tmptravl_path else False,
+                     step, tgz_path, recipe_override)
 
+        # ── Priority 0: User-specified recipe override ─────────────────
+        if recipe_override and recipe_override.strip():
+            result = RecipeResult()
+            result.recipe_name = recipe_override.strip().upper()
+            result.file_copy_paths = {
+                "RECIPE_SEL_FILE_COPY_PATHS_01": r"\\pgfsmodauto\modauto\release\ssd\config|OS\config",
+            }
+            result.success = True
+            result.source = "user_override"
+            logger.info("Using user-specified recipe override: %s", result.recipe_name)
+            return result
+
+        # ── Priority 1: Subprocess recipe selection ────────────────────
         if self.is_available and tmptravl_path and os.path.isfile(tmptravl_path):
             result = self.select_recipe(tmptravl_path, timeout)
             if result.success:
@@ -327,15 +353,33 @@ class RecipeSelector:
                 logger.info("DIAG: Recipe selection SUCCEEDED - recipe=%s, file_copy_paths_count=%d, source=%s",
                             result.recipe_name, len(result.file_copy_paths), result.source)
                 return result
-            logger.warning(f"Subprocess recipe selection failed, falling back to static map: {result.error}")
+            logger.warning(f"Subprocess recipe selection failed, falling back: {result.error}")
             logger.warning("DIAG: Subprocess recipe selection FAILED - error: %s", result.error)
         else:
             logger.warning("DIAG: Subprocess recipe selection SKIPPED - is_available=%s, tmptravl_path=%r, tmptravl_exists=%s",
                            self.is_available, tmptravl_path, os.path.isfile(tmptravl_path) if tmptravl_path else False)
 
-        # Fallback to static map (now includes file_copy_paths)
-        result = RecipeResult()
+        # ── Priority 2: TGZ recipe scan ────────────────────────────────
         step_upper = step.upper() if step else ""
+        if tgz_path and tgz_path.strip():
+            tgz_recipe = scan_tgz_for_recipe(tgz_path.strip(), step_upper)
+            if tgz_recipe:
+                result = RecipeResult()
+                result.recipe_name = tgz_recipe
+                result.file_copy_paths = {
+                    "RECIPE_SEL_FILE_COPY_PATHS_01": r"\\pgfsmodauto\modauto\release\ssd\config|OS\config",
+                }
+                result.success = True
+                result.source = "tgz_scan"
+                logger.info("Using TGZ-scanned recipe for step '%s': %s (from %s)",
+                            step_upper, result.recipe_name, tgz_path)
+                return result
+            else:
+                logger.warning("DIAG: TGZ scan found no matching recipe for step '%s' in %s",
+                               step_upper, tgz_path)
+
+        # ── Priority 3: Static fallback map ────────────────────────────
+        result = RecipeResult()
         fallback_entry = _FALLBACK_RECIPE_MAP.get(step_upper)
         if fallback_entry:
             result.recipe_name = fallback_entry["recipe_name"]
@@ -351,3 +395,96 @@ class RecipeSelector:
             logger.warning(result.error)
 
         return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TGZ RECIPE SCANNER
+# ═══════════════════════════════════════════════════════════════════════════
+
+def scan_tgz_recipes(tgz_path: str) -> List[str]:
+    """Scan a TGZ archive and return all recipe XML filenames in the recipe/ folder.
+
+    Parameters
+    ----------
+    tgz_path : str
+        Path to the .tgz archive file.
+
+    Returns
+    -------
+    list of str
+        Recipe filenames (e.g., ["Condor_neosem_ABIT.xml", "Raven_neosem_ABIT.xml"]).
+        Returns empty list if TGZ is not accessible or has no recipe/ folder.
+    """
+    recipes = []
+    if not tgz_path or not os.path.isfile(tgz_path):
+        logger.warning("scan_tgz_recipes: TGZ not found: %s", tgz_path)
+        return recipes
+
+    try:
+        with tarfile.open(tgz_path, "r:gz") as tar:
+            for member in tar.getmembers():
+                name_lower = member.name.lower()
+                # Match files in recipe/ folder that end with .xml
+                if (name_lower.startswith("recipe/") and
+                        name_lower.endswith(".xml") and
+                        "/" not in name_lower[7:]):  # No subdirectories
+                    # Extract just the filename
+                    fname = os.path.basename(member.name)
+                    recipes.append(fname)
+    except Exception as e:
+        logger.warning("scan_tgz_recipes: Failed to read TGZ %s: %s", tgz_path, e)
+
+    logger.info("scan_tgz_recipes: Found %d recipe(s) in %s", len(recipes), tgz_path)
+    return sorted(recipes)
+
+
+def scan_tgz_for_recipe(tgz_path: str, step: str) -> str:
+    """Scan a TGZ and find the best matching recipe for the given step.
+
+    Matching logic:
+      1. Look for recipes ending with _{step}.xml (case-insensitive)
+      2. Among matches, prefer *_neosem_* recipes (NEOSEM tester)
+      3. If multiple matches, pick the first alphabetically
+
+    Parameters
+    ----------
+    tgz_path : str
+        Path to the .tgz archive file.
+    step : str
+        Step name (e.g., 'ABIT', 'SFN2', 'CNFG').
+
+    Returns
+    -------
+    str
+        Recipe path in RECIPE\\<filename>.XML format (uppercased),
+        or empty string if no match found.
+    """
+    if not step:
+        return ""
+
+    recipes = scan_tgz_recipes(tgz_path)
+    if not recipes:
+        return ""
+
+    step_upper = step.upper()
+    step_suffix = f"_{step_upper}.XML"
+
+    # Find all recipes matching the step
+    matches = [r for r in recipes if r.upper().endswith(step_suffix)]
+
+    if not matches:
+        logger.warning("scan_tgz_for_recipe: No recipe matching step '%s' in %s. "
+                        "Available: %s", step, tgz_path, recipes[:10])
+        return ""
+
+    # Prefer *_neosem_* recipes
+    neosem_matches = [r for r in matches if "_neosem_" in r.lower()]
+    if neosem_matches:
+        matches = neosem_matches
+
+    # Pick first alphabetically for deterministic results
+    best = sorted(matches)[0]
+    result = f"RECIPE\\{best}".upper()
+    logger.info("scan_tgz_for_recipe: Selected '%s' for step '%s' from %d candidate(s)",
+                result, step, len(matches))
+    return result

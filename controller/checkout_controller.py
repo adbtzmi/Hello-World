@@ -553,6 +553,7 @@ class CheckoutController(object):
                                     site              = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
                                     autostart         = params.get("autostart", "False"),
                                     attr_overwrites   = row_attr_overwrites,
+                                    recipe_override   = params.get("recipe_override", ""),
                                     log_callback      = log_cb,
                                 )
                                 if xml_path:
@@ -586,6 +587,7 @@ class CheckoutController(object):
                                 python2_exe       = self._config.get("checkout", {}).get("python2_exe", ""),
                                 site              = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
                                 autostart         = params.get("autostart", "False"),
+                                recipe_override   = params.get("recipe_override", ""),
                                 log_callback      = log_cb,
                             )
                             if xml_path:
@@ -843,6 +845,7 @@ class CheckoutController(object):
                             site              = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
                             autostart         = params.get("autostart", "False"),
                             attr_overwrites   = row_attr_overwrites,
+                            recipe_override   = params.get("recipe_override", ""),
                             log_callback      = log_callback,
                             phase_callback    = phase_callback,
                             cancel_event      = self._cancel_event,
@@ -903,6 +906,7 @@ class CheckoutController(object):
                     python2_exe       = self._config.get("checkout", {}).get("python2_exe", ""),
                     site              = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
                     autostart         = params.get("autostart", "False"),
+                    recipe_override   = params.get("recipe_override", ""),
                     log_callback      = log_callback,
                     phase_callback    = phase_callback,
                     cancel_event      = self._cancel_event,

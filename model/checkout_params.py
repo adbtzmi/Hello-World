@@ -123,6 +123,9 @@ class CheckoutParams(BaseModel):
     # TempTraveler generation
     generate_tmptravl: bool = Field(default=False, description="Generate TempTraveler .dat file")
 
+    # Recipe override — user can specify exact recipe file path
+    recipe_override: str = Field(default="", description="User-specified recipe override (e.g., RECIPE\\Condor_neosem_ABIT.XML)")
+
     @field_validator('site', mode='before')
     @classmethod
     def validate_site(cls, v):
@@ -192,6 +195,7 @@ class CheckoutParams(BaseModel):
             "site": self.site,
             "autostart": self.autostart,
             "generate_tmptravl": self.generate_tmptravl,
+            "recipe_override": self.recipe_override,
         }
 
 
