@@ -692,7 +692,7 @@ def generate_slate_xml(
              f"available={selector.is_available}, tmptravl={tmptravl_path!r}", log_callback)
         logger.info("DIAG: Calling recipe selection - folder=%s, python2=%s, tmptravl=%s", recipe_folder, python2_exe, tmptravl_path)
         recipe_result = selector.select_recipe_or_fallback(tmptravl_path, step)
-        recipe = recipe_result.recipe_name or r"RECIPE:PEREGRINE\ON_NEOSEM_ABIT.XML"
+        recipe = recipe_result.recipe_name or r"RECIPE\PEREGRINEION_NEOSEM_ABIT.XML"
         _log(logger, f"DIAG: Recipe: {recipe} (success={recipe_result.success}, source={recipe_result.source})", log_callback)
         logger.info("DIAG: Recipe result - success=%s, recipe=%s, test_program=%s, source=%s", recipe_result.success, recipe_result.recipe_name, recipe_result.test_program_path, recipe_result.source)
         logger.info("DIAG: Recipe file_copy_paths count=%d, paths=%s", len(recipe_result.file_copy_paths), recipe_result.file_copy_paths)
