@@ -1376,8 +1376,8 @@ class CheckoutTab(BaseTab):
         """
         msg = result.get("message", "")
         valid = result.get("valid", "false")
-        mid_cfgpn = result.get("mid_cfgpn", "")
-        mid_mcto = result.get("mid_mcto", "")
+        lot_cfgpn = result.get("lot_cfgpn", "")
+        lot_mcto = result.get("lot_mcto", "")
 
         if valid == "true":
             self.log(f"✓ {msg}")
@@ -1391,14 +1391,14 @@ class CheckoutTab(BaseTab):
                 # Optionally highlight the row or show a warning dialog
                 cfgpn_match = result.get("cfgpn_match", "false")
                 mcto_match = result.get("mcto_match", "false")
-                if cfgpn_match != "true" and mid_cfgpn:
+                if cfgpn_match != "true" and lot_cfgpn:
                     self.log(
-                        f"   MID has CFGPN={mid_cfgpn}, "
+                        f"   Lot has CFGPN={lot_cfgpn}, "
                         f"row expects CFGPN={self._profile_data[row_idx].get('CFGPN', '?')}"
                     )
-                if mcto_match != "true" and mid_mcto:
+                if mcto_match != "true" and lot_mcto:
                     self.log(
-                        f"   MID has MCTO={mid_mcto}, "
+                        f"   Lot has MCTO={lot_mcto}, "
                         f"row expects MCTO={self._profile_data[row_idx].get('MCTO_#1', '?')}"
                     )
 
