@@ -246,7 +246,7 @@ class CheckoutTab(BaseTab):
 
     def _build_profile_section(self, parent, row):
         frm = ttk.LabelFrame(parent, text="  Profile Generation  ", padding=(8, 6, 8, 8))
-        frm.grid(row=row, column=0, sticky="we", pady=(0, 6))
+        frm.grid(row=row, column=0, sticky="we", pady=(0, 14))
         frm.columnconfigure(0, weight=1)
 
         # ── Toolbar ───────────────────────────────────────────────────────
@@ -355,7 +355,7 @@ class CheckoutTab(BaseTab):
     def _build_paths_section(self, parent, row):
         frm = ttk.LabelFrame(parent, text="  Checkout Paths & Test Cases  ",
                              padding=(8, 6, 8, 8))
-        frm.grid(row=row, column=0, sticky="we", pady=(0, 6))
+        frm.grid(row=row, column=0, sticky="we", pady=(0, 14))
         frm.columnconfigure(1, weight=1)
 
         # Site selection row
@@ -491,7 +491,7 @@ class CheckoutTab(BaseTab):
 
     def _build_detection_tester_section(self, parent, row):
         side_frame = ttk.Frame(parent)
-        side_frame.grid(row=row, column=0, sticky="we", pady=(0, 6))
+        side_frame.grid(row=row, column=0, sticky="we", pady=(0, 14))
         side_frame.columnconfigure(0, weight=1)
         side_frame.columnconfigure(1, weight=2)
 
@@ -554,7 +554,7 @@ class CheckoutTab(BaseTab):
 
     def _build_action_buttons(self, parent, row):
         btn_frame = ttk.Frame(parent)
-        btn_frame.grid(row=row, column=0, pady=(0, 6))
+        btn_frame.grid(row=row, column=0, pady=(0, 14))
 
         # Primary: Start
         self.checkout_btn = ttk.Button(
@@ -617,7 +617,7 @@ class CheckoutTab(BaseTab):
     def _build_results_section(self, parent, row):
         frm = ttk.LabelFrame(parent, text="  Checkout Results  ",
                              padding=(8, 6, 8, 8))
-        frm.grid(row=row, column=0, sticky="we", pady=(0, 0))
+        frm.grid(row=row, column=0, sticky="we", pady=(0, 14))
         frm.columnconfigure(0, weight=1)
 
         # Toolbar
@@ -1424,7 +1424,7 @@ class CheckoutTab(BaseTab):
         """Build the result collection / test progress monitoring section."""
         frm = ttk.LabelFrame(parent, text="  Result Collection & Test Progress  ",
                              padding=(8, 6, 8, 8))
-        frm.grid(row=row, column=0, sticky="we", pady=(6, 0))
+        frm.grid(row=row, column=0, sticky="we", pady=(14, 0))
         frm.columnconfigure(0, weight=1)
 
         # ── Config row 1: MIDs file + Target folder ──────────────────────
