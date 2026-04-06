@@ -111,14 +111,6 @@ class CheckoutTab(BaseTab):
         ("ATTR_OVERWRITE",      200),
     ]
 
-    # Standard ATTR_OVERWRITE entries pre-populated for user convenience.
-    # Users can remove optional entries they don't need via the ATTR_OVERWRITE editor.
-    # Format: "Section;AttrName;AttrValue;Section;AttrName;AttrValue;..."
-    # From working tester XML (PION_U2_172E.xml):
-    #   MAM;NAND_OPTION;BAD_PLANE   — NAND option (common default)
-    #   MAM;MOD_TST_SWR_NUMBER;     — SWR number (optional, value filled by user)
-    _DEFAULT_ATTR_OVERWRITE = "MAM;NAND_OPTION;BAD_PLANE;MAM;MOD_TST_SWR_NUMBER;"
-
     _AUTO_POPULATED_COLS = {"Form_Factor", "Material_Desc", "CFGPN", "MCTO_#1", "Dummy_Lot"}
 
     _EDITABLE_COLS = {
@@ -657,7 +649,7 @@ class CheckoutTab(BaseTab):
             "Form_Factor": "", "Material_Desc": "", "CFGPN": "",
             "MCTO_#1": "", "Dummy_Lot": "None", "Step": "",
             "MID": "", "Tester": "", "Primitive": "", "Dut": "",
-            "ATTR_OVERWRITE": self._DEFAULT_ATTR_OVERWRITE,
+            "ATTR_OVERWRITE": "",
         }
         self._profile_data.append(row_data)
         self._refresh_profile_grid()
@@ -667,7 +659,7 @@ class CheckoutTab(BaseTab):
             "Form_Factor": "", "Material_Desc": "", "CFGPN": "",
             "MCTO_#1": "", "Dummy_Lot": "", "Step": "",
             "MID": "", "Tester": "", "Primitive": "", "Dut": "",
-            "ATTR_OVERWRITE": self._DEFAULT_ATTR_OVERWRITE,
+            "ATTR_OVERWRITE": "",
         }
         self._profile_data.append(row_data)
         self._refresh_profile_grid()
@@ -1290,8 +1282,7 @@ class CheckoutTab(BaseTab):
                 "Dummy_Lot":      str(row_dict.get("Dummy_Lot",
                                                    material_desc or "None")).strip(),
                 "Step": "", "MID": "", "Tester": "",
-                "Primitive": "", "Dut": "",
-                "ATTR_OVERWRITE": self._DEFAULT_ATTR_OVERWRITE,
+                "Primitive": "", "Dut": "", "ATTR_OVERWRITE": "",
             })
         if not self._profile_data:
             self._profile_add_default_row()
@@ -1326,7 +1317,7 @@ class CheckoutTab(BaseTab):
                     "Tester":         "",
                     "Primitive":      mrow.get("primitive", ""),
                     "Dut":            mrow.get("dut", ""),
-                    "ATTR_OVERWRITE": attr_overwrite or self._DEFAULT_ATTR_OVERWRITE,
+                    "ATTR_OVERWRITE": attr_overwrite,
                 })
             self._refresh_profile_grid()
             self._sync_tester_column()
