@@ -482,6 +482,69 @@ class CheckoutController(object):
             target=_lookup, daemon=True, name="bento-lot-lookup"
         ).start()
 
+    # ── MID VALIDATION (verify MID → CFGPN/MCTO link) ─────────────────────────
+    def verify_mid_link(self, mid: str, row_idx: int,
+                        expected_cfgpn: str = "", expected_mcto: str = "",
+                        lot_hint: str = ""):
+        """Verify that a MID is correctly linked to the expected CFGPN/MCTO.
+
+        Runs in a background thread. On completion, calls
+        ``checkout_tab.on_mid_verify_completed(row_idx, result)``
+        on the main thread.
+
+        Parameters
+        ----------
+        mid : str
+            Module ID to verify.
+        row_idx : int
+            Row index in the profile table.
+        expected_cfgpn : str
+            Expected CFGPN (from lot lookup).
+        expected_mcto : str
+            Expected MCTO (from lot lookup).
+        lot_hint : str
+            Lot ID for facility auto-detection.
+        """
+        def _verify():
+            try:
+                from model.mam_communicator import verify_mid_lot_link
+                if self._view:
+                    self._view.root.after(
+                        0,
+                        lambda: self._view.context.log(
+                            f"Verifying MID '{mid}' link to "
+                            f"CFGPN={expected_cfgpn}, MCTO={expected_mcto}..."
+                        )
+                    )
+                result = verify_mid_lot_link(
+                    mid,
+                    expected_cfgpn=expected_cfgpn,
+                    expected_mcto=expected_mcto,
+                    lot_hint=lot_hint,
+                )
+                msg = result.get("message", "")
+                logger.info("MID verify: %s", msg)
+                if self._view:
+                    self._view.root.after(
+                        0,
+                        lambda: self._view.checkout_tab.on_mid_verify_completed(
+                            row_idx, result
+                        )
+                    )
+            except Exception as e:
+                logger.error("MID verify error: %s", e)
+                if self._view:
+                    self._view.root.after(
+                        0,
+                        lambda: self._view.context.log(
+                            f"[FAIL] MID verify error: {e}"
+                        )
+                    )
+
+        threading.Thread(
+            target=_verify, daemon=True, name="bento-mid-verify"
+        ).start()
+
     # ── GENERATE XML ONLY ─────────────────────────────────────────────────────
     def generate_xml_only(self, params):
         """

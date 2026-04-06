@@ -700,3 +700,282 @@ def query_lot_cfgpn_mcto(
         logger.exception(result["error"])
 
     return result
+
+
+# ── MID VALIDATION ─────────────────────────────────────────────────────────────
+
+def _build_mid_report_soap(dest: str, system: str, mid: str) -> str:
+    """Build SOAP message for MAM report query by MID.
+
+    Similar to ``_build_lot_report_soap()`` but uses ``MODULE MID`` as the
+    criteria item instead of ``MODULE LOT ID``.
+
+    Parameters
+    ----------
+    dest : str
+        MIPC destination path.
+    system : str
+        MAM system identifier (e.g. ``"MODSI"``, ``"MODPG"``).
+    mid : str
+        Module ID to query.
+
+    Returns
+    -------
+    str
+        SOAP XML message string.
+    """
+    attrs_xml = "\n".join(
+        f"<Value>{attr}</Value>" for attr in _LOT_LOOKUP_ATTRS
+    )
+    return f"""
+    <SOAP-ENV:Envelope xmlns:SOAP-ENV='http://schemas.xmlsoap.org/soap/envelope'>
+        <SOAP-ENV:Header>
+            <MTXMLMsg MsgType='CMD'/>
+            <Delivery>
+                <Dest>{dest}</Dest>
+                <Src/>
+                <Reply/>
+                <TransportType>MIPC</TransportType>
+            </Delivery>
+        </SOAP-ENV:Header>
+        <SOAP-ENV:Body>
+            <MAMReport>
+                <REPORTID>Module Lots with Attributes</REPORTID>
+                <APP>{system}</APP>
+                <FORMAT>XML</FORMAT>
+                <ACTION>REPORT</ACTION>
+                <CRITERIA>
+                    <CriteriaList>
+                        <Criteria>
+                            <Item>MODULE MID</Item>
+                            <Rel>in</Rel>
+                            <ValueList>
+                                <Value>{mid}</Value>
+                            </ValueList>
+                        </Criteria>
+                        <Criteria>
+                            <Item>ATTRS TO DISPLAY</Item>
+                            <Rel>in</Rel>
+                            <ValueList>
+                                {attrs_xml}
+                            </ValueList>
+                        </Criteria>
+                    </CriteriaList>
+                </CRITERIA>
+            </MAMReport>
+        </SOAP-ENV:Body>
+    </SOAP-ENV:Envelope>"""
+
+
+def query_mid_cfgpn_mcto(
+    mid: str,
+    site: str = "",
+    lot_hint: str = "",
+    timeout: int = 360,
+) -> Dict[str, str]:
+    """Query MAM via MIPC SOAP to get CFGPN and MCTO for a MID.
+
+    Uses the same MIPC web gateway as ``query_lot_cfgpn_mcto()`` but
+    queries by ``MODULE MID`` instead of ``MODULE LOT ID``.
+
+    Parameters
+    ----------
+    mid : str
+        Module ID to query (e.g. ``"TC10WZ8P9"``).
+    site : str, optional
+        Force a specific site (``"SINGAPORE"`` or ``"PENANG"``).
+        If empty, auto-detected from ``lot_hint`` prefix, or defaults
+        to ``"PENANG"``.
+    lot_hint : str, optional
+        A lot ID used to auto-detect the facility when ``site`` is empty.
+    timeout : int
+        MIPC timeout in seconds (default 360).
+
+    Returns
+    -------
+    dict
+        Dict with keys:
+        - ``"cfgpn"`` -- BASE CFGPN value (empty string if not found)
+        - ``"mcto"`` -- MODULE FGPN value (empty string if not found)
+        - ``"step"`` -- STEP OR LOCATION value (empty string if not found)
+        - ``"success"`` -- ``"true"`` or ``"false"``
+        - ``"error"`` -- error message if failed
+        - ``"all_attrs"`` -- dict of all returned attributes
+    """
+    result: Dict[str, str] = {
+        "cfgpn": "",
+        "mcto": "",
+        "step": "",
+        "success": "false",
+        "error": "",
+    }
+
+    if not mid or not mid.strip():
+        result["error"] = "No MID provided"
+        return result
+
+    mid = mid.strip()
+
+    if not HAS_ZEEP:
+        result["error"] = "zeep not available -- cannot query MAM via SOAP"
+        logger.warning(result["error"])
+        return result
+
+    # Determine facility from site, lot_hint, or default to PENANG
+    if site:
+        facility = site.upper()
+    elif lot_hint:
+        facility = _determine_facility(lot_hint)
+    else:
+        facility = "PENANG"
+
+    if not facility or facility not in _MAM_REPORT_DESTINATIONS:
+        result["error"] = (
+            f"Cannot determine MAM facility for MID '{mid}' "
+            f"(site='{site}', lot_hint='{lot_hint}'). "
+            f"Supported: {list(_MAM_REPORT_DESTINATIONS.keys())}"
+        )
+        logger.warning(result["error"])
+        return result
+
+    config = _MAM_REPORT_DESTINATIONS[facility]
+    dest = config["dest"]
+    system = config["system"]
+
+    logger.info(
+        "Querying MAM report for MID=%s facility=%s system=%s",
+        mid, facility, system,
+    )
+
+    try:
+        soap_msg = _build_mid_report_soap(dest, system, mid)
+        items = _pull_mam_report(dest, soap_msg, timeout)
+
+        if not items:
+            result["error"] = f"MAM report returned no rows for MID '{mid}'"
+            logger.warning(result["error"])
+            return result
+
+        # Take the last row (most recent)
+        row = items[-1]
+
+        result["cfgpn"] = row.get("BASE_CFGPN", "").strip()
+        result["mcto"] = row.get("MODULE_FGPN", "").strip()
+        result["step"] = row.get("STEP_OR_LOCATION", "").strip()
+        result["success"] = "true"
+        result["all_attrs"] = row  # type: ignore[assignment]
+
+        logger.info(
+            "MAM MID query OK: MID=%s -> CFGPN=%s, MCTO=%s, STEP=%s",
+            mid, result["cfgpn"], result["mcto"], result["step"],
+        )
+
+    except Exception as e:
+        result["error"] = f"MAM MID query failed: {e}"
+        logger.exception(result["error"])
+
+    return result
+
+
+def verify_mid_lot_link(
+    mid: str,
+    expected_cfgpn: str,
+    expected_mcto: str,
+    site: str = "",
+    lot_hint: str = "",
+    timeout: int = 360,
+) -> Dict[str, str]:
+    """Verify that a MID is correctly linked to the expected CFGPN and MCTO.
+
+    Queries MAM for the MID's attributes and compares them against the
+    expected values (typically obtained from a lot lookup).
+
+    Parameters
+    ----------
+    mid : str
+        Module ID to verify.
+    expected_cfgpn : str
+        Expected CFGPN value (from lot lookup).
+    expected_mcto : str
+        Expected MCTO value (from lot lookup).
+    site : str, optional
+        Force a specific site.
+    lot_hint : str, optional
+        Lot ID for facility auto-detection.
+    timeout : int
+        MIPC timeout in seconds.
+
+    Returns
+    -------
+    dict
+        Dict with keys:
+        - ``"valid"`` -- ``"true"`` if MID matches expected CFGPN/MCTO
+        - ``"mid_cfgpn"`` -- CFGPN found for the MID in MAM
+        - ``"mid_mcto"`` -- MCTO found for the MID in MAM
+        - ``"cfgpn_match"`` -- ``"true"`` if CFGPN matches
+        - ``"mcto_match"`` -- ``"true"`` if MCTO matches
+        - ``"error"`` -- error message if query failed
+        - ``"message"`` -- human-readable summary
+    """
+    result: Dict[str, str] = {
+        "valid": "false",
+        "mid_cfgpn": "",
+        "mid_mcto": "",
+        "cfgpn_match": "false",
+        "mcto_match": "false",
+        "error": "",
+        "message": "",
+    }
+
+    if not mid or not mid.strip():
+        result["error"] = "No MID provided"
+        result["message"] = "No MID provided for validation"
+        return result
+
+    # Query MAM for the MID
+    mid_result = query_mid_cfgpn_mcto(
+        mid, site=site, lot_hint=lot_hint, timeout=timeout
+    )
+
+    if mid_result.get("success") != "true":
+        result["error"] = mid_result.get("error", "MID query failed")
+        result["message"] = f"Cannot verify MID {mid}: {result['error']}"
+        return result
+
+    mid_cfgpn = mid_result.get("cfgpn", "")
+    mid_mcto = mid_result.get("mcto", "")
+    result["mid_cfgpn"] = mid_cfgpn
+    result["mid_mcto"] = mid_mcto
+
+    # Compare
+    cfgpn_ok = mid_cfgpn == expected_cfgpn.strip() if expected_cfgpn else True
+    mcto_ok = mid_mcto == expected_mcto.strip() if expected_mcto else True
+
+    result["cfgpn_match"] = "true" if cfgpn_ok else "false"
+    result["mcto_match"] = "true" if mcto_ok else "false"
+    result["valid"] = "true" if (cfgpn_ok and mcto_ok) else "false"
+
+    if cfgpn_ok and mcto_ok:
+        result["message"] = (
+            f"MID {mid} is correctly linked: "
+            f"CFGPN={mid_cfgpn}, MCTO={mid_mcto}"
+        )
+        logger.info(result["message"])
+    else:
+        mismatches = []
+        if not cfgpn_ok:
+            mismatches.append(
+                f"CFGPN mismatch (MID has '{mid_cfgpn}', "
+                f"expected '{expected_cfgpn}')"
+            )
+        if not mcto_ok:
+            mismatches.append(
+                f"MCTO mismatch (MID has '{mid_mcto}', "
+                f"expected '{expected_mcto}')"
+            )
+        result["message"] = (
+            f"MID {mid} link MISMATCH: {'; '.join(mismatches)}"
+        )
+        logger.warning(result["message"])
+
+    return result

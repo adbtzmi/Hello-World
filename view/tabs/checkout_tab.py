@@ -824,6 +824,9 @@ class CheckoutTab(BaseTab):
             # Auto-lookup CFGPN/MCTO when Dummy_Lot is edited
             if col_name == "Dummy_Lot" and new_value and new_value.upper() not in ("", "NONE"):
                 self._trigger_lot_lookup(row_idx, new_value)
+            # Auto-verify MID link when MID is edited
+            if col_name == "MID" and new_value and new_value.upper() not in ("", "NONE"):
+                self._trigger_mid_verify(row_idx, new_value)
 
         def _cancel(event=None):
             edit_entry.destroy()
@@ -1336,6 +1339,68 @@ class CheckoutTab(BaseTab):
             self.log(f"✓ Auto-filled from lot '{lot}': {', '.join(updated)}")
         else:
             self.log(f"[WARN] Lot lookup returned empty CFGPN/MCTO")
+
+    def _trigger_mid_verify(self, row_idx: int, mid: str):
+        """Trigger background MAM SOAP verification for a MID.
+
+        Called when the user edits the MID column. Reads the current
+        CFGPN and MCTO from the same row and verifies the MID is
+        correctly linked to them in MAM.
+        """
+        controller = self.context.controller
+        if controller and hasattr(controller, 'checkout_controller'):
+            row = self._profile_data[row_idx] if row_idx < len(self._profile_data) else {}
+            expected_cfgpn = row.get("CFGPN", "")
+            expected_mcto = row.get("MCTO_#1", "")
+            lot_hint = row.get("Dummy_Lot", "")
+            controller.checkout_controller.verify_mid_link(
+                mid, row_idx,
+                expected_cfgpn=expected_cfgpn,
+                expected_mcto=expected_mcto,
+                lot_hint=lot_hint,
+            )
+        else:
+            self.log(f"[WARN] Cannot verify MID -- controller not available")
+
+    def on_mid_verify_completed(self, row_idx: int, result: dict):
+        """Callback from controller: display MID verification result.
+
+        Called on the main thread via ``root.after()``.
+
+        Parameters
+        ----------
+        row_idx : int
+            Row index in the profile table.
+        result : dict
+            Verification result from ``verify_mid_lot_link()``.
+        """
+        msg = result.get("message", "")
+        valid = result.get("valid", "false")
+        mid_cfgpn = result.get("mid_cfgpn", "")
+        mid_mcto = result.get("mid_mcto", "")
+
+        if valid == "true":
+            self.log(f"✓ {msg}")
+        else:
+            error = result.get("error", "")
+            if error:
+                self.log(f"[WARN] {msg}")
+            else:
+                # Mismatch -- show details
+                self.log(f"⚠ {msg}")
+                # Optionally highlight the row or show a warning dialog
+                cfgpn_match = result.get("cfgpn_match", "false")
+                mcto_match = result.get("mcto_match", "false")
+                if cfgpn_match != "true" and mid_cfgpn:
+                    self.log(
+                        f"   MID has CFGPN={mid_cfgpn}, "
+                        f"row expects CFGPN={self._profile_data[row_idx].get('CFGPN', '?')}"
+                    )
+                if mcto_match != "true" and mid_mcto:
+                    self.log(
+                        f"   MID has MCTO={mid_mcto}, "
+                        f"row expects MCTO={self._profile_data[row_idx].get('MCTO_#1', '?')}"
+                    )
 
     def on_xml_imported(self, data: dict):
         # ── Auto-fill TGZ path ────────────────────────────────────────
