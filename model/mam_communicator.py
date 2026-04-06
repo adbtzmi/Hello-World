@@ -26,9 +26,12 @@ except ImportError:
 # Try to import zeep — SOAP client for MIPC web gateway
 try:
     from zeep import Client as ZeepClient
+    from zeep.transports import Transport as ZeepTransport
+    import requests
     HAS_ZEEP = True
 except ImportError:
     ZeepClient = None  # type: ignore[assignment,misc]
+    ZeepTransport = None  # type: ignore[assignment,misc]
     HAS_ZEEP = False
     logger.info("zeep not available — MAM SOAP queries will be disabled")
 
@@ -384,7 +387,16 @@ def _mipc_send_receive(dest: str, msg: str, timeout: int = 180) -> tuple:
         return ("error", "zeep not available — cannot send MIPC message")
 
     try:
-        client = ZeepClient(_MIPC_WSDL)
+        # Disable SSL verification for internal Micron servers
+        # (same pattern as jira_analyzer.py ssl._create_unverified_context())
+        session = requests.Session()
+        session.verify = False
+        # Suppress InsecureRequestWarning for internal endpoints
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        transport = ZeepTransport(session=session)
+
+        client = ZeepClient(_MIPC_WSDL, transport=transport)
         client.set_ns_prefix('tns', "http://web.micron.com/MicronMessagingGateway")
         client.bind(port_name='MicronMessagingGatewaySoap')
 
