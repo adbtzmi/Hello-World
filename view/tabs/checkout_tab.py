@@ -817,9 +817,13 @@ class CheckoutTab(BaseTab):
         edit_entry.focus_set()
 
         def _save(event=None):
-            self._profile_data[row_idx][col_name] = edit_entry.get().strip()
+            new_value = edit_entry.get().strip()
+            self._profile_data[row_idx][col_name] = new_value
             self._refresh_profile_grid()
             edit_entry.destroy()
+            # Auto-lookup CFGPN/MCTO when Dummy_Lot is edited
+            if col_name == "Dummy_Lot" and new_value and new_value.upper() not in ("", "NONE"):
+                self._trigger_lot_lookup(row_idx, new_value)
 
         def _cancel(event=None):
             edit_entry.destroy()
@@ -1293,6 +1297,45 @@ class CheckoutTab(BaseTab):
 
     def on_autofill_completed(self, mid, cfgpn, fw_ver):
         self.log(f"✓ Auto-filled: MID={mid}  CFGPN={cfgpn}  FW={fw_ver}")
+
+    # ── LOT → CFGPN/MCTO AUTO-FILL ──────────────────────────────────────
+
+    def _trigger_lot_lookup(self, row_idx: int, lot: str):
+        """Trigger background MAM SOAP lookup for a dummy lot.
+
+        Called when the user edits the Dummy_Lot column. Delegates to
+        the checkout controller which runs the query in a background
+        thread and calls ``on_lot_lookup_completed()`` on success.
+        """
+        controller = self.context.controller
+        if controller and hasattr(controller, 'checkout_controller'):
+            site = self.context.get_var('checkout_site').get().strip()
+            controller.checkout_controller.lookup_lot_cfgpn_mcto(
+                lot, row_idx, site=site)
+        else:
+            self.log(f"[WARN] Cannot lookup lot — controller not available")
+
+    def on_lot_lookup_completed(self, row_idx: int, cfgpn: str, mcto: str):
+        """Callback from controller: auto-fill CFGPN and MCTO_#1 in the table.
+
+        Called on the main thread via ``root.after()``.
+        """
+        if row_idx < 0 or row_idx >= len(self._profile_data):
+            self.log(f"[WARN] Lot lookup returned for invalid row {row_idx}")
+            return
+        updated = []
+        if cfgpn:
+            self._profile_data[row_idx]["CFGPN"] = cfgpn
+            updated.append(f"CFGPN={cfgpn}")
+        if mcto:
+            self._profile_data[row_idx]["MCTO_#1"] = mcto
+            updated.append(f"MCTO_#1={mcto}")
+        if updated:
+            self._refresh_profile_grid()
+            lot = self._profile_data[row_idx].get("Dummy_Lot", "?")
+            self.log(f"✓ Auto-filled from lot '{lot}': {', '.join(updated)}")
+        else:
+            self.log(f"[WARN] Lot lookup returned empty CFGPN/MCTO")
 
     def on_xml_imported(self, data: dict):
         # ── Auto-fill TGZ path ────────────────────────────────────────

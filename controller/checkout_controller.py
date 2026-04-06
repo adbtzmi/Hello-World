@@ -415,6 +415,73 @@ class CheckoutController(object):
             target=_lookup, daemon=True, name="bento-crt-lookup"
         ).start()
 
+    # ── LOT → CFGPN/MCTO LOOKUP (auto-fill table) ────────────────────────────
+    def lookup_lot_cfgpn_mcto(self, lot: str, row_idx: int, site: str = ""):
+        """Query MAM SOAP for a dummy lot and auto-fill CFGPN/MCTO in the table.
+
+        Runs in a background thread. On success, calls
+        ``checkout_tab.on_lot_lookup_completed(row_idx, cfgpn, mcto)``
+        on the main thread to update the profile grid.
+
+        Parameters
+        ----------
+        lot : str
+            Dummy lot ID (e.g. ``"JAATQ95001"``).
+        row_idx : int
+            Row index in the profile table to update.
+        site : str, optional
+            Force site (auto-detected from lot prefix if empty).
+        """
+        def _lookup():
+            try:
+                from model.mam_communicator import query_lot_cfgpn_mcto
+                if self._view:
+                    self._view.root.after(
+                        0,
+                        lambda: self._view.context.log(
+                            f"Looking up lot '{lot}' → CFGPN/MCTO..."
+                        )
+                    )
+                result = query_lot_cfgpn_mcto(lot, site=site)
+                if result.get("success") == "true":
+                    cfgpn = result.get("cfgpn", "")
+                    mcto = result.get("mcto", "")
+                    step = result.get("step", "")
+                    logger.info(
+                        "Lot lookup OK: lot=%s → CFGPN=%s, MCTO=%s, STEP=%s",
+                        lot, cfgpn, mcto, step,
+                    )
+                    if self._view:
+                        self._view.root.after(
+                            0,
+                            lambda: self._view.checkout_tab.on_lot_lookup_completed(
+                                row_idx, cfgpn, mcto
+                            )
+                        )
+                else:
+                    err = result.get("error", "unknown")
+                    logger.warning("Lot lookup failed: %s", err)
+                    if self._view:
+                        self._view.root.after(
+                            0,
+                            lambda: self._view.context.log(
+                                f"[WARN] Lot lookup failed for '{lot}': {err}"
+                            )
+                        )
+            except Exception as e:
+                logger.error("Lot lookup error: %s", e)
+                if self._view:
+                    self._view.root.after(
+                        0,
+                        lambda: self._view.context.log(
+                            f"[FAIL] Lot lookup error: {e}"
+                        )
+                    )
+
+        threading.Thread(
+            target=_lookup, daemon=True, name="bento-lot-lookup"
+        ).start()
+
     # ── GENERATE XML ONLY ─────────────────────────────────────────────────────
     def generate_xml_only(self, params):
         """
