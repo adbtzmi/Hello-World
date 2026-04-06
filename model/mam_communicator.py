@@ -1,13 +1,16 @@
+# -*- coding: utf-8 -*-
 """MAM (Material Attribute Management) Communicator.
 
 Adapted from CAT ProfileDump/CATCall/CATCALL.py MAMCommunicator class.
 Provides lot attribute query/set operations via PyMIPC.
-Gracefully degrades when PyMIPC is not installed.
+Also supports MIPC SOAP web service queries via zeep (from blockrun_lot_checker).
+Gracefully degrades when PyMIPC and/or zeep are not installed.
 """
 
 import os
 import socket
 import logging
+import xml.etree.ElementTree as ET
 from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger(__name__)
@@ -18,7 +21,16 @@ try:
     HAS_PYMIPC = True
 except ImportError:
     HAS_PYMIPC = False
-    logger.info("PyMIPC not available — MAM queries will be disabled")
+    logger.info("PyMIPC not available — MAM queries via PyMIPC will be disabled")
+
+# Try to import zeep — SOAP client for MIPC web gateway
+try:
+    from zeep import Client as ZeepClient
+    HAS_ZEEP = True
+except ImportError:
+    ZeepClient = None  # type: ignore[assignment,misc]
+    HAS_ZEEP = False
+    logger.info("zeep not available — MAM SOAP queries will be disabled")
 
 
 # Per-site MAM server configurations (from CAT CATCALL.py)
@@ -290,3 +302,375 @@ class MAMCommunicator:
             "cfgpn": result.get("CFGPN", ""),
             "mcto": result.get("MCTO", ""),
         }
+
+
+# ---------------------------------------------------------------------------
+# MIPC SOAP Web Gateway — adapted from blockrun_lot_checker
+# (Common_Functions_64.py + checklots.py by mbinsyedaham / JIAJUNLEE)
+#
+# Uses zeep SOAP client to call the Micron Messaging Gateway, which is
+# accessible from any Micron-networked PC (unlike PyMIPC which requires
+# specific library installation).
+# ---------------------------------------------------------------------------
+
+# MIPC web gateway WSDL
+_MIPC_WSDL = "http://web.micron.com/micronmsgateway/micronmessaginggateway.asmx?wsdl"
+
+# Per-facility MAM report destinations (from checklots.py)
+_MAM_REPORT_DESTINATIONS: Dict[str, Dict[str, str]] = {
+    "SINGAPORE": {
+        "dest": "/SINGAPORE/MTI/MFG/MAM/PROD/MAMRPTSRV/MODSI_XML",
+        "system": "MODSI",
+    },
+    "PENANG": {
+        "dest": "/PENANG/MTI/MFG/MAM/PROD/MAMRPTSRV/MODPG_XML",
+        "system": "MODPG",
+    },
+}
+
+# Lot prefix → facility mapping (from checklots.py)
+_LOT_PREFIX_FACILITY = {
+    "J": "PENANG",   # Penang lots start with J
+    "C": "SINGAPORE",  # Singapore lots start with C
+}
+
+# MAM attributes we want to retrieve for lot lookup
+_LOT_LOOKUP_ATTRS = [
+    "STEP OR LOCATION",
+    "BASE CFGPN",
+    "MODULE FGPN",
+]
+
+
+def _determine_facility(lot: str) -> str:
+    """Determine facility from lot prefix.
+
+    Parameters
+    ----------
+    lot : str
+        Lot ID (e.g. ``"JAATQ95001"`` → Penang, ``"CABC12345"`` → Singapore).
+
+    Returns
+    -------
+    str
+        Facility name (``"PENANG"`` or ``"SINGAPORE"``), or ``""`` if unknown.
+    """
+    if lot:
+        prefix = lot[0].upper()
+        return _LOT_PREFIX_FACILITY.get(prefix, "")
+    return ""
+
+
+def _mipc_send_receive(dest: str, msg: str, timeout: int = 180) -> tuple:
+    """Send MIPC message via SOAP web gateway and receive response.
+
+    Adapted from ``Common_Functions_64.MIPC_Send_Receive()``.
+
+    Parameters
+    ----------
+    dest : str
+        MIPC destination path.
+    msg : str
+        SOAP message body.
+    timeout : int
+        Timeout in seconds (default 180).
+
+    Returns
+    -------
+    tuple
+        ``("success", response_text)`` or ``("error", error_text)``.
+    """
+    if not HAS_ZEEP:
+        return ("error", "zeep not available — cannot send MIPC message")
+
+    try:
+        client = ZeepClient(_MIPC_WSDL)
+        client.set_ns_prefix('tns', "http://web.micron.com/MicronMessagingGateway")
+        client.bind(port_name='MicronMessagingGatewaySoap')
+
+        with client.settings(raw_response=True):
+            mam_webservice = client.get_type("tns:MTMessageWeb")
+            msg_content = mam_webservice(
+                Destination=dest,
+                MsgContents=msg,
+                MsgFormat='XML',
+                MTXmlMsgType='XMLCMDMSG',
+            )
+            response = client.service.MipcSendReceive(
+                message=msg_content, timeout=timeout
+            )
+
+        if response.text.find('faultstring') >= 0:
+            return ("error", response.text)
+        else:
+            return ("success", response.text)
+
+    except Exception as e:
+        logger.exception("MIPC SOAP call failed")
+        return ("error", str(e))
+
+
+def _get_mipc_msg_contents(response_xml: str) -> str:
+    """Parse MIPC full response XML and return ReceivedMsgContents.
+
+    Adapted from ``Common_Functions_64.get_MIPC_ReceivedMsgContents()``.
+
+    Parameters
+    ----------
+    response_xml : str
+        Full SOAP response XML.
+
+    Returns
+    -------
+    str
+        The inner ``MsgContents`` XML string.
+    """
+    ns = {
+        'ns0': 'http://schemas.xmlsoap.org/soap/envelope/',
+        'ns1': 'http://web.micron.com/MicronMessagingGateway',
+    }
+    tree = ET.ElementTree(ET.fromstring(response_xml))
+    root = tree.getroot()
+    elem = root.find(
+        "ns0:Body/ns1:MipcSendReceiveResponse/"
+        "ns1:MipcSendReceiveResult/ns1:MsgContents",
+        ns,
+    )
+    if elem is not None and elem.text:
+        return elem.text
+    raise ValueError("MsgContents not found in MIPC response")
+
+
+def _pull_mam_report(dest: str, msg: str, timeout: int = 360) -> List[Dict[str, str]]:
+    """Pull MAM Report and return items as list of dicts.
+
+    Adapted from ``Common_Functions_64.pull_MAM_Report()`` +
+    ``checklots.process_mam_data()``.
+
+    Parameters
+    ----------
+    dest : str
+        MIPC destination path.
+    msg : str
+        SOAP message body.
+    timeout : int
+        Timeout in seconds (default 360).
+
+    Returns
+    -------
+    list of dict
+        Each dict contains the MAM report row attributes.
+
+    Raises
+    ------
+    RuntimeError
+        If the MIPC call fails.
+    """
+    result, response_xml = _mipc_send_receive(dest, msg, timeout)
+    if result == 'error':
+        raise RuntimeError(f"MIPC error: {response_xml}")
+
+    received = _get_mipc_msg_contents(response_xml)
+
+    tree = ET.ElementTree(ET.fromstring(received))
+    root = tree.getroot()
+
+    ns_soap = '{http://schemas.xmlsoap.org/soap/envelope}'
+    num_rows_elem = root.find(f'{ns_soap}Body/MAMReport/NUMROWS')
+    if num_rows_elem is None or num_rows_elem.text is None:
+        return []
+
+    num_rows = int(num_rows_elem.text)
+    if num_rows == 0:
+        return []
+
+    all_items: List[Dict[str, str]] = []
+    for row in root.findall(f'{ns_soap}Body/MAMReport/ReportData/Row'):
+        store_item: Dict[str, str] = {}
+        for val in row:
+            if val.tag == 'Attrs':
+                for attr in val:
+                    attr_id = attr.get('ID', '')
+                    # Normalise: spaces→underscores, /→_, remove #
+                    key = attr_id.replace(" ", "_").replace("/", "_").replace("#", "")
+                    store_item[key] = attr.text or ""
+            elif val.tag == 'GroupByAttrs':
+                for attr in val:
+                    attr_id = attr.get('ID', '')
+                    key = attr_id.replace(" ", "_").replace("/", "_").replace("#", "")
+                    store_item[key] = attr.text or ""
+            else:
+                store_item[val.tag] = val.text or ""
+        all_items.append(store_item)
+
+    return all_items
+
+
+def _build_lot_report_soap(dest: str, system: str, lot: str) -> str:
+    """Build SOAP message for MAM lot report query.
+
+    Adapted from ``checklots.create_soap_message()``.
+
+    Parameters
+    ----------
+    dest : str
+        MIPC destination path.
+    system : str
+        MAM system identifier (e.g. ``"MODSI"``, ``"MODPG"``).
+    lot : str
+        Lot ID to query.
+
+    Returns
+    -------
+    str
+        SOAP XML message string.
+    """
+    attrs_xml = "\n".join(
+        f"<Value>{attr}</Value>" for attr in _LOT_LOOKUP_ATTRS
+    )
+    return f"""
+    <SOAP-ENV:Envelope xmlns:SOAP-ENV='http://schemas.xmlsoap.org/soap/envelope'>
+        <SOAP-ENV:Header>
+            <MTXMLMsg MsgType='CMD'/>
+            <Delivery>
+                <Dest>{dest}</Dest>
+                <Src/>
+                <Reply/>
+                <TransportType>MIPC</TransportType>
+            </Delivery>
+        </SOAP-ENV:Header>
+        <SOAP-ENV:Body>
+            <MAMReport>
+                <REPORTID>Module Lots with Attributes</REPORTID>
+                <APP>{system}</APP>
+                <FORMAT>XML</FORMAT>
+                <ACTION>REPORT</ACTION>
+                <CRITERIA>
+                    <CriteriaList>
+                        <Criteria>
+                            <Item>MODULE LOT ID</Item>
+                            <Rel>in</Rel>
+                            <ValueList>
+                                <Value>{lot}</Value>
+                            </ValueList>
+                        </Criteria>
+                        <Criteria>
+                            <Item>ATTRS TO DISPLAY</Item>
+                            <Rel>in</Rel>
+                            <ValueList>
+                                {attrs_xml}
+                            </ValueList>
+                        </Criteria>
+                    </CriteriaList>
+                </CRITERIA>
+            </MAMReport>
+        </SOAP-ENV:Body>
+    </SOAP-ENV:Envelope>"""
+
+
+def query_lot_cfgpn_mcto(
+    lot: str,
+    site: str = "",
+    timeout: int = 360,
+) -> Dict[str, str]:
+    """Query MAM via MIPC SOAP to get CFGPN and MCTO for a dummy lot.
+
+    Uses the zeep-based MIPC web gateway (same approach as
+    blockrun_lot_checker) to pull a MAM report for the given lot and
+    extract ``BASE_CFGPN`` (→ CFGPN) and ``MODULE_FGPN`` (→ MCTO).
+
+    This is the primary method for resolving a dummy lot to its
+    CFGPN and MCTO values during BENTO checkout.
+
+    Parameters
+    ----------
+    lot : str
+        Dummy lot ID (e.g. ``"JAATQ95001"``).
+    site : str, optional
+        Force a specific site (``"SINGAPORE"`` or ``"PENANG"``).
+        If empty, auto-detected from lot prefix (J=Penang, C=Singapore).
+    timeout : int
+        MIPC timeout in seconds (default 360).
+
+    Returns
+    -------
+    dict
+        Dict with keys:
+        - ``"cfgpn"`` — BASE CFGPN value (empty string if not found)
+        - ``"mcto"`` — MODULE FGPN value (empty string if not found)
+        - ``"step"`` — STEP OR LOCATION value (empty string if not found)
+        - ``"success"`` — ``"true"`` or ``"false"``
+        - ``"error"`` — error message if failed
+        - ``"all_attrs"`` — dict of all returned attributes
+    """
+    result: Dict[str, str] = {
+        "cfgpn": "",
+        "mcto": "",
+        "step": "",
+        "success": "false",
+        "error": "",
+    }
+
+    if not lot or not lot.strip():
+        result["error"] = "No lot ID provided"
+        return result
+
+    lot = lot.strip()
+
+    if not HAS_ZEEP:
+        result["error"] = "zeep not available — cannot query MAM via SOAP"
+        logger.warning(result["error"])
+        return result
+
+    # Determine facility
+    facility = site.upper() if site else _determine_facility(lot)
+    if not facility or facility not in _MAM_REPORT_DESTINATIONS:
+        result["error"] = (
+            f"Cannot determine MAM facility for lot '{lot}' "
+            f"(prefix '{lot[0] if lot else '?'}', site='{site}'). "
+            f"Supported: {list(_MAM_REPORT_DESTINATIONS.keys())}"
+        )
+        logger.warning(result["error"])
+        return result
+
+    config = _MAM_REPORT_DESTINATIONS[facility]
+    dest = config["dest"]
+    system = config["system"]
+
+    logger.info(
+        "Querying MAM report for lot=%s facility=%s system=%s",
+        lot, facility, system,
+    )
+
+    try:
+        soap_msg = _build_lot_report_soap(dest, system, lot)
+        items = _pull_mam_report(dest, soap_msg, timeout)
+
+        if not items:
+            result["error"] = f"MAM report returned no rows for lot '{lot}'"
+            logger.warning(result["error"])
+            return result
+
+        # Take the last row (most recent) — matches checklots.py behaviour
+        row = items[-1]
+
+        # Extract CFGPN and MCTO using the column mappings from the Teams chat:
+        #   DUMMY LOT = CAT COLUMN NAME
+        #   MODULE FGPN = MCTO#1
+        #   BASE CFGPN = CFGPN
+        result["cfgpn"] = row.get("BASE_CFGPN", "").strip()
+        result["mcto"] = row.get("MODULE_FGPN", "").strip()
+        result["step"] = row.get("STEP_OR_LOCATION", "").strip()
+        result["success"] = "true"
+        result["all_attrs"] = row  # type: ignore[assignment]
+
+        logger.info(
+            "MAM lot query OK: lot=%s → CFGPN=%s, MCTO=%s, STEP=%s",
+            lot, result["cfgpn"], result["mcto"], result["step"],
+        )
+
+    except Exception as e:
+        result["error"] = f"MAM lot query failed: {e}"
+        logger.exception(result["error"])
+
+    return result

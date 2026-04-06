@@ -38,7 +38,7 @@ from typing import Optional, Dict, List
 from model.hardware_config import get_hardware_config
 from model.tmptravl_generator import TmptravlGenerator
 from model.recipe_selector import RecipeSelector, RecipeResult
-from model.mam_communicator import MAMCommunicator, MAMResult
+from model.mam_communicator import MAMCommunicator, MAMResult, query_lot_cfgpn_mcto
 from model.sap_communicator import SAPCommunicator, SAPResult, SAP_FIRMWARE_KEYS
 from model.profile_sorter import ProfileSorter
 
@@ -574,7 +574,7 @@ def generate_slate_xml(
         _form_factor = form_factor
         dib_type = hw_config.get_dib_type(step, _form_factor) if _form_factor else hw_config.get_dib_type(step, "U.2")
 
-        # ── MAM attribute query ──────────────────────────────────────
+        # ── MAM attribute query (PyMIPC) ─────────────────────────────
         mam_attrs = {}
         if lot_prefix and site:
             mam_attrs = query_mam_attributes(lot_prefix, site=site, log_callback=log_callback)
@@ -585,11 +585,42 @@ def generate_slate_xml(
                 if mam_attrs.get("MCTO"):
                     _log(logger, f"MAM MCTO: {mam_attrs['MCTO']}", log_callback)
 
+        # ── Dummy lot → CFGPN/MCTO lookup via MIPC SOAP ─────────────
+        # If we have a dummy lot but still no CFGPN (PyMIPC unavailable
+        # or MAM query didn't return it), try the zeep-based MIPC SOAP
+        # web gateway to pull BASE_CFGPN and MODULE_FGPN from MAM.
+        # Mapping (from Teams chat):
+        #   DUMMY LOT  = CAT column name (lot_prefix)
+        #   BASE CFGPN = CFGPN
+        #   MODULE FGPN = MCTO#1
+        mcto_from_lot = ""
+        if lot_prefix and (not cfgpn or lot_prefix.upper() not in ("NONE", "")):
+            _log(logger, f"Querying MAM SOAP for dummy lot '{lot_prefix}' → CFGPN/MCTO...",
+                 log_callback)
+            lot_result = query_lot_cfgpn_mcto(lot_prefix, site=site)
+            if lot_result.get("success") == "true":
+                if not cfgpn and lot_result.get("cfgpn"):
+                    cfgpn = lot_result["cfgpn"]
+                    _log(logger, f"✓ CFGPN from dummy lot: {cfgpn}", log_callback)
+                if lot_result.get("mcto"):
+                    mcto_from_lot = lot_result["mcto"]
+                    _log(logger, f"✓ MCTO from dummy lot: {mcto_from_lot}", log_callback)
+                if lot_result.get("step"):
+                    _log(logger, f"  Lot step/location: {lot_result['step']}", log_callback)
+            else:
+                _log(logger,
+                     f"⚠ Dummy lot lookup failed: {lot_result.get('error', 'unknown')}",
+                     log_callback, "warning")
+
         # ── SAP attribute query (CFGPN + MCTO) ──────────────────────
         cfgpn_attrs = {}
         mcto_attrs = {}
         sap_constant_dict = {}
-        mcto_number = mam_attrs.get("MODULE_FGPN", "") or mam_attrs.get("MCTO", "")
+        mcto_number = (
+            mcto_from_lot
+            or mam_attrs.get("MODULE_FGPN", "")
+            or mam_attrs.get("MCTO", "")
+        )
 
         if cfgpn:
             cfgpn_attrs = query_sap_attributes(
