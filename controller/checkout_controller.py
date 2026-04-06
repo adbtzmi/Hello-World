@@ -639,8 +639,9 @@ class CheckoutController(object):
                     # ── Per-MID tracking ──────────────────────────────
                     mid_results = {}
 
-                    # Read generate_tmptravl from checkout config
-                    generate_tmptravl = self._config.get("checkout", {}).get("generate_tmptravl", False)
+                    # Read generate_tmptravl from params (UI checkbox), fallback to config
+                    generate_tmptravl = params.get("generate_tmptravl",
+                                                   self._config.get("checkout", {}).get("generate_tmptravl", False))
 
                     if profile_table:
                         # Multi-MID mode: generate XML per MID
@@ -917,8 +918,9 @@ class CheckoutController(object):
             log_callback   = self._make_log_callback(hostname)
             phase_callback = self._make_phase_callback(hostname)
 
-            # Read generate_tmptravl from checkout config (same as generate_xml_only)
-            generate_tmptravl = self._config.get("checkout", {}).get("generate_tmptravl", False)
+            # Read generate_tmptravl from params (UI checkbox), fallback to config
+            generate_tmptravl = params.get("generate_tmptravl",
+                                           self._config.get("checkout", {}).get("generate_tmptravl", False))
 
             profile_table = params.get("profile_table", [])
 

@@ -190,7 +190,7 @@ class CheckoutTab(BaseTab):
         _bv('checkout_tc_force_fail', False)
         _bv('checkout_notify_teams', True)
         _sv('checkout_form_factor', '')
-        _bv('checkout_gen_tmptravl', False)
+        _bv('checkout_gen_tmptravl', True)
         _bv('checkout_autostart', False)
 
     # ──────────────────────────────────────────────────────────────────────

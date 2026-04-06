@@ -623,6 +623,7 @@ def generate_slate_xml(
         )
 
         if cfgpn:
+            _log(logger, f"Querying SAP for CFGPN={cfgpn}...", log_callback)
             cfgpn_attrs = query_sap_attributes(
                 cfgpn, instance=sap_instance,
                 logger=logger, log_callback=log_callback
@@ -630,7 +631,12 @@ def generate_slate_xml(
             if cfgpn_attrs:
                 sap_comm = SAPCommunicator(instance=sap_instance)
                 sap_constant_dict = sap_comm.extract_constant_dict(cfgpn_attrs)
+                _log(logger, f"✓ SAP CFGPN attributes: {len(cfgpn_attrs)} keys (incl. PRODUCT_FAMILY={cfgpn_attrs.get('PRODUCT_FAMILY', 'N/A')})", log_callback)
                 _log(logger, f"SAP constant dict: {list(sap_constant_dict.keys())}", log_callback)
+            else:
+                _log(logger, f"⚠ SAP returned no attributes for CFGPN={cfgpn}", log_callback, "warning")
+        else:
+            _log(logger, "⚠ CFGPN is empty — SAP query skipped. Tmptravl CFGPN section will be empty!", log_callback, "warning")
 
         if mcto_number:
             mcto_attrs = query_sap_attributes(
@@ -702,6 +708,11 @@ def generate_slate_xml(
 
                 logger.info("DIAG: Final mam_attrs keys after cross-population: %s",
                             list(mam_attrs.keys()) if mam_attrs else "empty")
+
+                _log(logger,
+                     f"Tmptravl sections: MAM={len(mam_attrs)} keys, "
+                     f"CFGPN={len(cfgpn_attrs)} keys, MCTO={len(mcto_attrs)} keys",
+                     log_callback)
 
                 tmptravl_path = tmptravl_gen.generate(
                     mid=mid,
