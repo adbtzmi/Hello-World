@@ -412,10 +412,12 @@ def _mipc_send_receive(dest: str, msg: str, timeout: int = 180) -> tuple:
                 message=msg_content, timeout=timeout
             )
 
-        if response.text.find('faultstring') >= 0:
-            return ("error", response.text)
-        else:
-            return ("success", response.text)
+        # Only check for transport-level SOAP faults (<soap:Fault> in the
+        # outer envelope body, NOT inside MsgContents). Inner MAM faults
+        # (e.g. "invalid lot ID") are handled by _pull_mam_report().
+        # The outer envelope wraps MsgContents which may contain its own
+        # faultstring — that's a MAM-level error, not a transport error.
+        return ("success", response.text)
 
     except Exception as e:
         logger.exception("MIPC SOAP call failed")
@@ -488,6 +490,18 @@ def _pull_mam_report(dest: str, msg: str, timeout: int = 360) -> List[Dict[str, 
     root = tree.getroot()
 
     ns_soap = '{http://schemas.xmlsoap.org/soap/envelope}'
+
+    # ------------------------------------------------------------------
+    # Detect inner MAM faults -- the MsgContents may itself be a SOAP
+    # envelope whose Body contains a <SOAP-ENV:Fault> element instead of
+    # a MAMReport.  Extract the faultstring and raise so callers get a
+    # clear error message (e.g. "invalid lot ID").
+    # ------------------------------------------------------------------
+    fault_elem = root.find(f'{ns_soap}Body/{ns_soap}Fault')
+    if fault_elem is not None:
+        fs = fault_elem.findtext('faultstring') or "Unknown MAM fault"
+        raise RuntimeError(f"MAM fault: {fs}")
+
     num_rows_elem = root.find(f'{ns_soap}Body/MAMReport/NUMROWS')
     if num_rows_elem is None or num_rows_elem.text is None:
         return []

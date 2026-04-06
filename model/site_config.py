@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_SITES = ["SINGAPORE", "PENANG", "BOISE", "XIAN"]
 _DEFAULT_STEPS = ["ABIT", "SFN2", "SCHP"]
 _DEFAULT_FORM_FACTORS = ["U.2", "U.3", "E3.S", "E1.S", "E1.L", "M.2", "BGA"]
-_DEFAULT_SITE = "SINGAPORE"
+_DEFAULT_SITE = "PENANG"
 
 
 class SiteConfig:

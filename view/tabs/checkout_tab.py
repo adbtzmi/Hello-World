@@ -166,7 +166,7 @@ class CheckoutTab(BaseTab):
         _iv = lambda name, val=0: ctx.set_var(name, tk.IntVar(value=val)) \
               if ctx.get_var(name) is None else None
 
-        _sv('checkout_site', 'SINGAPORE')
+        _sv('checkout_site', 'PENANG')
         _sv('checkout_tgz_path')
         _sv('checkout_recipe_override')
         _sv('checkout_hot_folder',
