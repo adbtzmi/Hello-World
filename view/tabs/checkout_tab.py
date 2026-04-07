@@ -713,6 +713,8 @@ class CheckoutTab(BaseTab):
             filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")])
         if not path:
             return
+        # Update the Excel File path to the selected file
+        self.context.get_var('checkout_excel_path').set(path)
         try:
             import pandas as pd
             engine = "openpyxl" if path.endswith(".xlsx") else "xlrd"
