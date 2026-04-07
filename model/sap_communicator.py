@@ -296,8 +296,11 @@ class SAPCommunicator:
                 constants[key] = cfgpn_attrs[key]
 
         # PRODUCT_NAME → MARKET_SEGMENT mapping (CAT ProfileMass convention)
+        # Replace spaces with underscores — recipe_selection.py rule tables
+        # use underscore-separated values (e.g. "6550_ION" not "6550 ION").
+        # Mirrors CAT ProfileDump/main.py line 689.
         if "PRODUCT_NAME" in cfgpn_attrs:
-            constants["MARKET_SEGMENT"] = cfgpn_attrs["PRODUCT_NAME"]
+            constants["MARKET_SEGMENT"] = cfgpn_attrs["PRODUCT_NAME"].replace(" ", "_")
 
         # MODULE_FORM_FACTOR
         if "MODULE_FORM_FACTOR" in cfgpn_attrs:
