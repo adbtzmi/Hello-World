@@ -1612,6 +1612,7 @@ class CheckoutTab(BaseTab):
                         variable=self._rc_auto_spool_var).pack(side=tk.LEFT, padx=(0, 8))
 
         self._rc_notify_var = tk.BooleanVar(value=True)
+        self._rc_notify_var.trace_add('write', self._rc_on_teams_notify_toggled)
         ttk.Checkbutton(cfg2, text="Teams Notify",
                         variable=self._rc_notify_var).pack(side=tk.LEFT, padx=(0, 8))
 
@@ -1748,6 +1749,20 @@ class CheckoutTab(BaseTab):
         if path:
             self._rc_target_var.set(path)
 
+    def _rc_on_teams_notify_toggled(self, *args):
+        """Warn user if Teams Notify is enabled but no webhook URL is configured."""
+        if self._rc_notify_var.get():
+            webhook_url = self.context.get_var('checkout_webhook_url').get().strip()
+            if not webhook_url:
+                messagebox.showwarning(
+                    "Webhook URL Missing",
+                    "Teams Notification is enabled but no Webhook URL is configured.\n\n"
+                    "Please go to the 🏠 Home tab → Notifications section\n"
+                    "and enter your Teams Workflow Webhook URL.\n\n"
+                    "Without a valid Webhook URL, Teams notifications will not be sent.",
+                    parent=self.winfo_toplevel(),
+                )
+
     def _rc_start_monitoring(self):
         """Start result collection monitoring via ResultController."""
         mids_file = self._rc_mids_file_var.get().strip()
@@ -1773,6 +1788,21 @@ class CheckoutTab(BaseTab):
         additional_patterns = [p.strip() for p in extra.split(",") if p.strip()] if extra else []
 
         webhook_url = self.context.get_var('checkout_webhook_url').get().strip()
+
+        # Validate webhook URL when Teams notification is enabled
+        if notify_teams and not webhook_url:
+            response = messagebox.askyesno(
+                "Webhook URL Missing",
+                "Teams Notification is enabled but no Webhook URL is configured.\n\n"
+                "Please go to the 🏠 Home tab → Notifications section\n"
+                "and enter your Teams Workflow Webhook URL.\n\n"
+                "Do you want to continue without Teams notification?",
+                parent=self.winfo_toplevel(),
+            )
+            if not response:
+                return
+            # User chose to continue — disable Teams notify for this run
+            notify_teams = False
 
         controller = self.context.controller
         if not controller or not hasattr(controller, 'result_controller'):
