@@ -151,8 +151,20 @@ class AppContext:
                     'base_url': ui_vars.get('model_url', 'https://model-gateway.gcldgenaigw.gc.micron.com/api/v1')
                 },
                 'settings': existing_config.get('settings', {'timeout': 300}),
-                'compile':  {'last_tgz_label': ui_vars.get('tgz_label', '')}
+                'compile':  {'last_tgz_label': ui_vars.get('tgz_label', '')},
+                'notifications': {
+                    'teams_webhook_url':  ui_vars.get('checkout_webhook_url',
+                                                       existing_config.get('notifications', {}).get('teams_webhook_url', '')),
+                    'notify_on_complete': existing_config.get('notifications', {}).get('notify_on_complete', True),
+                    'notify_on_failure':  existing_config.get('notifications', {}).get('notify_on_failure', True),
+                },
             }
+
+            # Preserve existing sections that are not managed by the UI
+            for key in ('cat', 'checkout', 'force_fail', 'registry_path', 'encryption'):
+                if key in existing_config:
+                    config[key] = existing_config[key]
+
             with open('settings.json', 'w') as f:
                 json.dump(config, f, indent=2)
 
