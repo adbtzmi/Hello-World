@@ -24,7 +24,6 @@
   "cat": {
     "_comment": "N: = \\\\sifsmodtestrep\\ModTestRep  |  Q: = \\\\sifsmodauto\\modauto  |  P: = \\\\pgfsmodauto\\modauto",
     "db_path": "\\\\sifsmodauto\\modauto\\temp\\cat\\CRT_Automation.db",
-    "crt_excel_path": "..\\Documents\\incoming_crt.xlsx",
     "incoming_crt_excel": "\\\\sifsmodtestrep\\ModTestRep\\crab\\incoming_crt.xlsx",
     "profile_gen_excel": "\\\\sifsmodtestrep\\ModTestRep\\crab\\for_profile_gen.xlsx"
   },
