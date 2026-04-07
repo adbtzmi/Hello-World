@@ -1,60 +1,58 @@
 {
-    "jira": {
-        "base_url":    "https://micron.atlassian.net",
-        "project_key": "TSESSD"
-    },
-    "bitbucket": {
-        "base_url":    "https://bitbucket.micron.com/bbdc/scm",
-        "project_key": "TESTSSD"
-    },
-    "model_gateway": {
-        "base_url": "https://model-gateway.gcldgenaigw.gc.micron.com/api/v1"
-    },
-    "settings": {
-        "timeout": 300
-    },
-    "compile": {
-        "last_tgz_label": "",
-        "shared_folder":  "P:\\temp\\BENTO",
-        "source_dir":     ""
-    },
-    "cat": {
-        "_comment":           "N: = \\\\sifsmodtestrep\\ModTestRep  |  Q: = \\\\sifsmodauto\\modauto  |  P: = \\\\pgfsmodauto\\modauto",
-        "db_path":            "\\\\sifsmodauto\\modauto\\temp\\cat\\CRT_Automation.db",
-        "crt_excel_path":     "..\\Documents\\incoming_crt.xlsx",
-        "incoming_crt_excel": "\\\\sifsmodtestrep\\ModTestRep\\crab\\incoming_crt.xlsx",
-        "profile_gen_excel":  "\\\\sifsmodtestrep\\ModTestRep\\crab\\for_profile_gen.xlsx"
-    },
-    "checkout": {
-        "hardware_config":        "config/profile_gen_hardware.json",
-        "site_config":            "config/site_config.json",
-        "hot_folder":             "C:\\test_program\\playground_queue",
-        "slate_log_path":         "C:\\test_program\\logs\\slate_system.log",
-        "playground_folder":      "C:\\test_program\\playground",
-        "output_folder":          "C:\\test_program\\results",
-        "memory_collect_exe":     "C:\\tools\\memory_collect.exe",
-        "memory_collect_timeout": 600,
-        "timeout_minutes":        30,
-        "recipe_folder":          "\\\\sifsmodauto\\modauto\\release\\ssd\\recipe_selection",
-        "python2_exe":            "C:\\Python27\\python.exe",
-        "generate_tmptravl":      true,
-        "mam_site":               "singapore",
-        "sap_instance":           "PR1",
-        "sap_enabled":            true
-    },
-    "notifications": {
-        "teams_webhook_url":  "",
-        "notify_on_complete": true,
-        "notify_on_failure":  true
-    },
-    "force_fail": {
-        "max_cases":    5,
-        "auto_cleanup": true,
-        "temp_dir":     ""
-    },
-    "registry_path": "P:\\temp\\BENTO\\bento_testers.json",
-    "encryption": {
-        "enabled": false,
-        "encrypted_settings": ""
-    }
+  "jira": {
+    "base_url": "https://micron.atlassian.net",
+    "project_key": "TSESSD"
+  },
+  "bitbucket": {
+    "base_url": "https://bitbucket.micron.com/bbdc/scm",
+    "project_key": "TESTSSD"
+  },
+  "model_gateway": {
+    "base_url": "https://model-gateway.gcldgenaigw.gc.micron.com/api/v1"
+  },
+  "settings": {
+    "timeout": 300
+  },
+  "compile": {
+    "last_tgz_label": ""
+  },
+  "notifications": {
+    "teams_webhook_url": "",
+    "notify_on_complete": true,
+    "notify_on_failure": true
+  },
+  "cat": {
+    "_comment": "N: = \\\\sifsmodtestrep\\ModTestRep  |  Q: = \\\\sifsmodauto\\modauto  |  P: = \\\\pgfsmodauto\\modauto",
+    "db_path": "\\\\sifsmodauto\\modauto\\temp\\cat\\CRT_Automation.db",
+    "crt_excel_path": "..\\Documents\\incoming_crt.xlsx",
+    "incoming_crt_excel": "\\\\sifsmodtestrep\\ModTestRep\\crab\\incoming_crt.xlsx",
+    "profile_gen_excel": "\\\\sifsmodtestrep\\ModTestRep\\crab\\for_profile_gen.xlsx"
+  },
+  "checkout": {
+    "hardware_config": "config/profile_gen_hardware.json",
+    "site_config": "config/site_config.json",
+    "hot_folder": "C:\\test_program\\playground_queue",
+    "slate_log_path": "C:\\test_program\\logs\\slate_system.log",
+    "playground_folder": "C:\\test_program\\playground",
+    "output_folder": "C:\\test_program\\results",
+    "memory_collect_exe": "C:\\tools\\memory_collect.exe",
+    "memory_collect_timeout": 600,
+    "timeout_minutes": 30,
+    "recipe_folder": "\\\\sifsmodauto\\modauto\\release\\ssd\\recipe_selection",
+    "python2_exe": "C:\\Python27\\python.exe",
+    "generate_tmptravl": true,
+    "mam_site": "singapore",
+    "sap_instance": "PR1",
+    "sap_enabled": true
+  },
+  "force_fail": {
+    "max_cases": 5,
+    "auto_cleanup": true,
+    "temp_dir": ""
+  },
+  "registry_path": "P:\\temp\\BENTO\\bento_testers.json",
+  "encryption": {
+    "enabled": false,
+    "encrypted_settings": ""
+  }
 }

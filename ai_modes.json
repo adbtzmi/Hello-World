@@ -3,7 +3,7 @@
   "_usage": "Each prompt key in config.json maps to a mode key here. The 'system_prompt' is sent as the system/role message to the AI before the user prompt.",
   "models": {
     "analysis": {
-      "name": "gemini-3-pro-preview",
+      "name": "gemini-3.0-pro-preview",
       "temperature": 0.7,
       "max_tokens": 2000
     },
@@ -78,9 +78,9 @@
       "task_type": "code_generation"
     },
     "force_fail_generation": {
-      "name": "🎯 Force Fail Generator",
+      "name": "\u00f0\u0178\u017d\u00af Force Fail Generator",
       "description": "Generates targeted code changes to create force-fail test program variants for SSD validation",
-      "system_prompt": "You are an expert SSD test engineer specializing in creating force-fail test scenarios. Your role is to generate precise, minimal code changes that will cause specific, detectable test failures.\n\nYou understand common force-fail patterns for SSD test programs:\n- Limit violations: Changing threshold values to trigger out-of-range failures\n- Rule inversions: Flipping pass/fail conditions in rule files\n- Config overrides: Setting invalid configuration values\n- Disabled checks: Commenting out or bypassing validation logic\n- Wrong references: Pointing to non-existent FIDs, wrong product codes\n- Boundary violations: Setting values just outside acceptable ranges\n- Return code changes: Changing pass return codes to fail codes\n- Parameter corruption: Modifying input parameters to invalid values\n\nWhen generating force-fail changes:\n- Make MINIMAL changes — only modify what is needed to cause the specific failure\n- NEVER modify framework or infrastructure code — only test-specific logic\n- Ensure changes cause DETECTABLE failures (not silent ones)\n- The original_lines MUST exactly match what exists in the file (including whitespace)\n- Provide clear rationale for why each change will cause the expected failure\n- Each force-fail case should test ONE specific failure scenario\n- Output ONLY valid JSON in the specified schema — no markdown, no extra text\n- Consider the JIRA change context to generate relevant force-fail scenarios",
+      "system_prompt": "You are an expert SSD test engineer specializing in creating force-fail test scenarios. Your role is to generate precise, minimal code changes that will cause specific, detectable test failures.\n\nYou understand common force-fail patterns for SSD test programs:\n- Limit violations: Changing threshold values to trigger out-of-range failures\n- Rule inversions: Flipping pass/fail conditions in rule files\n- Config overrides: Setting invalid configuration values\n- Disabled checks: Commenting out or bypassing validation logic\n- Wrong references: Pointing to non-existent FIDs, wrong product codes\n- Boundary violations: Setting values just outside acceptable ranges\n- Return code changes: Changing pass return codes to fail codes\n- Parameter corruption: Modifying input parameters to invalid values\n\nWhen generating force-fail changes:\n- Make MINIMAL changes \u00e2\u20ac\u201d only modify what is needed to cause the specific failure\n- NEVER modify framework or infrastructure code \u00e2\u20ac\u201d only test-specific logic\n- Ensure changes cause DETECTABLE failures (not silent ones)\n- The original_lines MUST exactly match what exists in the file (including whitespace)\n- Provide clear rationale for why each change will cause the expected failure\n- Each force-fail case should test ONE specific failure scenario\n- Output ONLY valid JSON in the specified schema \u00e2\u20ac\u201d no markdown, no extra text\n- Consider the JIRA change context to generate relevant force-fail scenarios",
       "temperature": 0.3,
       "task_type": "code_generation"
     }
