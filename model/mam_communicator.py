@@ -342,6 +342,8 @@ _LOT_LOOKUP_ATTRS = [
     "STEP OR LOCATION",
     "BASE CFGPN",
     "MODULE FGPN",
+    "MODULE FORM FACTOR",
+    "MATERIAL DESCRIPTION",
 ]
 
 
@@ -625,6 +627,8 @@ def query_lot_cfgpn_mcto(
         - ``"cfgpn"`` — BASE CFGPN value (empty string if not found)
         - ``"mcto"`` — MODULE FGPN value (empty string if not found)
         - ``"step"`` — STEP OR LOCATION value (empty string if not found)
+        - ``"form_factor"`` — MODULE FORM FACTOR value (empty string if not found)
+        - ``"material_desc"`` — MATERIAL DESCRIPTION value (empty string if not found)
         - ``"success"`` — ``"true"`` or ``"false"``
         - ``"error"`` — error message if failed
         - ``"all_attrs"`` — dict of all returned attributes
@@ -633,6 +637,8 @@ def query_lot_cfgpn_mcto(
         "cfgpn": "",
         "mcto": "",
         "step": "",
+        "form_factor": "",
+        "material_desc": "",
         "success": "false",
         "error": "",
     }
@@ -687,12 +693,16 @@ def query_lot_cfgpn_mcto(
         result["cfgpn"] = row.get("BASE_CFGPN", "").strip()
         result["mcto"] = row.get("MODULE_FGPN", "").strip()
         result["step"] = row.get("STEP_OR_LOCATION", "").strip()
+        result["form_factor"] = row.get("MODULE_FORM_FACTOR", "").strip()
+        result["material_desc"] = row.get("MATERIAL_DESCRIPTION", "").strip()
         result["success"] = "true"
         result["all_attrs"] = row  # type: ignore[assignment]
 
         logger.info(
-            "MAM lot query OK: lot=%s → CFGPN=%s, MCTO=%s, STEP=%s",
+            "MAM lot query OK: lot=%s → CFGPN=%s, MCTO=%s, STEP=%s, "
+            "FORM_FACTOR=%s, MATERIAL_DESC=%s",
             lot, result["cfgpn"], result["mcto"], result["step"],
+            result["form_factor"], result["material_desc"],
         )
 
     except Exception as e:

@@ -415,13 +415,16 @@ class CheckoutController(object):
             target=_lookup, daemon=True, name="bento-crt-lookup"
         ).start()
 
-    # ── LOT → CFGPN/MCTO LOOKUP (auto-fill table) ────────────────────────────
+    # ── LOT → CFGPN/MCTO/FORM_FACTOR/MATERIAL_DESC LOOKUP (auto-fill table) ─
     def lookup_lot_cfgpn_mcto(self, lot: str, row_idx: int, site: str = ""):
-        """Query MAM SOAP for a dummy lot and auto-fill CFGPN/MCTO in the table.
+        """Query MAM SOAP for a dummy lot and auto-fill CFGPN/MCTO/Form_Factor/Material_Desc.
 
         Runs in a background thread. On success, calls
-        ``checkout_tab.on_lot_lookup_completed(row_idx, cfgpn, mcto)``
+        ``checkout_tab.on_lot_lookup_completed(row_idx, cfgpn, mcto, form_factor, material_desc)``
         on the main thread to update the profile grid.
+
+        If MAM does not return MODULE_FORM_FACTOR but CFGPN is available,
+        falls back to SAP query to extract MODULE_FORM_FACTOR from CFGPN attributes.
 
         Parameters
         ----------
@@ -439,7 +442,7 @@ class CheckoutController(object):
                     self._view.root.after(
                         0,
                         lambda: self._view.context.log(
-                            f"Looking up lot '{lot}' → CFGPN/MCTO..."
+                            f"Looking up lot '{lot}' → CFGPN/MCTO/Form Factor/Material Desc..."
                         )
                     )
                 result = query_lot_cfgpn_mcto(lot, site=site)
@@ -447,15 +450,49 @@ class CheckoutController(object):
                     cfgpn = result.get("cfgpn", "")
                     mcto = result.get("mcto", "")
                     step = result.get("step", "")
+                    form_factor = result.get("form_factor", "")
+                    material_desc = result.get("material_desc", "")
+
+                    # SAP fallback: if MAM didn't return form_factor but we
+                    # have a CFGPN, query SAP for MODULE_FORM_FACTOR
+                    if not form_factor and cfgpn:
+                        try:
+                            from model.orchestrators.checkout_orchestrator import query_sap_attributes
+                            from model.sap_communicator import SAPCommunicator
+                            logger.info(
+                                "Form factor not in MAM — querying SAP for CFGPN=%s...",
+                                cfgpn,
+                            )
+                            sap_attrs = query_sap_attributes(cfgpn)
+                            if sap_attrs:
+                                form_factor = sap_attrs.get(
+                                    "MODULE_FORM_FACTOR", ""
+                                ).strip()
+                                if not material_desc:
+                                    # Also try PRODUCT_NAME from SAP as material desc
+                                    material_desc = sap_attrs.get(
+                                        "PRODUCT_NAME", ""
+                                    ).strip()
+                                if form_factor:
+                                    logger.info(
+                                        "SAP fallback OK: CFGPN=%s → FORM_FACTOR=%s",
+                                        cfgpn, form_factor,
+                                    )
+                        except Exception as sap_err:
+                            logger.warning(
+                                "SAP fallback for form_factor failed: %s", sap_err
+                            )
+
                     logger.info(
-                        "Lot lookup OK: lot=%s → CFGPN=%s, MCTO=%s, STEP=%s",
-                        lot, cfgpn, mcto, step,
+                        "Lot lookup OK: lot=%s → CFGPN=%s, MCTO=%s, STEP=%s, "
+                        "FORM_FACTOR=%s, MATERIAL_DESC=%s",
+                        lot, cfgpn, mcto, step, form_factor, material_desc,
                     )
                     if self._view:
                         self._view.root.after(
                             0,
                             lambda: self._view.checkout_tab.on_lot_lookup_completed(
-                                row_idx, cfgpn, mcto
+                                row_idx, cfgpn, mcto, form_factor, material_desc
                             )
                         )
                 else:
@@ -975,6 +1012,7 @@ class CheckoutController(object):
                             recipe_folder     = self._config.get("checkout", {}).get("recipe_folder", ""),
                             python2_exe       = self._config.get("checkout", {}).get("python2_exe", ""),
                             site              = params.get("site", self._config.get("checkout", {}).get("mam_site", "")),
+                            form_factor       = row.get("form_factor", ""),
                             autostart         = params.get("autostart", "False"),
                             attr_overwrites   = row_attr_overwrites,
                             recipe_override   = params.get("recipe_override", ""),

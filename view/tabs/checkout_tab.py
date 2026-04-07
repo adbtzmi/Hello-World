@@ -262,9 +262,14 @@ class CheckoutTab(BaseTab):
         _tip(exp_btn, "Export the current profile table to an Excel file.")
 
         crt_btn = ttk.Button(toolbar, text="Load from CRT", command=self._profile_load_from_crt)
-        crt_btn.pack(side=tk.LEFT, padx=(0, 0))
+        crt_btn.pack(side=tk.LEFT, padx=(0, 3))
         _tip(crt_btn, "Read the CRT Excel file and auto-populate Form_Factor, Material_Desc,\n"
              "CFGPN, MCTO_#1, Dummy_Lot. Editable columns (Step, MID, Tester…) remain blank.")
+
+        hw_btn = ttk.Button(toolbar, text="View/Edit Hardware", command=self._open_hardware_config)
+        hw_btn.pack(side=tk.LEFT, padx=(0, 0))
+        _tip(hw_btn, "View and edit hardware configuration (DIB_TYPE, MACHINE_MODEL,\n"
+             "MACHINE_VENDOR) used for profile generation and tmptravl creation.")
 
         # ── CRT Source row ────────────────────────────────────────────────
         src_row = ttk.Frame(frm)
@@ -772,6 +777,11 @@ class CheckoutTab(BaseTab):
             self.log(f"✓ Profile table exported to {os.path.basename(path)}")
         except Exception as e:
             self.show_error("Export Error", f"Cannot export file:\n{path}\n\n{e}")
+
+    def _open_hardware_config(self):
+        """Open the View/Edit Hardware Configuration dialog."""
+        from view.dialogs.hardware_config_dialog import HardwareConfigDialog
+        HardwareConfigDialog(self.winfo_toplevel())
 
     def _profile_load_from_crt(self):
         excel_path = self.context.get_var('checkout_excel_path').get().strip()
@@ -1318,10 +1328,24 @@ class CheckoutTab(BaseTab):
         else:
             self.log(f"[WARN] Cannot lookup lot — controller not available")
 
-    def on_lot_lookup_completed(self, row_idx: int, cfgpn: str, mcto: str):
-        """Callback from controller: auto-fill CFGPN and MCTO_#1 in the table.
+    def on_lot_lookup_completed(self, row_idx: int, cfgpn: str, mcto: str,
+                                form_factor: str = "", material_desc: str = ""):
+        """Callback from controller: auto-fill CFGPN, MCTO_#1, Form_Factor, Material_Desc.
 
         Called on the main thread via ``root.after()``.
+
+        Parameters
+        ----------
+        row_idx : int
+            Row index in the profile table to update.
+        cfgpn : str
+            BASE CFGPN value from MAM lot lookup.
+        mcto : str
+            MODULE FGPN (MCTO#1) value from MAM lot lookup.
+        form_factor : str, optional
+            MODULE FORM FACTOR from MAM or SAP fallback.
+        material_desc : str, optional
+            MATERIAL DESCRIPTION from MAM or SAP fallback.
         """
         if row_idx < 0 or row_idx >= len(self._profile_data):
             self.log(f"[WARN] Lot lookup returned for invalid row {row_idx}")
@@ -1333,12 +1357,18 @@ class CheckoutTab(BaseTab):
         if mcto:
             self._profile_data[row_idx]["MCTO_#1"] = mcto
             updated.append(f"MCTO_#1={mcto}")
+        if form_factor:
+            self._profile_data[row_idx]["Form_Factor"] = form_factor
+            updated.append(f"Form_Factor={form_factor}")
+        if material_desc:
+            self._profile_data[row_idx]["Material_Desc"] = material_desc
+            updated.append(f"Material_Desc={material_desc}")
         if updated:
             self._refresh_profile_grid()
             lot = self._profile_data[row_idx].get("Dummy_Lot", "?")
             self.log(f"✓ Auto-filled from lot '{lot}': {', '.join(updated)}")
         else:
-            self.log(f"[WARN] Lot lookup returned empty CFGPN/MCTO")
+            self.log(f"[WARN] Lot lookup returned empty CFGPN/MCTO/Form_Factor/Material_Desc")
 
     def _trigger_mid_verify(self, row_idx: int, mid: str):
         """Trigger background MAM SOAP verification for a MID.
