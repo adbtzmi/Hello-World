@@ -69,27 +69,6 @@ CHECKOUT_TIMEOUT_SECONDS = 3600    # 60 min default
 # ── Teams webhook — override via settings.json or env var ────────────────────
 TEAMS_WEBHOOK_URL = ""
 
-# ── MEMORY COLLECTION ─────────────────────────────────────────────────────────
-# Default path — overridden by settings.json "checkout.memory_collect_exe"
-MEMORY_COLLECT_EXE      = r"C:\tools\memory_collect.exe"
-MEMORY_COLLECT_TIMEOUT  = 600   # seconds per slot — 10 min safety limit
-
-# Try to load from settings.json if available
-try:
-    _settings_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "..", "settings.json"
-    )
-    if os.path.exists(_settings_path):
-        with open(_settings_path, "r") as _sf:
-            _settings = json.load(_sf)
-        _checkout_cfg = _settings.get("checkout", {})
-        if _checkout_cfg.get("memory_collect_exe"):
-            MEMORY_COLLECT_EXE = _checkout_cfg["memory_collect_exe"]
-        if _checkout_cfg.get("memory_collect_timeout"):
-            MEMORY_COLLECT_TIMEOUT = int(_checkout_cfg["memory_collect_timeout"])
-except Exception:
-    pass  # Use defaults if settings.json is missing or malformed
-
 # ── CONFIRMED COLUMN NAMES from crt_excel_template.json [26] ─────────────────
 # ⚠️  "Product  Name" = DOUBLE SPACE — confirmed in CAT.py [33]
 _COL_MATERIAL  = "Material description"
@@ -1250,143 +1229,7 @@ def wait_for_checkout(
     }
 
 
-# ── STEP 5 — Memory collection ────────────────────────────────────────────────
-def collect_dut_memory(
-    hostname:      str,
-    jira_key:      str,
-    dut_slots:     int,
-    output_folder: str,
-    logger         = None,
-    log_callback   = None,
-    phase_callback = None,
-) -> Dict:
-    """
-    Trigger memory collection for all DUT slots after playground creation.
-    Results saved to P:\\temp\\BENTO\\CHECKOUT_RESULTS\\ [24]
-
-    Calls MEMORY_COLLECT_EXE (configured via settings.json) with:
-      --slot <slot_number> --jira <jira_key> --hostname <hostname>
-      --output <output_folder>
-
-    Falls back to writing a diagnostic info file if the exe is not found.
-    """
-    if logger is None:
-        logger = _get_logger()
-
-    _phase(logger, f"Collecting memory for {dut_slots} DUT(s)…",
-           log_callback, phase_callback)
-
-    try:
-        os.makedirs(output_folder, exist_ok=True)
-    except Exception as e:
-        _log(logger,
-             f"⚠ Cannot create memory output folder: {e}",
-             log_callback, "warning")
-
-    exe_available = os.path.isfile(MEMORY_COLLECT_EXE)
-    if not exe_available:
-        _log(logger,
-             f"⚠ memory_collect.exe not found at: {MEMORY_COLLECT_EXE} "
-             f"— will write diagnostic info files instead",
-             log_callback, "warning")
-
-    collected = []
-    failed    = []
-
-    for slot in range(1, dut_slots + 1):
-        try:
-            if exe_available:
-                # ── REAL MEMORY COLLECTION via memory_collect.exe ──────
-                cmd = [
-                    MEMORY_COLLECT_EXE,
-                    "--slot", str(slot),
-                    "--jira", jira_key,
-                    "--hostname", hostname,
-                    "--output", output_folder,
-                ]
-                _log(logger,
-                     f"  [RUN] {' '.join(cmd)}",
-                     log_callback)
-
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-                try:
-                    stdout, stderr = proc.communicate(
-                        timeout=MEMORY_COLLECT_TIMEOUT
-                    )
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.communicate()
-                    raise RuntimeError(
-                        f"memory_collect.exe timed out after "
-                        f"{MEMORY_COLLECT_TIMEOUT}s"
-                    )
-
-                # Write stdout/stderr to log files for diagnostics
-                slot_dir = os.path.join(output_folder, f"slot{slot}")
-                os.makedirs(slot_dir, exist_ok=True)
-                if stdout:
-                    with open(os.path.join(slot_dir, "stdout.log"), "wb") as f:
-                        f.write(stdout)
-                if stderr:
-                    with open(os.path.join(slot_dir, "stderr.log"), "wb") as f:
-                        f.write(stderr)
-
-                if proc.returncode != 0:
-                    err_msg = stderr.decode("utf-8", errors="replace").strip()
-                    raise RuntimeError(
-                        f"memory_collect.exe returned code "
-                        f"{proc.returncode}: {err_msg}"
-                    )
-
-                collected.append(slot)
-                _log(logger,
-                     f"  ✓ Slot {slot} — memory collected via exe",
-                     log_callback)
-            else:
-                # ── FALLBACK: write diagnostic info file ──────────────
-                mem_file = os.path.join(
-                    output_folder, f"{jira_key}_slot{slot}_memory.txt"
-                )
-                with open(mem_file, 'w') as f:
-                    f.write(f"Memory collection — exe not found\n")
-                    f.write(f"JIRA Key : {jira_key}\n")
-                    f.write(f"Hostname : {hostname}\n")
-                    f.write(f"Slot     : {slot}\n")
-                    f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-                    f.write(f"Expected : {MEMORY_COLLECT_EXE}\n")
-
-                collected.append(slot)
-                _log(logger,
-                     f"  ✓ Slot {slot} → {os.path.basename(mem_file)} "
-                     f"(diagnostic fallback)",
-                     log_callback)
-
-        except Exception as e:
-            failed.append(slot)
-            _log(logger,
-                 f"  ✗ Slot {slot} memory collection failed: {e}",
-                 log_callback, "warning")
-
-    status = "success" if not failed else (
-        "partial" if collected else "failed"
-    )
-    detail = f"Collected {len(collected)}/{dut_slots} slots"
-    if failed:
-        detail += f" (failed slots: {failed})"
-
-    _log(logger, f"Memory collection done: {detail}", log_callback)
-    return {
-        "status":          status,
-        "detail":          detail,
-        "collected_slots": collected
-    }
-
-
-# ── STEP 6 — Teams notification ───────────────────────────────────────────────
+# ── STEP 5 — Teams notification ───────────────────────────────────────────────
 def send_teams_notification(
     jira_key:    str,
     hostname:    str,
@@ -1637,24 +1480,6 @@ def run_checkout(
              f"[{icon}] {label}: {tc_result['status']} "
              f"in {tc_result['elapsed']}s",
              log_callback)
-
-    # ── Memory collection after ALL test cases ────────────────────────
-    # SKIPPED: memory_collect.exe is not available on testers yet.
-    # When the tool is ready, uncomment the block below.
-    # _phase(logger, "Collecting DUT memory…", log_callback, phase_callback)
-    # mem_output = os.path.join(
-    #     CHECKOUT_RESULTS_FOLDER, f"{jira_key}_{hostname}"
-    # )
-    # mem_result = collect_dut_memory(
-    #     hostname       = hostname,
-    #     jira_key       = jira_key,
-    #     dut_slots      = dut_slots,
-    #     output_folder  = mem_output,
-    #     logger         = logger,
-    #     log_callback   = log_callback,
-    #     phase_callback = phase_callback,
-    # )
-    _log(logger, "ℹ Memory collection skipped (not configured)", log_callback)
 
     # ── Teams notification ────────────────────────────────────────────
     final_status  = ("success"

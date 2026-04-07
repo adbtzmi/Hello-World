@@ -34,8 +34,6 @@
     "slate_log_path": "C:\\test_program\\logs\\slate_system.log",
     "playground_folder": "C:\\test_program\\playground",
     "output_folder": "C:\\test_program\\results",
-    "memory_collect_exe": "C:\\tools\\memory_collect.exe",
-    "memory_collect_timeout": 600,
     "timeout_minutes": 30,
     "recipe_folder": "\\\\sifsmodauto\\modauto\\release\\ssd\\recipe_selection",
     "python2_exe": "C:\\Python27\\python.exe",

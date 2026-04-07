@@ -134,27 +134,6 @@ SLATE_LOG_PATH          = r"C:\test_program\logs\slate_system.log"
 SLATE_RESULTS_FOLDER    = r"C:\test_program\results"
 SLATE_PLAYGROUND_FOLDER = r"C:\test_program\playground"
 
-# ── MEMORY COLLECTION ─────────────────────────────────────────────────────────
-# Default path — overridden by settings.json "checkout.memory_collect_exe"
-MEMORY_COLLECT_EXE      = r"C:\tools\memory_collect.exe"
-MEMORY_COLLECT_TIMEOUT  = 600   # seconds per DUT — 10 min safety limit
-
-# Try to load from settings.json if available
-try:
-    _settings_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "..", "settings.json"
-    )
-    if os.path.exists(_settings_path):
-        with open(_settings_path, "r") as _sf:
-            _settings = json.load(_sf)
-        _checkout_cfg = _settings.get("checkout", {})
-        if _checkout_cfg.get("memory_collect_exe"):
-            MEMORY_COLLECT_EXE = _checkout_cfg["memory_collect_exe"]
-        if _checkout_cfg.get("memory_collect_timeout"):
-            MEMORY_COLLECT_TIMEOUT = int(_checkout_cfg["memory_collect_timeout"])
-except Exception:
-    pass  # Use defaults if settings.json is missing or malformed
-
 MAX_RETRIES        = 20
 MAX_PROCESSED_SIZE = 500
 HEARTBEAT_EVERY    = 30
@@ -1466,163 +1445,6 @@ class PlaygroundCompletionMonitor(object):
 SlateCompletionMonitor = PlaygroundCompletionMonitor
 
 
-# ── MEMORY COLLECTION ─────────────────────────────────────────────────────────
-import subprocess
-
-def collect_one_dut(dut_elem, output_dir, logger):
-    """
-    Memory collection for one DUT using memory_collect.exe.
-
-    Calls the configured MEMORY_COLLECT_EXE with:
-      --dut-location <row,col>
-      --mid <MID>
-      --output <per-DUT output directory>
-
-    Falls back to writing a diagnostic info file if the exe is not found.
-    """
-    mid     = dut_elem.get("MID", "unknown")
-    lot     = dut_elem.get("Lot", "")
-    dut_loc = dut_elem.get("DutLocation", "")
-
-    try:
-        dut_dir = os.path.join(output_dir, mid)
-        if not os.path.isdir(dut_dir):
-            os.makedirs(dut_dir)
-
-        # ── REAL MEMORY COLLECTION via memory_collect.exe ─────────────
-        if os.path.isfile(MEMORY_COLLECT_EXE):
-            cmd = [
-                MEMORY_COLLECT_EXE,
-                "--dut-location", dut_loc,
-                "--mid", mid,
-                "--lot", lot,
-                "--output", dut_dir,
-            ]
-            logger.info(
-                "  [RUN] " + " ".join(cmd)
-            )
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            try:
-                stdout, stderr = proc.communicate(
-                    timeout=MEMORY_COLLECT_TIMEOUT
-                )
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.communicate()
-                raise RuntimeError(
-                    "memory_collect.exe timed out after "
-                    + str(MEMORY_COLLECT_TIMEOUT) + "s"
-                )
-
-            # Write stdout/stderr to log files for diagnostics
-            if stdout:
-                stdout_file = os.path.join(dut_dir, "memory_collect_stdout.log")
-                with open(stdout_file, "wb") as f:
-                    f.write(stdout)
-            if stderr:
-                stderr_file = os.path.join(dut_dir, "memory_collect_stderr.log")
-                with open(stderr_file, "wb") as f:
-                    f.write(stderr)
-
-            if proc.returncode != 0:
-                err_msg = stderr.decode("utf-8", errors="replace").strip()
-                raise RuntimeError(
-                    "memory_collect.exe returned code "
-                    + str(proc.returncode) + ": " + err_msg
-                )
-
-            logger.info(
-                "  [OK] Memory collected via exe: " + mid + " @ " + dut_loc
-            )
-        else:
-            # ── FALLBACK: exe not found — write diagnostic info file ──
-            logger.warning(
-                "  [WARN] memory_collect.exe not found at: "
-                + MEMORY_COLLECT_EXE
-                + " — writing diagnostic info file instead"
-            )
-            info_file = os.path.join(dut_dir, "memory_info.txt")
-            with open(info_file, "w") as f:
-                f.write("MID        : " + mid + "\n")
-                f.write("Lot        : " + lot + "\n")
-                f.write("DUT Loc    : " + dut_loc + "\n")
-                f.write("Timestamp  : " + datetime.now().isoformat() + "\n")
-                f.write("Status     : FALLBACK (exe not found)\n")
-                f.write("Expected   : " + MEMORY_COLLECT_EXE + "\n")
-
-            logger.info(
-                "  [OK] Diagnostic info written: " + mid + " @ " + dut_loc
-            )
-
-        return True
-
-    except Exception as e:
-        logger.error(
-            "  [FAIL] Memory collection for " + mid + ": " + str(e)
-        )
-        return False
-
-
-def trigger_memory_collection(xml_path, jira_key, logger, hostname="", env=""):
-    """
-    Auto-trigger memory collection for ALL DUTs sequentially.
-    Results saved to P:\\temp\\BENTO\\CHECKOUT_RESULTS\\HOSTNAME_ENV\\JIRA_KEY\\
-    e.g. P:\\temp\\BENTO\\CHECKOUT_RESULTS\\IBIR-0383_ABIT\\TSESSD-14270\\
-    """
-    try:
-        tree = ET.parse(xml_path)
-        duts = tree.getroot().findall(".//MaterialInfo/Attribute")
-    except Exception as e:
-        logger.error("Cannot parse DUT list: " + str(e))
-        return {"status": "failed", "detail": str(e), "collected": 0}
-
-    # Build tester-specific subfolder: HOSTNAME_ENV (e.g. IBIR-0383_ABIT)
-    tester_folder = ""
-    if hostname and env:
-        tester_folder = hostname + "_" + env.upper()
-    elif hostname:
-        tester_folder = hostname
-    elif env:
-        tester_folder = env.upper()
-
-    if tester_folder:
-        output_dir = os.path.join(CHECKOUT_RESULTS_FOLDER, tester_folder, jira_key)
-    else:
-        output_dir = os.path.join(CHECKOUT_RESULTS_FOLDER, jira_key)
-
-    try:
-        if not os.path.isdir(output_dir):
-            os.makedirs(output_dir)
-        logger.info("[OK] Results folder: " + output_dir)
-    except Exception as e:
-        logger.warning("Cannot create results folder: " + str(e))
-
-    collected = 0
-    failed    = 0
-
-    for dut in duts:
-        ok = collect_one_dut(dut, output_dir, logger)
-        if ok:
-            collected += 1
-        else:
-            failed += 1
-
-    total  = len(duts)
-    status = "success" if failed == 0 else (
-        "partial" if collected > 0 else "failed"
-    )
-    detail = "Collected " + str(collected) + "/" + str(total) + " DUTs"
-    if failed:
-        detail += " (" + str(failed) + " failed)"
-
-    logger.info("Memory collection done: " + detail)
-    return {"status": status, "detail": detail, "collected": collected}
-
-
 # ── PARSE JIRA FROM FILENAME ──────────────────────────────────────────────────
 def _parse_jira_from_xml_name(fname):
     """Extract JIRA key from filename.
@@ -1782,22 +1604,11 @@ def process_checkout_xml(xml_path, env, logger):
         + ": " + fname
     )
 
-    # Step 5: Memory collection — SKIPPED
-    # memory_collect.exe is not available on testers yet.
-    # When the tool is ready, uncomment the block below.
-    # logger.info("[~] Starting memory collection for all DUTs...")
-    # mem_result = trigger_memory_collection(
-    #     xml_path, jira_key, logger,
-    #     hostname=hostname, env=env
-    # )
-    logger.info("[~] Memory collection skipped (not configured)")
-
-    # Step 6: Write success status -> orchestrator wakes up
+    # Step 5: Write success status -> orchestrator wakes up
     write_status(
         xml_path, "success",
         "Checkout complete (playground created via "
-        + monitor.completion_method + "). "
-        + "MemCollect: skipped"
+        + monitor.completion_method + ")"
     )
     logger.info("[OK] Status written: success - " + fname)
 
