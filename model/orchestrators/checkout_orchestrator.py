@@ -5,13 +5,12 @@ model/orchestrators/checkout_orchestrator.py
 BENTO Checkout Orchestrator — Phase 2 Auto Start Checkout
 
 Runs on the LOCAL PC. Full flow:
-1. Read CRT Excel from ../Documents/incoming_crt.xlsx
+1. Read CRT Excel (user-selected file)
 2. Generate SLATE XML (correct Profile schema with AutoStart=True)
 3. Drop XML to P:\temp\BENTO\CHECKOUT_QUEUE\   <- FIXED: was HOT_DROP
 4. Poll .checkout_status sidecar (mirrors wait_for_build() exactly)
 5. Loop per test case (PASSING + FORCE FAIL sequentially)
-6. Memory collection after all test cases
-7. Teams notification with per-test-case summary
+6. Teams notification with per-test-case summary
 
 KEY FIX:
   run_checkout()     -> saves XML to CHECKOUT_QUEUE (shared P: drive)
@@ -45,7 +44,6 @@ from model.profile_sorter import ProfileSorter
 # ── CONFIRMED PATHS ───────────────────────────────────────────────────────────
 # N: = \\sifsmodtestrep\ModTestRep  (confirmed via `net use` output)
 CAT_CRAB_FOLDER         = r"\\sifsmodtestrep\ModTestRep\crab"
-CRT_EXCEL_PATH          = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "Documents", "incoming_crt.xlsx")
 CRT_DB_PATH             = r"\\sifsmodtestrep\ModTestRep\crab\closed_crt_jira_info.db"
 
 # ── P: drive — BENTO shared folders ──────────────────────────────────────────
@@ -342,8 +340,7 @@ def load_dut_info_from_crt(
     log_callback        = None,
 ) -> list:
     r"""
-    Read CRT Excel from ../Documents/incoming_crt.xlsx
-    (Previously: \\sifsmodtestrep\ModTestRep\crab\crt_from_sap.xlsx)
+    Read CRT Excel file.
 
     Mirrors CatDB.update_db_with_crt_excel() in CAT.py [33] exactly:
         df = pd.read_excel(filepath, engine="openpyxl", dtype=str)
@@ -356,14 +353,18 @@ def load_dut_info_from_crt(
     if logger is None:
         logger = _get_logger()
 
-    path = excel_path or CRT_EXCEL_PATH
+    path = excel_path
+
+    if not path:
+        msg = (
+            "No CRT Excel file selected.\n"
+            "Use 'Import from Excel' or 'Load from CRT' to select a file."
+        )
+        _log(logger, f"✗ {msg}", log_callback, "error")
+        raise FileNotFoundError(msg)
 
     if not os.path.exists(path):
-        msg = (
-            f"CRT Excel not found at:\n  {path}\n"
-            f"Ensure N: drive (\\\\sifsmodtestrep) is mapped\n"
-            f"and C.A.T. has completed a SAP export."
-        )
+        msg = f"CRT Excel not found at:\n  {path}"
         _log(logger, f"✗ {msg}", log_callback, "error")
         raise FileNotFoundError(msg)
 

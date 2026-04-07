@@ -177,12 +177,7 @@ class CheckoutTab(BaseTab):
         _sv('checkout_tc_fail_label', "force_fail_1")
         _sv('checkout_tc_fail_desc')
         _sv('checkout_cfgpn_filter')
-        _sv('checkout_excel_path',
-            ctx.config.get('cat', {}).get(
-                'crt_excel_path',
-                os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             '..', '..', 'Documents', 'incoming_crt.xlsx')
-            ))
+        _sv('checkout_excel_path', '')
         _sv('checkout_webhook_url',
             ctx.config.get('notifications', {}).get('teams_webhook_url', ''))
         _iv('checkout_timeout_min', 60)

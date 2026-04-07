@@ -30,7 +30,6 @@ logger = logging.getLogger("bento_app")
 # ── CONFIRMED PATHS ───────────────────────────────────────────────────────────
 # N: = \\sifsmodtestrep\ModTestRep  (confirmed via `net use`)
 _REGISTRY_PATH      = r"P:\temp\BENTO\bento_testers.json"
-_CRT_EXCEL_DEFAULT  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Documents", "incoming_crt.xlsx")
 _DEFAULT_HOT_FOLDER = r"C:\test_program\playground_queue"
 _CHECKOUT_QUEUE     = r"P:\temp\BENTO\CHECKOUT_QUEUE"
 # ── XML-only output folder (NOT monitored by checkout_watcher) ────────────────
@@ -139,19 +138,23 @@ class CheckoutController(object):
     def load_from_crt_excel(self, cfgpn="", excel_path=""):
         r"""
         Read CRT Excel and return structured data for the grid.
-        Confirmed path: ../Documents/incoming_crt.xlsx
         Column names from crt_excel_template.json.
         """
         import pandas as pd
 
         path = excel_path or self._config.get(
             "cat", {}
-        ).get("crt_excel_path", _CRT_EXCEL_DEFAULT)
+        ).get("crt_excel_path", "")
+
+        if not path:
+            raise FileNotFoundError(
+                "No CRT Excel file selected.\n"
+                "Use 'Import from Excel' or 'Load from CRT' to select a file."
+            )
 
         if not os.path.exists(path):
             raise FileNotFoundError(
-                "CRT Excel not found:\n  " + path + "\n"
-                "Ensure ../Documents/incoming_crt.xlsx exists."
+                "CRT Excel not found:\n  " + path
             )
 
         # Mirrors C.A.T. exactly
