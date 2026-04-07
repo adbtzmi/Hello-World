@@ -6,6 +6,7 @@ to scanning the TGZ for matching recipe files, then to the static RECIPE_MAP.
 """
 
 import os
+import re
 import sys
 import subprocess
 import logging
@@ -46,6 +47,116 @@ _FALLBACK_RECIPE_MAP: Dict[str, dict] = {
         },
     },
 }
+
+# ---------------------------------------------------------------------------
+# UNC base path for file copy operations (mirrors CAT recipe_selection.py)
+# ---------------------------------------------------------------------------
+_UNC_BASE = r"\\pgfsmodauto\modauto\release\ssd"
+
+
+def build_file_copy_paths_from_cfgpn(cfgpn_attrs: Dict[str, str]) -> Dict[str, str]:
+    """Build file_copy_paths from SAP CFGPN attributes.
+
+    When recipe_selection.py subprocess is unavailable, this function
+    constructs the same file_copy_paths that recipe_selection.py would
+    produce by reading firmware paths from SAP CFGPN data.
+
+    The CAT reference XML (production) has 6 AddtionalFileFolder entries:
+      1. config (with CONFIG_HASH)     → OS\\config
+      2. CHECKLIST_FILES               → OS\\checklist_files
+      3. TAMT_FILES                    → OS\\tamt_files
+      4. MFG_FW_FILE_PATH             → OS\\mfg_fw_files
+      5. CUST_FW release package      → OS\\net_files
+      6. vs_parser                     → OS\\vs_parser
+
+    Parameters
+    ----------
+    cfgpn_attrs : dict
+        SAP CFGPN attributes dict (from SAP query).
+
+    Returns
+    -------
+    dict
+        file_copy_paths dict with RECIPE_SEL_FILE_COPY_PATHS_01..06 keys.
+    """
+    paths: Dict[str, str] = {}
+
+    # Helper: convert artifactory URL to UNC path
+    # e.g. "https://boartifactory.micron.com/artifactory/ssdmfgtstparmperegrineion-generic-dev-local"
+    #   → extract the repo name for path construction
+    def _extract_artifactory_path(url: str) -> str:
+        """Extract the path portion after /artifactory/ from a URL.
+
+        Converts forward slashes to backslashes for UNC path compatibility.
+        """
+        if not url:
+            return ""
+        m = re.search(r'/artifactory/(.+)', url)
+        if not m:
+            return ""
+        return m.group(1).rstrip('/').replace('/', '\\')
+
+    # 1. config — always present, with CONFIG_HASH if available
+    config_hash = cfgpn_attrs.get("CONFIG_HASH", "")
+    if config_hash:
+        paths["RECIPE_SEL_FILE_COPY_PATHS_01"] = (
+            rf"{_UNC_BASE}\config\{config_hash}|OS\config"
+        )
+    else:
+        paths["RECIPE_SEL_FILE_COPY_PATHS_01"] = (
+            rf"{_UNC_BASE}\config|OS\config"
+        )
+
+    # 2. CHECKLIST_FILES — from TST_PARAM_PATH + MFG_TST_VERSION
+    tst_param_path = _extract_artifactory_path(cfgpn_attrs.get("TST_PARAM_PATH", ""))
+    mfg_tst_version = cfgpn_attrs.get("MFG_TST_VERSION", "")
+    product_name = cfgpn_attrs.get("PRODUCT_NAME", "").replace(" ", "").replace("_", "")
+    if tst_param_path and mfg_tst_version:
+        # Build: \\pgfsmodauto\modauto\release\ssd\firmware\Released\artifactory\<repo>\<version>\<product>_mfg_tst_params-<version>\CHECKLIST_FILES
+        checklist_path = (
+            rf"{_UNC_BASE}\firmware\Released\artifactory\{tst_param_path}"
+            rf"\{mfg_tst_version}\{product_name}_mfg_tst_params-{mfg_tst_version}\CHECKLIST_FILES"
+        )
+        paths["RECIPE_SEL_FILE_COPY_PATHS_02"] = f"{checklist_path}|OS\\checklist_files"
+
+        # 3. TAMT_FILES — same base path, different subfolder
+        tamt_path = (
+            rf"{_UNC_BASE}\firmware\Released\artifactory\{tst_param_path}"
+            rf"\{mfg_tst_version}\{product_name}_mfg_tst_params-{mfg_tst_version}\TAMT_FILES"
+        )
+        paths["RECIPE_SEL_FILE_COPY_PATHS_03"] = f"{tamt_path}|OS\\tamt_files"
+
+    # 4. MFG_FW_FILE_PATH — from MFG_FW_PATH + MFG_FW_VERSION
+    mfg_fw_path = _extract_artifactory_path(cfgpn_attrs.get("MFG_FW_PATH", ""))
+    mfg_fw_version = cfgpn_attrs.get("MFG_FW_VERSION", "")
+    if mfg_fw_path and mfg_fw_version:
+        mfg_fw_full = (
+            rf"{_UNC_BASE}\firmware\Released\artifactory\{mfg_fw_path}\{mfg_fw_version}"
+        )
+        paths["RECIPE_SEL_FILE_COPY_PATHS_04"] = f"{mfg_fw_full}|OS\\mfg_fw_files"
+
+        # 6. vs_parser — same MFG_FW base + vs_parser subfolder
+        vs_parser_path = rf"{mfg_fw_full}\vs_parser"
+        paths["RECIPE_SEL_FILE_COPY_PATHS_06"] = f"{vs_parser_path}|OS\\vs_parser"
+
+    # 5. net_files — from CUST_FW_PATH (release package directory)
+    cust_fw_path = _extract_artifactory_path(cfgpn_attrs.get("CUST_FW_PATH", ""))
+    if cust_fw_path:
+        # Remove the .tar.bz2 extension to get the directory path
+        cust_fw_dir = re.sub(r'\.tar\.bz2$', '', cust_fw_path, flags=re.IGNORECASE)
+        net_files_path = (
+            rf"{_UNC_BASE}\firmware\Released\artifactory\{cust_fw_dir}"
+        )
+        paths["RECIPE_SEL_FILE_COPY_PATHS_05"] = f"{net_files_path}|OS\\net_files"
+
+    if paths:
+        logger.info("Built %d file_copy_paths from CFGPN attributes", len(paths))
+        for k, v in sorted(paths.items()):
+            logger.debug("  %s = %s", k, v)
+    else:
+        logger.warning("Could not build file_copy_paths from CFGPN — missing firmware attributes")
+
+    return paths
 
 
 class RecipeResult:
@@ -302,8 +413,12 @@ class RecipeSelector:
     def select_recipe_or_fallback(self, tmptravl_path: str, step: str,
                                   timeout: int = 120,
                                   tgz_path: str = "",
-                                  recipe_override: str = "") -> RecipeResult:
+                                  recipe_override: str = "",
+                                  cfgpn_attrs: Optional[Dict[str, str]] = None) -> RecipeResult:
         """Try subprocess recipe selection; fall back to TGZ scan, then static map.
+
+        When subprocess fails, builds file_copy_paths from SAP CFGPN attributes
+        so that AddtionalFileFolder entries match production output.
 
         Parameters
         ----------
@@ -319,6 +434,9 @@ class RecipeSelector:
         recipe_override : str
             User-specified recipe override (e.g., "RECIPE\\Condor_neosem_ABIT.XML").
             When provided, skips all recipe selection logic and uses this directly.
+        cfgpn_attrs : dict, optional
+            SAP CFGPN attributes dict. When provided and subprocess fails,
+            used to build file_copy_paths dynamically from firmware paths.
 
         Returns
         -------
@@ -326,21 +444,31 @@ class RecipeSelector:
             Recipe selection result (from override, subprocess, TGZ scan, or fallback).
         """
         logger.info("DIAG: select_recipe_or_fallback called - is_available=%s, tmptravl_path=%s, "
-                     "tmptravl_exists=%s, step=%s, tgz_path=%s, recipe_override=%s",
+                     "tmptravl_exists=%s, step=%s, tgz_path=%s, recipe_override=%s, "
+                     "cfgpn_attrs_count=%d",
                      self.is_available, tmptravl_path,
                      os.path.isfile(tmptravl_path) if tmptravl_path else False,
-                     step, tgz_path, recipe_override)
+                     step, tgz_path, recipe_override,
+                     len(cfgpn_attrs) if cfgpn_attrs else 0)
 
         # ── Priority 0: User-specified recipe override ─────────────────
         if recipe_override and recipe_override.strip():
             result = RecipeResult()
             result.recipe_name = recipe_override.strip().upper()
-            result.file_copy_paths = {
-                "RECIPE_SEL_FILE_COPY_PATHS_01": r"\\pgfsmodauto\modauto\release\ssd\config|OS\config",
-            }
+            # Build file_copy_paths from CFGPN if available, else minimal config-only
+            if cfgpn_attrs:
+                result.file_copy_paths = build_file_copy_paths_from_cfgpn(cfgpn_attrs)
+            if not result.file_copy_paths:
+                result.file_copy_paths = {
+                    "RECIPE_SEL_FILE_COPY_PATHS_01": r"\\pgfsmodauto\modauto\release\ssd\config|OS\config",
+                }
+            # Set test_program_path from tgz_path when available
+            if tgz_path and tgz_path.strip():
+                result.test_program_path = tgz_path.strip()
             result.success = True
             result.source = "user_override"
-            logger.info("Using user-specified recipe override: %s", result.recipe_name)
+            logger.info("Using user-specified recipe override: %s (file_copy_paths=%d)",
+                        result.recipe_name, len(result.file_copy_paths))
             return result
 
         # ── Priority 1: Subprocess recipe selection ────────────────────
@@ -359,6 +487,15 @@ class RecipeSelector:
             logger.warning("DIAG: Subprocess recipe selection SKIPPED - is_available=%s, tmptravl_path=%r, tmptravl_exists=%s",
                            self.is_available, tmptravl_path, os.path.isfile(tmptravl_path) if tmptravl_path else False)
 
+        # ── Build SAP-based file_copy_paths for fallback scenarios ──────
+        # When subprocess fails, use CFGPN attributes to build the same
+        # file_copy_paths that recipe_selection.py would have produced.
+        sap_file_copy_paths: Dict[str, str] = {}
+        if cfgpn_attrs:
+            sap_file_copy_paths = build_file_copy_paths_from_cfgpn(cfgpn_attrs)
+            logger.info("DIAG: Built %d SAP-based file_copy_paths for fallback",
+                        len(sap_file_copy_paths))
+
         # ── Priority 2: TGZ recipe scan ────────────────────────────────
         step_upper = step.upper() if step else ""
         if tgz_path and tgz_path.strip():
@@ -366,13 +503,16 @@ class RecipeSelector:
             if tgz_recipe:
                 result = RecipeResult()
                 result.recipe_name = tgz_recipe
-                result.file_copy_paths = {
+                # Use SAP-based paths if available, else minimal config-only
+                result.file_copy_paths = sap_file_copy_paths or {
                     "RECIPE_SEL_FILE_COPY_PATHS_01": r"\\pgfsmodauto\modauto\release\ssd\config|OS\config",
                 }
+                # Set test_program_path from tgz_path
+                result.test_program_path = tgz_path.strip()
                 result.success = True
                 result.source = "tgz_scan"
-                logger.info("Using TGZ-scanned recipe for step '%s': %s (from %s)",
-                            step_upper, result.recipe_name, tgz_path)
+                logger.info("Using TGZ-scanned recipe for step '%s': %s (file_copy_paths=%d, from %s)",
+                            step_upper, result.recipe_name, len(result.file_copy_paths), tgz_path)
                 return result
             else:
                 logger.warning("DIAG: TGZ scan found no matching recipe for step '%s' in %s",
@@ -383,13 +523,19 @@ class RecipeSelector:
         fallback_entry = _FALLBACK_RECIPE_MAP.get(step_upper)
         if fallback_entry:
             result.recipe_name = fallback_entry["recipe_name"]
-            result.file_copy_paths = dict(fallback_entry.get("file_copy_paths", {}))
+            # Prefer SAP-based paths over static fallback paths
+            result.file_copy_paths = sap_file_copy_paths or dict(fallback_entry.get("file_copy_paths", {}))
+            # Set test_program_path from tgz_path if available
+            if tgz_path and tgz_path.strip():
+                result.test_program_path = tgz_path.strip()
             result.success = True
             result.source = "fallback"
-            logger.info(f"Using fallback recipe for step '{step_upper}': {result.recipe_name}")
-            logger.warning("DIAG: Using fallback recipe_name='%s' for step='%s', "
-                           "file_copy_paths_count=%d — verify paths match .rul file output",
-                           result.recipe_name, step, len(result.file_copy_paths))
+            logger.info("Using fallback recipe for step '%s': %s (file_copy_paths=%d, sap_enriched=%s)",
+                        step_upper, result.recipe_name, len(result.file_copy_paths),
+                        bool(sap_file_copy_paths))
+            if not sap_file_copy_paths:
+                logger.warning("DIAG: Using static fallback file_copy_paths (no CFGPN attrs) — "
+                               "AddtionalFileFolder will have only config entry")
         else:
             result.error = f"No fallback recipe found for step: {step_upper}"
             logger.warning(result.error)

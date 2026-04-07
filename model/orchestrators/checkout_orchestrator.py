@@ -664,6 +664,7 @@ def generate_slate_xml(
                 tmptravl_constants = {
                     "LOT": lot_prefix,
                     "DIB_TYPE": dib_type,
+                    "DIB_TYPE_NAME": dib_type,
                     "MACHINE_MODEL": hw_config.get_machine_model(step),
                     "MACHINE_VENDOR": hw_config.get_machine_vendor(step),
                     "STEP": mam_step,
@@ -739,6 +740,7 @@ def generate_slate_xml(
             tmptravl_path, step,
             tgz_path=tgz_path,
             recipe_override=recipe_override,
+            cfgpn_attrs=cfgpn_attrs if cfgpn_attrs else None,
         )
         recipe = recipe_result.recipe_name or r"RECIPE\PEREGRINEION_NEOSEM_ABIT.XML"
         _log(logger, f"DIAG: Recipe: {recipe} (success={recipe_result.success}, source={recipe_result.source})", log_callback)
