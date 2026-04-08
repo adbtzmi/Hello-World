@@ -105,15 +105,21 @@ except ImportError:
             except Exception:
                 pass
 
-    def write_status(path, status, detail=""):
+    def write_status(path, status, detail="", collected_files=None,
+                     output_folder=""):
         sp = path + ".checkout_status"
         try:
+            payload = {
+                "status":    status,
+                "detail":    detail,
+                "timestamp": datetime.now().isoformat()
+            }
+            if collected_files:
+                payload["collected_files"] = collected_files
+            if output_folder:
+                payload["output_folder"] = output_folder
             with open(sp, "w") as f:
-                json.dump({
-                    "status":    status,
-                    "detail":    detail,
-                    "timestamp": datetime.now().isoformat()
-                }, f)
+                json.dump(payload, f)
         except Exception:
             pass
 

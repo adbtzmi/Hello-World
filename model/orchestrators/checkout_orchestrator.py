@@ -1203,11 +1203,17 @@ def wait_for_checkout(
         if state == "success":
             elapsed = int(time.time() - start)
             _log(logger, f"✓ Checkout SUCCESS in {elapsed}s", log_callback)
-            return {
+            result = {
                 "status":  "success",
                 "detail":  data.get("detail", ""),
                 "elapsed": elapsed
             }
+            # Pass through collected_files / output_folder written by watcher
+            if data.get("collected_files"):
+                result["collected_files"] = data["collected_files"]
+            if data.get("output_folder"):
+                result["collected_output_folder"] = data["output_folder"]
+            return result
 
         elif state == "failed":
             elapsed = int(time.time() - start)
@@ -1526,12 +1532,31 @@ def run_checkout(
             log_callback = log_callback,
         )
 
-    # ── Log generated files summary ────────────────────────────────────
-    if generated_files:
-        _log(logger, f"── Generated files ({len(generated_files)}) ──", log_callback)
-        for fpath in generated_files:
-            _log(logger, f"  ✓ {os.path.basename(fpath)}", log_callback)
-        _log(logger, f"  Output folder: {_queue}", log_callback)
+    # ── Prefer watcher-collected files over generated files ────────────
+    # The watcher writes collected_files (e.g. resultsManager.db,
+    # DispatcherDebug*.txt) and output_folder (CHECKOUT_RESULTS path)
+    # into the .checkout_status sidecar.  wait_for_checkout() passes
+    # them through in tc_result.  Use those for the popup if available.
+    collected_files  = []
+    collected_folder = ""
+    for tc_r in all_tc_results:
+        for cf in tc_r.get("collected_files", []):
+            if cf not in collected_files:
+                collected_files.append(cf)
+        if not collected_folder and tc_r.get("collected_output_folder"):
+            collected_folder = tc_r["collected_output_folder"]
+
+    # Decide what to show: watcher-collected files take priority
+    display_files  = collected_files or [os.path.basename(f) for f in generated_files]
+    display_folder = collected_folder or _queue
+
+    # ── Log files summary ──────────────────────────────────────────────
+    if display_files:
+        label = "Collected files" if collected_files else "Generated files"
+        _log(logger, f"── {label} ({len(display_files)}) ──", log_callback)
+        for fname in display_files:
+            _log(logger, f"  ✓ {fname}", log_callback)
+        _log(logger, f"  Output folder: {display_folder}", log_callback)
 
     _log(logger,
          f"=== Checkout {final_status.upper()} in {final_elapsed}s ===",
@@ -1543,8 +1568,8 @@ def run_checkout(
         "elapsed":         final_elapsed,
         "test_cases":      all_tc_results,
         "memory":          {"status": "skipped", "detail": "memory collection not configured"},
-        "generated_files": [os.path.basename(f) for f in generated_files],
-        "output_folder":   _queue,
+        "generated_files": display_files,
+        "output_folder":   display_folder,
     }
 
 

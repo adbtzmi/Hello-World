@@ -271,9 +271,9 @@ class BentoApp:
             f"{'✓' if status == 'SUCCESS' else '✗'} "
             f"Checkout {status} → {hostname}: {detail}")
 
-        # Log generated files to progress log
+        # Log collected/generated files to progress log
         if generated_files:
-            self._log_message(f"── Generated files ({len(generated_files)}) ──")
+            self._log_message(f"── Collected files ({len(generated_files)}) ──")
             for fname in generated_files:
                 self._log_message(f"  ✓ {fname}")
             if output_folder:
@@ -291,7 +291,7 @@ class BentoApp:
                        f"Tester: {hostname}\n"
                        f"Elapsed: {elapsed}s\n"
                        f"{detail}\n\n"
-                       f"Generated files:\n{files_str}\n\n"
+                       f"Collected files:\n{files_str}\n\n"
                        f"Output folder:\n{output_folder or 'N/A'}")
                 messagebox.showinfo("Checkout Success", msg.strip())
             elif status == "PARTIAL":
@@ -300,7 +300,7 @@ class BentoApp:
                        f"Tester: {hostname}\n"
                        f"Elapsed: {elapsed}s\n"
                        f"{detail}\n\n"
-                       f"Generated files:\n{files_str}\n\n"
+                       f"Collected files:\n{files_str}\n\n"
                        f"Output folder:\n{output_folder or 'N/A'}")
                 messagebox.showwarning("Checkout Partial", msg.strip())
             else:

@@ -1065,7 +1065,7 @@ class CheckoutController(object):
                     f"{error_count} errors out of {len(mid_results)} MID(s)"
                 )
 
-                # Collect generated files and output folder from all MID results
+                # Collect generated/collected files and output folder from all MID results
                 all_generated_files = []
                 output_folder = ""
                 for mid_r in mid_results.values():
