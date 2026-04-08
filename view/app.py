@@ -271,14 +271,6 @@ class BentoApp:
             f"{'✓' if status == 'SUCCESS' else '✗'} "
             f"Checkout {status} → {hostname}: {detail}")
 
-        # Log collected/generated files to progress log
-        if generated_files:
-            self._log_message(f"── Collected files ({len(generated_files)}) ──")
-            for fname in generated_files:
-                self._log_message(f"  ✓ {fname}")
-            if output_folder:
-                self._log_message(f"  Output folder: {output_folder}")
-
         checkout_tab = getattr(self, "checkout_tab", None)
         if checkout_tab:
             checkout_tab.on_checkout_completed(hostname, result)
