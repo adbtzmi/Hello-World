@@ -1318,6 +1318,62 @@ def send_teams_notification(
         return False
 
 
+# ── SCAN CHECKOUT_RESULTS for collected files (fallback) ─────────────────────
+def _scan_checkout_results(hostname, env, jira_key, logger, log_callback=None):
+    """
+    Fallback when the watcher sidecar doesn't include collected_files.
+
+    Scans P:\\temp\\BENTO\\CHECKOUT_RESULTS\\<hostname_env>\\<jira_key>\\
+    for the most recently modified subfolder and lists its files.
+
+    Returns (file_names, folder_path) or ([], "").
+    """
+    import glob as _glob
+
+    tester_folder = f"{hostname}_{env.upper()}" if hostname and env else (hostname or env or "")
+    base = os.path.join(CHECKOUT_RESULTS_FOLDER, tester_folder, jira_key)
+
+    if not os.path.isdir(base):
+        _log(logger,
+             f"  CHECKOUT_RESULTS not found: {base}",
+             log_callback, "warning")
+        return [], ""
+
+    # Find the most recently modified workspace subfolder
+    latest_dir  = None
+    latest_time = 0
+    try:
+        for entry in os.listdir(base):
+            full = os.path.join(base, entry)
+            if not os.path.isdir(full):
+                continue
+            mtime = os.path.getmtime(full)
+            if mtime > latest_time:
+                latest_time = mtime
+                latest_dir  = full
+    except OSError as e:
+        _log(logger, f"  Cannot scan {base}: {e}", log_callback, "warning")
+        return [], ""
+
+    if latest_dir is None:
+        return [], ""
+
+    # List files in the folder
+    files = []
+    try:
+        for f in os.listdir(latest_dir):
+            if os.path.isfile(os.path.join(latest_dir, f)):
+                files.append(f)
+    except OSError:
+        pass
+
+    if files:
+        _log(logger,
+             f"  Found {len(files)} file(s) in {latest_dir}",
+             log_callback)
+    return files, latest_dir
+
+
 # ── PUBLIC API — called from checkout_controller.py [41] ─────────────────────
 def run_checkout(
     jira_key:        str,
@@ -1545,6 +1601,17 @@ def run_checkout(
                 collected_files.append(cf)
         if not collected_folder and tc_r.get("collected_output_folder"):
             collected_folder = tc_r["collected_output_folder"]
+
+    # ── Fallback: scan CHECKOUT_RESULTS if sidecar had no file info ───
+    # Works even when the watcher hasn't been restarted with the new
+    # write_status() that includes collected_files/output_folder.
+    if not collected_files and final_status in ("success", "partial"):
+        _log(logger,
+             "Sidecar had no collected_files — scanning CHECKOUT_RESULTS…",
+             log_callback)
+        collected_files, collected_folder = _scan_checkout_results(
+            hostname, env, jira_key, logger, log_callback
+        )
 
     # Decide what to show: watcher-collected files take priority
     display_files  = collected_files or [os.path.basename(f) for f in generated_files]
