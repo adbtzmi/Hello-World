@@ -216,8 +216,18 @@ class CheckoutTab(BaseTab):
         canvas.bind("<Configure>", _on_canvas_configure)
 
         def _mousewheel(event):
+            # Only scroll when the mouse is actually over this canvas/tab
+            # to avoid stealing scroll events from other widgets
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind_all("<MouseWheel>", _mousewheel)
+
+        def _bind_mousewheel(event):
+            canvas.bind_all("<MouseWheel>", _mousewheel)
+
+        def _unbind_mousewheel(event):
+            canvas.unbind_all("<MouseWheel>")
+
+        canvas.bind("<Enter>", _bind_mousewheel)
+        canvas.bind("<Leave>", _unbind_mousewheel)
 
         f = self._inner
         self._build_profile_section(f, row=0)
@@ -677,6 +687,10 @@ class CheckoutTab(BaseTab):
         self._update_profile_status()
 
     def _refresh_profile_grid(self):
+        # Preserve current selection index so we can restore it after rebuild
+        sel = self._profile_grid.selection()
+        sel_idx = self._profile_grid.index(sel[0]) if sel else -1
+
         for row in self._profile_grid.get_children():
             self._profile_grid.delete(row)
         cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
@@ -685,6 +699,12 @@ class CheckoutTab(BaseTab):
             self._profile_grid.insert("", tk.END, values=values)
         self._profile_row_count_label.configure(
             text=f"{len(self._profile_data)} row(s)")
+
+        # Restore selection if the row still exists
+        children = self._profile_grid.get_children()
+        if children and 0 <= sel_idx < len(children):
+            self._profile_grid.selection_set(children[sel_idx])
+            self._profile_grid.see(children[sel_idx])
 
     def _update_profile_status(self):
         count = len(self._profile_data)
@@ -1024,18 +1044,38 @@ class CheckoutTab(BaseTab):
         self._sync_tester_column()
 
     def _sync_tester_column(self):
-        """Update the 'Tester' column in every profile row with selected hostnames."""
+        """Update the 'Tester' column in profile rows that haven't been manually edited.
+
+        Only overwrites rows where the Tester value is empty or matches
+        a previously auto-synced value (comma-separated hostname list).
+        Rows with manually entered Tester values are left untouched.
+        """
         selected = [h for h, var in self._tester_vars.items() if var.get()]
         tester_value = ", ".join(selected)
 
         if not self._profile_data:
             return
 
+        # Build a set of all possible auto-synced values (any combination
+        # of known hostnames) so we can detect manual edits.
+        all_hostnames = set(self._tester_vars.keys())
+
         changed = False
         for row in self._profile_data:
-            if row.get("Tester") != tester_value:
+            current = row.get("Tester", "").strip()
+            # Only overwrite if: empty, or current value is purely
+            # a comma-separated list of known hostnames (i.e., auto-synced)
+            if not current:
                 row["Tester"] = tester_value
                 changed = True
+            else:
+                # Check if current value is auto-synced (all parts are known hostnames)
+                parts = {p.strip() for p in current.split(",") if p.strip()}
+                if parts and parts.issubset(all_hostnames):
+                    if current != tester_value:
+                        row["Tester"] = tester_value
+                        changed = True
+                # else: manually edited — leave it alone
 
         if changed:
             self._refresh_profile_grid()
@@ -1159,6 +1199,29 @@ class CheckoutTab(BaseTab):
         passing_label = self.context.get_var('checkout_tc_passing_label').get().strip()
         fail_label    = self.context.get_var('checkout_tc_fail_label').get().strip()
         fail_desc     = self.context.get_var('checkout_tc_fail_desc').get().strip()
+
+        # ── Pre-flight validation ──────────────────────────────────────
+        errors = []
+        if not hostnames:
+            errors.append("No testers selected — select at least one tester.")
+        if not tgz_path:
+            errors.append("TGZ path is empty — select a compiled TGZ archive.")
+        elif not os.path.isfile(tgz_path):
+            errors.append(f"TGZ file not found: {tgz_path}")
+        if not tc_passing and not tc_fail:
+            errors.append("No test cases selected — enable at least PASS or FAIL.")
+        if not self._profile_data:
+            errors.append("Profile table is empty — add at least one row.")
+        else:
+            # Check that at least one row has a MID
+            has_mid = any(row.get("MID", "").strip() for row in self._profile_data)
+            if not has_mid:
+                errors.append("No MID specified in any profile row.")
+        if errors:
+            self.show_error("Validation Error",
+                            "Please fix the following before starting checkout:\n\n"
+                            + "\n".join(f"• {e}" for e in errors))
+            return None
 
         profile_table_raw = self._profile_data.copy() if self._profile_data else []
 
