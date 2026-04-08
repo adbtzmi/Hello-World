@@ -17,6 +17,7 @@ Checkout lives inside the Implementation sub-notebook (injected by main.py).
 Result collection (Task 2) is embedded as Section 6 inside CheckoutTab.
 """
 
+import os
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 import logging
@@ -261,24 +262,116 @@ class BentoApp:
     def checkout_completed(self, hostname: str, result: dict):
         """Called by CheckoutController when checkout automation finishes."""
         status = result.get("status", "unknown").upper()
+        detail = result.get("detail", "")
+        elapsed = result.get("elapsed", 0)
+        generated_files = result.get("generated_files", [])
+        output_folder = result.get("output_folder", "")
+        mid_results = result.get("mid_results", {})
         self._log_message(
             f"{'✓' if status == 'SUCCESS' else '✗'} "
-            f"Checkout {status} → {hostname}: {result.get('detail', '')}")
+            f"Checkout {status} → {hostname}: {detail}")
+
+        # Log generated files to progress log
+        if generated_files:
+            self._log_message(f"── Generated files ({len(generated_files)}) ──")
+            for fname in generated_files:
+                self._log_message(f"  ✓ {fname}")
+            if output_folder:
+                self._log_message(f"  Output folder: {output_folder}")
+
         checkout_tab = getattr(self, "checkout_tab", None)
         if checkout_tab:
             checkout_tab.on_checkout_completed(hostname, result)
 
+        # ── Show popup notification for checkout result ────────────────
+        def _show_popup():
+            if status == "SUCCESS":
+                files_str = "\n".join(f"  • {f}" for f in generated_files) if generated_files else "  (none)"
+                msg = (f"Checkout successful!\n\n"
+                       f"Tester: {hostname}\n"
+                       f"Elapsed: {elapsed}s\n"
+                       f"{detail}\n\n"
+                       f"Generated files:\n{files_str}\n\n"
+                       f"Output folder:\n{output_folder or 'N/A'}")
+                messagebox.showinfo("Checkout Success", msg.strip())
+            elif status == "PARTIAL":
+                files_str = "\n".join(f"  • {f}" for f in generated_files) if generated_files else "  (none)"
+                msg = (f"Checkout partially completed.\n\n"
+                       f"Tester: {hostname}\n"
+                       f"Elapsed: {elapsed}s\n"
+                       f"{detail}\n\n"
+                       f"Generated files:\n{files_str}\n\n"
+                       f"Output folder:\n{output_folder or 'N/A'}")
+                messagebox.showwarning("Checkout Partial", msg.strip())
+            else:
+                msg = (f"Checkout {status}.\n\n"
+                       f"Tester: {hostname}\n"
+                       f"Elapsed: {elapsed}s\n"
+                       f"{detail}")
+                messagebox.showerror("Checkout Failed", msg.strip())
+
+        self.root.after(0, _show_popup)
+
     def xml_generation_completed(self, hostname: str, result: dict):
         """Called by CheckoutController when XML-only generation finishes."""
         status = result.get("status", "unknown").upper()
+        detail = result.get("detail", "")
+        mid_results = result.get("mid_results", {})
         is_ok = status in ("XML_DONE", "XML_PARTIAL")
         self._log_message(
             f"{'✓' if is_ok else '✗'} "
             f"XML Generation {'complete' if is_ok else 'FAILED'} → {hostname}: "
-            f"{result.get('detail', '')}")
+            f"{detail}")
+
+        # Log generated files to progress log
+        generated_files = result.get("generated_files", [])
+        output_folder = result.get("output_folder", "")
+        if generated_files:
+            self._log_message(f"── Generated files ({len(generated_files)}) ──")
+            for fname in generated_files:
+                self._log_message(f"  ✓ {fname}")
+            if output_folder:
+                self._log_message(f"  Output folder: {output_folder}")
+        elif mid_results:
+            # Fallback: extract from mid_results if generated_files not provided
+            for mid, mid_info in mid_results.items():
+                xml_path = mid_info.get("xml_path", "")
+                if xml_path:
+                    self._log_message(f"  ✓ File saved: {os.path.basename(xml_path)}")
+                    if not output_folder:
+                        output_folder = os.path.dirname(xml_path)
+
         checkout_tab = getattr(self, "checkout_tab", None)
         if checkout_tab:
             checkout_tab.on_xml_generation_completed(hostname, result)
+
+        # ── Show popup notification for XML generation result ──────────
+        def _show_popup():
+            if is_ok:
+                # Use generated_files from result, fallback to mid_results
+                files = generated_files
+                folder = output_folder
+                if not files and mid_results:
+                    for mid, mid_info in mid_results.items():
+                        xml_path = mid_info.get("xml_path", "")
+                        if xml_path:
+                            files.append(os.path.basename(xml_path))
+                            if not folder:
+                                folder = os.path.dirname(xml_path)
+                files_str = "\n".join(f"  • {f}" for f in files) if files else "  (none)"
+                msg = (f"XML generation complete!\n\n"
+                       f"Tester: {hostname}\n"
+                       f"{detail}\n\n"
+                       f"Generated files:\n{files_str}\n\n"
+                       f"Output folder:\n{folder or 'N/A'}")
+                messagebox.showinfo("XML Generation Success", msg.strip())
+            else:
+                msg = (f"XML generation {status}.\n\n"
+                       f"Tester: {hostname}\n"
+                       f"{detail}")
+                messagebox.showerror("XML Generation Failed", msg.strip())
+
+        self.root.after(0, _show_popup)
 
     def checkout_progress(self, hostname: str, phase: str):
         """Called by CheckoutController to relay mid-run phase updates."""

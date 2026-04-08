@@ -773,6 +773,23 @@ class CheckoutController(object):
                     error_count = sum(1 for r in mid_results.values() if r["status"] == "error")
                     log_cb(f"[SUMMARY] {hostname}: {success_count} success, {error_count} errors out of {len(mid_results)} MID(s)")
 
+                    # Log generated files progress
+                    generated_files = []
+                    for mid, mid_info in mid_results.items():
+                        xml_path = mid_info.get("xml_path", "")
+                        if xml_path and os.path.exists(xml_path):
+                            generated_files.append(os.path.basename(xml_path))
+                            log_cb(f"  ✓ File saved: {os.path.basename(xml_path)} → {output_dir}")
+
+                    # Check for tmptravl files in Traces subfolder
+                    traces_dir = os.path.join(output_dir, "Traces")
+                    if os.path.isdir(traces_dir):
+                        for fname in os.listdir(traces_dir):
+                            fpath = os.path.join(traces_dir, fname)
+                            if os.path.isfile(fpath):
+                                generated_files.append(fname)
+                                log_cb(f"  ✓ File saved: {fname} → {traces_dir}")
+
                     # Sort generated profiles into step/recipe folders
                     step = params.get("step", "")
                     recipe_name = params.get("recipe", "")
@@ -807,6 +824,8 @@ class CheckoutController(object):
                             "detail": f"{success_count}/{len(mid_results)} MIDs generated (XML only)",
                             "elapsed": 0,
                             "test_cases": [],
+                            "generated_files": generated_files,
+                            "output_folder": output_dir,
                         }
                         self._view.root.after(
                             0,
@@ -1045,14 +1064,27 @@ class CheckoutController(object):
                     f"[SUMMARY] {hostname}: {success_count} success, "
                     f"{error_count} errors out of {len(mid_results)} MID(s)"
                 )
+
+                # Collect generated files and output folder from all MID results
+                all_generated_files = []
+                output_folder = ""
+                for mid_r in mid_results.values():
+                    for f in mid_r.get("generated_files", []):
+                        if f not in all_generated_files:
+                            all_generated_files.append(f)
+                    if not output_folder and mid_r.get("output_folder"):
+                        output_folder = mid_r["output_folder"]
+
                 return {
-                    "status":      "success" if error_count == 0 else (
+                    "status":          "success" if error_count == 0 else (
                         "partial" if success_count > 0 else "failed"
                     ),
-                    "detail":      f"{success_count}/{len(mid_results)} MIDs completed",
-                    "elapsed":     sum(r.get("elapsed", 0) for r in mid_results.values()),
-                    "test_cases":  [],
-                    "mid_results": mid_results,
+                    "detail":          f"{success_count}/{len(mid_results)} MIDs completed",
+                    "elapsed":         sum(r.get("elapsed", 0) for r in mid_results.values()),
+                    "test_cases":      [],
+                    "mid_results":     mid_results,
+                    "generated_files": all_generated_files,
+                    "output_folder":   output_folder,
                 }
 
             # ── Single-MID fallback (legacy / no profile_table) ───────

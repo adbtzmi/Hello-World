@@ -939,12 +939,21 @@ def generate_slate_xml(
         # Write final XML
         with open(xml_path, "w", encoding="utf-8") as f:
             f.write(xml_str)
+        _log(logger, f"✓ File copied: {xml_name} → {out_dir}", log_callback)
 
         size_kb = os.path.getsize(xml_path) / 1024
         _log(logger,
              f"✓ XML: {xml_name} | AutoStart={autostart} | "
              f"1 DUT ({dut_loc}) | {size_kb:.1f} KB",
              log_callback)
+
+        # Log tmptravl file if it was generated
+        if tmptravl_path and os.path.exists(tmptravl_path):
+            tmptravl_size = os.path.getsize(tmptravl_path) / 1024
+            _log(logger,
+                 f"✓ File copied: {os.path.basename(tmptravl_path)} → "
+                 f"{os.path.dirname(tmptravl_path)} ({tmptravl_size:.1f} KB)",
+                 log_callback)
 
         # ── Optional profile sorting ────────────────────────────────
         # Sort into step/recipe subfolder if step is provided
@@ -1394,6 +1403,7 @@ def run_checkout(
                 "test_cases": [], "memory": {}}
 
     all_tc_results = []
+    generated_files = []   # Track all files created during checkout
 
     # ── Loop per test case (PASSING + FORCE FAIL sequentially) ────────
     for tc in _test_cases:
@@ -1454,10 +1464,19 @@ def run_checkout(
             f"Waiting for tester pickup — {label}"
         )
 
+        generated_files.append(xml_path)
         _log(logger,
              f"[✓] XML queued: {os.path.basename(xml_path)}\n"
              f"    Waiting for checkout_watcher.py on {hostname} to pick up...",
              log_callback)
+
+        # Track tmptravl file if generated alongside the XML
+        traces_dir = os.path.join(_queue, "Traces")
+        if os.path.isdir(traces_dir):
+            for fname in os.listdir(traces_dir):
+                fpath = os.path.join(traces_dir, fname)
+                if os.path.isfile(fpath) and fpath not in generated_files:
+                    generated_files.append(fpath)
 
         # ── Poll for SLATE completion ──────────────────────────────────
         tc_result = wait_for_checkout(
@@ -1507,16 +1526,25 @@ def run_checkout(
             log_callback = log_callback,
         )
 
+    # ── Log generated files summary ────────────────────────────────────
+    if generated_files:
+        _log(logger, f"── Generated files ({len(generated_files)}) ──", log_callback)
+        for fpath in generated_files:
+            _log(logger, f"  ✓ {os.path.basename(fpath)}", log_callback)
+        _log(logger, f"  Output folder: {_queue}", log_callback)
+
     _log(logger,
          f"=== Checkout {final_status.upper()} in {final_elapsed}s ===",
          log_callback)
 
     return {
-        "status":     final_status,
-        "detail":     final_detail,
-        "elapsed":    final_elapsed,
-        "test_cases": all_tc_results,
-        "memory":     {"status": "skipped", "detail": "memory collection not configured"},
+        "status":          final_status,
+        "detail":          final_detail,
+        "elapsed":         final_elapsed,
+        "test_cases":      all_tc_results,
+        "memory":          {"status": "skipped", "detail": "memory collection not configured"},
+        "generated_files": [os.path.basename(f) for f in generated_files],
+        "output_folder":   _queue,
     }
 
 
