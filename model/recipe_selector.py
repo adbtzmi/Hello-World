@@ -239,25 +239,54 @@ class RecipeSelector:
                 timeout=timeout,
                 cwd=self.recipe_folder,
             )
-            stdout = proc.stdout
-            stderr = proc.stderr
+            stdout = proc.stdout or ""
+            stderr = proc.stderr or ""
             result.raw_output = stdout
-            logger.warning("DIAG: RecipeSelector subprocess returncode=%d", proc.returncode)
-            logger.warning("DIAG: RecipeSelector stdout (first 2000 chars): %s", stdout[:2000] if stdout else "EMPTY")
-            logger.warning("DIAG: RecipeSelector stderr (first 2000 chars): %s", stderr[:2000] if stderr else "EMPTY")
 
-            # Fix 8: Warn when stdout contains no RECIPE_SEL lines
-            if not any(line.strip().startswith("RECIPE_SEL") for line in (stdout or "").splitlines()):
+            # Detect known rule-lookup failures (e.g., BOISE_PROGRAM_RECIPE).
+            # These occur when the external recipe_selection.py CSV rule table
+            # doesn't have a matching row for the given site/product combination.
+            # This is expected for certain configurations and NOT a real error —
+            # the TGZ scan fallback will resolve the recipe correctly.
+            _KNOWN_RULE_FAILURE_RE = re.compile(
+                r"Hit the end of the table when looking up the value for rule (\S+)",
+                re.IGNORECASE,
+            )
+            known_rule_match = _KNOWN_RULE_FAILURE_RE.search(stdout) or _KNOWN_RULE_FAILURE_RE.search(stderr)
+            is_known_rule_failure = bool(known_rule_match)
+
+            if is_known_rule_failure:
+                failed_rule = known_rule_match.group(1)
+                logger.info("Recipe selection subprocess: rule '%s' not found in lookup table "
+                            "(expected for this site/product — will use TGZ scan fallback)", failed_rule)
+                logger.debug("DIAG: RecipeSelector subprocess returncode=%d", proc.returncode)
+                logger.debug("DIAG: RecipeSelector stdout (first 2000 chars): %s", stdout[:2000] if stdout else "EMPTY")
+                logger.debug("DIAG: RecipeSelector stderr (first 2000 chars): %s", stderr[:2000] if stderr else "EMPTY")
+                # Mark as known failure so callers can log appropriately
+                result.error = f"Rule '{failed_rule}' not in lookup table (expected — using fallback)"
+                result._known_rule_failure = True  # type: ignore[attr-defined]
+            else:
+                logger.info("DIAG: RecipeSelector subprocess returncode=%d", proc.returncode)
+                if stdout:
+                    logger.debug("DIAG: RecipeSelector stdout (first 2000 chars): %s", stdout[:2000])
+                if stderr:
+                    logger.warning("DIAG: RecipeSelector stderr (first 2000 chars): %s", stderr[:2000])
+
+            has_recipe_sel_lines = any(
+                line.strip().startswith("RECIPE_SEL") for line in stdout.splitlines()
+            )
+
+            if not has_recipe_sel_lines and not is_known_rule_failure:
                 logger.warning("DIAG: Subprocess stdout contains NO RECIPE_SEL_* lines — will try tmptravl file")
 
-            if proc.returncode != 0:
+            if proc.returncode != 0 and not is_known_rule_failure:
                 result.error = f"recipe_selection.py exited with code {proc.returncode}: {stderr}"
                 logger.error(result.error)
                 # Don't return yet — try tmptravl file parsing below
 
-            # Parse the stdout output
-            if proc.returncode == 0:
-                result = self._extract(proc.stdout, result)
+            # Parse the stdout output (only if it contains RECIPE_SEL lines)
+            if has_recipe_sel_lines:
+                result = self._extract(stdout, result)
 
             # If stdout parsing failed (no RECIPE_SEL_PROGRAM_RECIPE found),
             # try parsing the tmptravl file itself. recipe_selection.py writes
@@ -265,7 +294,7 @@ class RecipeSelector:
             # section of the tmptravl file before it may crash on secondary rules
             # (e.g., BOISE_PROGRAM_RECIPE). This recovers the recipe + file_copy_paths.
             if not result.recipe_name and tmptravl_path and os.path.isfile(tmptravl_path):
-                logger.info("DIAG: Attempting to extract RECIPE_SEL_* from tmptravl file: %s", tmptravl_path)
+                logger.debug("DIAG: Attempting to extract RECIPE_SEL_* from tmptravl file: %s", tmptravl_path)
                 result = self._extract_from_tmptravl(tmptravl_path, result)
                 if result.recipe_name:
                     result.source = "tmptravl"
@@ -337,7 +366,9 @@ class RecipeSelector:
             result.source = "subprocess"
         else:
             result.error = "No RECIPE_SEL_PROGRAM_RECIPE found in output"
-            logger.warning(result.error)
+            # Log at debug level — the caller handles user-facing messaging
+            # and this is expected when the subprocess crashes on a known rule
+            logger.debug(result.error)
 
         return result
 
@@ -402,7 +433,8 @@ class RecipeSelector:
             result.success = bool(result.recipe_name)
             if not result.success:
                 result.error = "No RECIPE_SEL_PROGRAM_RECIPE found in tmptravl file"
-                logger.warning(result.error)
+                # Log at debug level — the caller handles user-facing messaging
+                logger.debug(result.error)
 
         except Exception as e:
             logger.warning("Failed to parse tmptravl file for recipe data: %s", e)
@@ -472,6 +504,7 @@ class RecipeSelector:
             return result
 
         # ── Priority 1: Subprocess recipe selection ────────────────────
+        is_known_rule_failure = False
         if self.is_available and tmptravl_path and os.path.isfile(tmptravl_path):
             result = self.select_recipe(tmptravl_path, timeout)
             if result.success:
@@ -481,11 +514,20 @@ class RecipeSelector:
                 logger.info("DIAG: Recipe selection SUCCEEDED - recipe=%s, file_copy_paths_count=%d, source=%s",
                             result.recipe_name, len(result.file_copy_paths), result.source)
                 return result
-            logger.warning(f"Subprocess recipe selection failed, falling back: {result.error}")
-            logger.warning("DIAG: Subprocess recipe selection FAILED - error: %s", result.error)
+
+            # Check if this was a known rule-lookup failure (e.g., BOISE_PROGRAM_RECIPE
+            # not in the CSV table for this site/product). This is expected for certain
+            # configurations — the TGZ scan will resolve the recipe correctly.
+            is_known_rule_failure = getattr(result, '_known_rule_failure', False)
+            if is_known_rule_failure:
+                logger.info("Subprocess recipe table incomplete for this config — "
+                            "resolving recipe from TGZ archive instead")
+            else:
+                logger.warning(f"Subprocess recipe selection failed, falling back: {result.error}")
+                logger.warning("DIAG: Subprocess recipe selection FAILED - error: %s", result.error)
         else:
-            logger.warning("DIAG: Subprocess recipe selection SKIPPED - is_available=%s, tmptravl_path=%r, tmptravl_exists=%s",
-                           self.is_available, tmptravl_path, os.path.isfile(tmptravl_path) if tmptravl_path else False)
+            logger.info("DIAG: Subprocess recipe selection SKIPPED - is_available=%s, tmptravl_path=%r, tmptravl_exists=%s",
+                        self.is_available, tmptravl_path, os.path.isfile(tmptravl_path) if tmptravl_path else False)
 
         # ── Build SAP-based file_copy_paths for fallback scenarios ──────
         # When subprocess fails, use CFGPN attributes to build the same
@@ -493,7 +535,7 @@ class RecipeSelector:
         sap_file_copy_paths: Dict[str, str] = {}
         if cfgpn_attrs:
             sap_file_copy_paths = build_file_copy_paths_from_cfgpn(cfgpn_attrs)
-            logger.info("DIAG: Built %d SAP-based file_copy_paths for fallback",
+            logger.info("DIAG: Built %d SAP-based file_copy_paths from CFGPN attributes",
                         len(sap_file_copy_paths))
 
         # ── Priority 2: TGZ recipe scan ────────────────────────────────
@@ -511,8 +553,14 @@ class RecipeSelector:
                 result.test_program_path = tgz_path.strip()
                 result.success = True
                 result.source = "tgz_scan"
-                logger.info("Using TGZ-scanned recipe for step '%s': %s (file_copy_paths=%d, from %s)",
-                            step_upper, result.recipe_name, len(result.file_copy_paths), tgz_path)
+                if is_known_rule_failure:
+                    logger.info("✓ Recipe resolved via TGZ scan for step '%s': %s "
+                                "(file_copy_paths=%d, SAP-enriched=%s)",
+                                step_upper, result.recipe_name,
+                                len(result.file_copy_paths), bool(sap_file_copy_paths))
+                else:
+                    logger.info("Using TGZ-scanned recipe for step '%s': %s (file_copy_paths=%d, from %s)",
+                                step_upper, result.recipe_name, len(result.file_copy_paths), tgz_path)
                 return result
             else:
                 logger.warning("DIAG: TGZ scan found no matching recipe for step '%s' in %s",
