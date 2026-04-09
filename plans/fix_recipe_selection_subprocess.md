@@ -354,7 +354,8 @@ By patching `__getitem__` instead, we catch the error at the SOURCE rule
 | `6c38193` | Fixed `execfile()` scope — pass `script_globals` with `__name__='__main__'` |
 | `30e1b4d` | Fixed import path — import `attributes` as bare module (not `rules_mgr.attributes`) |
 | `9a4728f` | Redesigned: patch `__getitem__` instead of `calc_all_rules` |
-| (pending) | Inject STEP & LOT into MAM section of tmptravl — `*` requires defined attrs |
+| `7f01035` | Inject STEP & LOT into MAM section of tmptravl — `*` requires defined attrs |
+| `c3bdbcc` | Inject BASE_CFGPN & FW_WAVE_ID into MAM; make wrapper site-aware |
 
 #### `recipe_selector.py` Changes — IMPLEMENTED
 
@@ -390,11 +391,127 @@ Default site changed from SINGAPORE to **PENANG**:
 | `execfile` not available in Python 3 | Wrapper is explicitly run with Python 2; has Python 3 fallback via `exec(compile(...))` |
 | Error propagation through dependency tree | `__getitem__` patch catches errors at the source rule, not at the top-level iteration |
 
+### Deeper Root Cause: CFGPN Pop in recipe_selection.py
+
+Beyond the site-specific rule issue, a **second root cause** was discovered that prevented
+even the CURRENT site's rules from matching:
+
+#### The CFGPN Pop Problem
+
+At line 271 of the external `recipe_selection.py`:
+```python
+CFGPN_DATA = tmptravl.pop('CFGPN')  # REMOVES entire CFGPN section!
+```
+
+This **removes the entire CFGPN section** from the tmptravl dict BEFORE loading it into
+CESI (Central Environment System Information). Only 3 SAP_EXCEPTION keys (`DENSITY`,
+`MFG_STATUS`, `PROD_CLASSIFICATION`) are put back. All other CFGPN-only attributes
+become `UNDEFINED_ATTR` in the rule engine.
+
+#### Affected Attributes
+
+| Attribute | In CFGPN? | In MAM? | In MCTO? | After Pop |
+|-----------|-----------|---------|----------|-----------|
+| `BASE_CFGPN` | ✅ `923168` | ❌ | ❌ | **UNDEFINED_ATTR** |
+| `FW_WAVE_ID` | ✅ `FW068` | ❌ | ❌ | **UNDEFINED_ATTR** |
+| `STEP` | ❌ | ✅ | ❌ | OK (in MAM) |
+| `LOT` | ❌ | ✅ | ❌ | OK (in MAM) |
+| `MODULE_DENSITY` | ❌ | ❌ | ✅ | OK (in MCTO) |
+
+#### Why This Breaks the Catch-All Row
+
+The `PENANG_JOBPATH` and `PENANG_PROGRAM_RECIPE` rule tables have ERROR catch-all rows
+that use `*` (wildcard) for `BASE_CFGPN`. The `meets_criteria()` function in `attributes.py`:
+
+- `*` → matches only **DEFINED** attributes (NOT `UNDEFINED_ATTR`)
+- `?` → matches anything (including `UNDEFINED_ATTR`)
+- `~` → matches only `UNDEFINED_ATTR`
+
+Since `BASE_CFGPN` becomes `UNDEFINED_ATTR` after the pop, the `*` in the catch-all
+row **does not match**, causing "Hit the end of the table" even for the current site's rules.
+
+#### The Fix: Inject CFGPN-Only Attributes into MAM Section
+
+In `tmptravl_generator.py`, we now inject `BASE_CFGPN` and `FW_WAVE_ID` from the
+CFGPN dict into the MAM dict before writing the tmptravl file. Since MAM is NOT popped
+by `recipe_selection.py`, these attributes survive into CESI and become DEFINED in the
+rule engine.
+
+```python
+# tmptravl_generator.py lines 125-139
+_cfgpn_to_mam = ["BASE_CFGPN", "FW_WAVE_ID"]
+for attr in _cfgpn_to_mam:
+    if cfgpn_dict.get(attr) and attr not in mam_dict:
+        mam_dict[attr] = cfgpn_dict[attr]
+```
+
+### Wrapper Site-Awareness (commit `c3bdbcc`)
+
+The wrapper now reads `SITE_NAME` from the tmptravl file and only skips rules for
+OTHER sites. The current site's rules (e.g., `PENANG_PROGRAM_RECIPE` when
+`SITE_NAME=PENANG`) are NOT skipped — they must resolve successfully to produce
+valid output.
+
+Platform-specific checks (`VERSION_CHECK`, `MACHINE_CHECKING`, `PASS_MFG_STATUS_CHECK`,
+`PROG_RECIPE_CHECK`) are always skippable since they require tester equipment data
+that BENTO doesn't have.
+
+---
+
+## Test Results
+
+### Direct Wrapper Test (2026-04-09)
+
+**Command:**
+```
+C:\Python27\python.exe recipe_fault_tolerant.py
+    "\\pgfsmodauto\modauto\release\ssd\recipe_selection\e8393639"
+    "TC10WZ7X3_tmptravl_ABIT_test.dat"
+    --tt_format dat
+```
+
+**Test configuration:**
+- Product: IBIR-0383 (Peregrine ION 60TB E3.S)
+- MID: TC10WZ7X3
+- LOT: JAANTJK001
+- STEP: ABIT
+- SITE_NAME: PENANG
+- BASE_CFGPN: 923168 (injected into MAM section)
+- FW_WAVE_ID: FW068 (injected into MAM section)
+
+**Output (exit code 0):**
+```
+RECIPE_WRAPPER_INFO: Site=PENANG (will preserve PENANG_* rules)
+RECIPE_WRAPPER_INFO: Patched __getitem__ for fault tolerance
+RECIPE_WRAPPER_INFO: Skipped rule VERSION_CHECK: Hit the end of the table...
+RECIPE_SEL_BINS: FGOOD,DOWNG,HOLD,FAIL,RETEST,REJECT,FAHOLD,...
+RECIPE_SEL_BIN_DEFS: FGOOD:P,RETEST:FR
+RECIPE_SEL_CLEAR_CACHE: NO
+RECIPE_SEL_EXPECT_DIB_TYPE: MS0032
+RECIPE_SEL_FILE_COPY_PATHS_1: \\pgfsmodauto\...\config\7fce41b,OS\config
+RECIPE_SEL_FILE_COPY_PATHS_2: \\pgfsmodauto\...\CHECKLIST_FILES,OS\checklist_files
+RECIPE_SEL_FILE_COPY_PATHS_3: \\pgfsmodauto\...\TAMT_FILES,OS\tamt_files
+RECIPE_SEL_FILE_COPY_PATHS_4: \\pgfsmodauto\...\G1ZZ0009,OS\mfg_fw_files
+RECIPE_SEL_FILE_COPY_PATHS_5: \\pgfsmodauto\...\G1MU111_MU_fw_rel_package,OS\net_files
+RECIPE_SEL_FILE_COPY_PATHS_6: \\pgfsmodauto\...\vs_parser,OS\vs_parser
+RECIPE_SEL_HW_TYPES: IBIR
+RECIPE_SEL_PROGRAM_RECIPE: recipe\PeregrineIon_neosem_ABIT.xml
+RECIPE_SEL_TEST_PROGRAM_PATH: P:\release\ssd\neosem\REV172E_PEREGRINE\ibir_release.tgz
+```
+
+**Result: ✅ SUCCESS** — All critical outputs resolved correctly:
+- `RECIPE_SEL_PROGRAM_RECIPE` = `recipe\PeregrineIon_neosem_ABIT.xml` (valid recipe)
+- `RECIPE_SEL_TEST_PROGRAM_PATH` = `P:\release\ssd\neosem\REV172E_PEREGRINE\ibir_release.tgz` (valid TGZ path)
+- Only `VERSION_CHECK` was skipped (platform check, expected — requires tester SW versions)
+- 6 file copy paths resolved correctly
+- Exit code 0
+
 ### Expected Outcome
 
 After this fix:
-- **Primary attempt** with the fault-tolerant wrapper will succeed, skipping `BOISE_PROGRAM_RECIPE`, `SINGAPORE_PROGRAM_RECIPE`, and other non-matching site rules
-- The `__getitem__` patch prevents errors from propagating through the rule dependency tree (e.g., `PENANG_PROGRAM_RECIPE` → `PROGRAM_RECIPE` → `TEST_PROGRAM_PATH`)
+- **Primary attempt** with the fault-tolerant wrapper will succeed
+- The `__getitem__` patch prevents errors from propagating through the rule dependency tree
+- The `BASE_CFGPN` injection ensures the current site's catch-all rows match correctly
 - Recipe, test program path, and file copy paths will all come from the **official rule engine** rather than TGZ scan
 - The vanilla subprocess and TGZ scan fallbacks remain as safety nets but should rarely be needed
 - Default site is now PENANG, matching the `PENANG_PROGRAM_RECIPE` rule table which has entries for most products
