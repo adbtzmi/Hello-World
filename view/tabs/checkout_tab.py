@@ -237,6 +237,10 @@ class CheckoutTab(BaseTab):
         self._build_results_section(f, row=4)
         self._build_result_collection_section(f, row=5)
 
+        # ── Keyboard shortcuts ───────────────────────────────────────────
+        self.bind_all("<Control-Return>", lambda e: self._start_checkout())
+        self.bind_all("<Control-i>",      lambda e: self._import_xml())
+
     # ──────────────────────────────────────────────────────────────────────
     # SECTION 1 — Profile Generation
     # ──────────────────────────────────────────────────────────────────────
@@ -579,12 +583,14 @@ class CheckoutTab(BaseTab):
         ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(
             side=tk.LEFT, fill=tk.Y, padx=(0, 10), pady=4)
 
-        gen_btn = ttk.Button(btn_frame, text="Generate XML Only", width=18,
+        self.gen_btn = ttk.Button(btn_frame, text="Generate XML Only", width=18,
                    command=self._generate_xml_only)
-        gen_btn.pack(side=tk.LEFT, padx=(0, 3))
-        _tip(gen_btn, "Build SLATE XML profile(s) and save to XML_OUTPUT folder.\n"
+        self.gen_btn.pack(side=tk.LEFT, padx=(0, 3))
+        self.context.lockable_buttons.append(self.gen_btn)
+        _tip(self.gen_btn, "Build SLATE XML profile(s) and save to XML_OUTPUT folder.\n"
                       "Does NOT trigger checkout. Inspect XML, then copy to\n"
-                      "CHECKOUT_QUEUE manually when ready.")
+                      "CHECKOUT_QUEUE manually when ready.\n"
+                      "Shortcut: Ctrl+Enter (Start)  |  Ctrl+I (Import XML)")
 
         imp_btn = ttk.Button(btn_frame, text="📥 Import XML", width=14,
                    command=self._import_xml)
@@ -674,6 +680,13 @@ class CheckoutTab(BaseTab):
         self._profile_data.append(row_data)
         self._refresh_profile_grid()
         self._update_profile_status()
+
+    def _has_duplicate_mid(self, mid: str) -> bool:
+        """Check if a MID already exists in the profile table."""
+        if not mid.strip():
+            return False
+        return sum(1 for r in self._profile_data
+                   if r.get("MID", "").strip().upper() == mid.strip().upper()) > 1
 
     def _profile_remove_row(self):
         sel = self._profile_grid.selection()
@@ -854,6 +867,12 @@ class CheckoutTab(BaseTab):
             # Auto-verify MID link when MID is edited
             if col_name == "MID" and new_value and new_value.upper() not in ("", "NONE"):
                 self._trigger_mid_verify(row_idx, new_value)
+                # Warn on duplicate MID
+                if self._has_duplicate_mid(new_value):
+                    messagebox.showwarning(
+                        "Duplicate MID",
+                        f"MID '{new_value}' already exists in another row.\n"
+                        f"Duplicate MIDs will generate conflicting profiles.")
 
         def _cancel(event=None):
             edit_entry.destroy()
@@ -1109,6 +1128,9 @@ class CheckoutTab(BaseTab):
                                    f"TGZ file not found:\n{tgz_path}")
             return
 
+        # Show busy cursor while scanning
+        self.config(cursor="watch")
+        self.update_idletasks()
         try:
             from model.recipe_selector import scan_tgz_recipes
             recipes = scan_tgz_recipes(tgz_path)
@@ -1134,6 +1156,8 @@ class CheckoutTab(BaseTab):
         except Exception as e:
             messagebox.showerror("Scan Error",
                                  f"Failed to scan TGZ:\n{e}")
+        finally:
+            self.config(cursor="")
 
     def _browse_excel(self):
         path = filedialog.askopenfilename(
@@ -1315,6 +1339,13 @@ class CheckoutTab(BaseTab):
             lbl.configure(text=phase)
 
     def _clear_results(self):
+        # Guard: don't clear if there's content without confirmation
+        content = self.results_text.get("1.0", tk.END).strip()
+        if content:
+            if not messagebox.askyesno(
+                    "Clear Results",
+                    "Clear all checkout results?\nThis cannot be undone."):
+                return
         self.results_text.configure(state=tk.NORMAL)
         self.results_text.delete("1.0", tk.END)
         self.results_text.configure(state=tk.DISABLED)
