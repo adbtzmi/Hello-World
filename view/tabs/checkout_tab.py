@@ -211,6 +211,13 @@ class CheckoutTab(BaseTab):
 
         def _on_canvas_configure(event):
             canvas.itemconfig(_win, width=event.width)
+            # Ensure inner frame is at least as tall as the canvas
+            # to prevent empty space at the top when scrolling
+            inner_h = self._inner.winfo_reqheight()
+            if inner_h < event.height:
+                canvas.itemconfig(_win, height=event.height)
+            else:
+                canvas.itemconfig(_win, height=inner_h)
 
         self._inner.bind("<Configure>", _on_inner_configure)
         canvas.bind("<Configure>", _on_canvas_configure)
@@ -1038,7 +1045,7 @@ class CheckoutTab(BaseTab):
             return
 
         for i, (hostname, env) in enumerate(testers):
-            var = tk.BooleanVar(value=True)
+            var = tk.BooleanVar(value=False)
             self._tester_vars[hostname] = var
             # Auto-fill Tester column when checkbox is toggled
             var.trace_add("write", lambda *_a: self._sync_tester_column())
