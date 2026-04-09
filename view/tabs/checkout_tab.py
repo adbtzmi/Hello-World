@@ -811,7 +811,8 @@ class CheckoutTab(BaseTab):
     def _open_hardware_config(self):
         """Open the View/Edit Hardware Configuration dialog."""
         from view.dialogs.hardware_config_dialog import HardwareConfigDialog
-        HardwareConfigDialog(self.winfo_toplevel())
+        parent: tk.Widget = self.winfo_toplevel()  # type: ignore[assignment]
+        HardwareConfigDialog(parent)
 
     def _profile_load_from_crt(self):
         excel_path = self.context.get_var('checkout_excel_path').get().strip()
