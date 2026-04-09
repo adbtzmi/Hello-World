@@ -630,27 +630,84 @@ def send_result_teams_notification(
     try:
         import urllib.request
         import json
+        from datetime import datetime
+
+        color     = "Good" if (failed == 0 and all_done) else "Attention"
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Summary facts
+        summary_facts = [
+            {"title": "Total MIDs",  "value": str(total)},
+            {"title": "Passed",      "value": str(passed)},
+            {"title": "Failed",      "value": str(failed)},
+            {"title": "Running",     "value": str(running)},
+            {"title": "Collected",   "value": str(collected)},
+        ]
+
+        # Per-MID detail rows
+        mid_rows = []
+        for mid, entry in entries.items():
+            status_icon = {"PASS": "✅", "FAIL": "❌", "RUNNING": "🔄"}.get(
+                entry.status, "❓"
+            )
+            value = f"{status_icon} {entry.status}"
+            if entry.status == STATUS_FAIL:
+                value += f" ({entry.fail_reg} - {entry.fail_code})"
+            if entry.collected:
+                value += " [Collected]"
+            mid_rows.append({
+                "title": f"{entry.mid} [{entry.location}] {entry.name}",
+                "value": value,
+            })
+
+        # Build Adaptive Card body
+        body = [
+            {
+                "type":   "TextBlock",
+                "size":   "Medium",
+                "weight": "Bolder",
+                "text":   f"{icon} BENTO Test Result Collection",
+                "color":  color,
+            },
+            {
+                "type":   "TextBlock",
+                "text":   f"Tester: **{machine}**  |  Site: **{site}**  |  Elapsed: **{elapsed_str}**  |  {timestamp}",
+                "wrap":   True,
+                "size":   "Small",
+            },
+            {
+                "type":  "FactSet",
+                "facts": summary_facts,
+            },
+        ]
+
+        # Add per-MID details if any
+        if mid_rows:
+            body.append({
+                "type":      "TextBlock",
+                "text":      "─── Per-MID Details ───",
+                "weight":    "Bolder",
+                "size":      "Small",
+                "separator": True,
+            })
+            body.append({
+                "type":  "FactSet",
+                "facts": mid_rows,
+            })
+
+        adaptive_card = {
+            "type":    "AdaptiveCard",
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "version": "1.4",
+            "body":    body,
+        }
 
         payload = {
-            "@type":      "MessageCard",
-            "@context":   "http://schema.org/extensions",
-            "themeColor": "0076D7" if (failed == 0 and all_done) else "D40000",
-            "summary":    f"BENTO Test Results — {machine}",
-            "sections": [{
-                "activityTitle":    f"{icon} BENTO Test Result Collection",
-                "activitySubtitle": (
-                    f"Tester: {machine}  |  Site: {site}  |  "
-                    f"Elapsed: {elapsed_str}"
-                ),
-                "facts": [
-                    {"name": "Total MIDs",  "value": str(total)},
-                    {"name": "Passed",      "value": str(passed)},
-                    {"name": "Failed",      "value": str(failed)},
-                    {"name": "Running",     "value": str(running)},
-                    {"name": "Collected",   "value": str(collected)},
-                    {"name": "─────────",   "value": "─────────"},
-                ] + facts,
-                "markdown": True,
+            "type":        "message",
+            "attachments": [{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "contentUrl":  None,
+                "content":     adaptive_card,
             }],
         }
 
@@ -661,7 +718,7 @@ def send_result_teams_notification(
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
-            if resp.status == 200:
+            if resp.status in (200, 202):
                 _log(log_callback, "✓ Teams result notification sent.")
                 return True
             else:
