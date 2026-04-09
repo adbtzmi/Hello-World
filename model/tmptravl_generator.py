@@ -104,6 +104,24 @@ class TmptravlGenerator:
         drive_info_dict = drive_info_dict or {}
         constant_dict = constant_dict or {}
 
+        # Inject STEP into MAM section if not already present.
+        # The rule engine's PENANG_PROGRAM_RECIPE (and other site-specific
+        # recipe tables) use STEP? as a dependency column.  In production
+        # CAT, STEP comes from the lot's MAM data.  Since BENTO may not
+        # have MAM access, we derive it from the `step` parameter.
+        if step and "STEP" not in mam_dict:
+            mam_dict["STEP"] = step.upper()
+
+        # Inject LOT into MAM section if not already present.
+        # Like STEP, LOT? is a dependency column in site-specific recipe
+        # tables (e.g. PENANG_PROGRAM_RECIPE).  The meets_criteria() logic
+        # in attributes.py treats '*' as NOT matching UNDEFINED_ATTR — only
+        # '~' matches undefined.  So even catch-all rows with '*' for LOT
+        # will fail if LOT is missing from the tmptravl.  In production CAT,
+        # LOT comes from MAM lot data; here we pull it from constant_dict.
+        if constant_dict.get("LOT") and "LOT" not in mam_dict:
+            mam_dict["LOT"] = constant_dict["LOT"]
+
         # Create per-MID filename: {MID}_tmptravl_{STEP}.dat
         filename = f"{mid}_tmptravl_{step}.dat"
         output_path = os.path.join(self._output_dir, filename)

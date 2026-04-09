@@ -353,7 +353,8 @@ By patching `__getitem__` instead, we catch the error at the SOURCE rule
 | `892c362` | Initial implementation — patched `calc_all_rules()` |
 | `6c38193` | Fixed `execfile()` scope — pass `script_globals` with `__name__='__main__'` |
 | `30e1b4d` | Fixed import path — import `attributes` as bare module (not `rules_mgr.attributes`) |
-| (pending) | Redesigned: patch `__getitem__` instead of `calc_all_rules` |
+| `9a4728f` | Redesigned: patch `__getitem__` instead of `calc_all_rules` |
+| (pending) | Inject STEP & LOT into MAM section of tmptravl — `*` requires defined attrs |
 
 #### `recipe_selector.py` Changes — IMPLEMENTED
 
