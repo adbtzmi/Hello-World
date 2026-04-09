@@ -175,16 +175,27 @@ def main():
     sys.argv = [real_script, tmptravl_path] + extra_args
 
     # Execute the real recipe_selection.py in this process
-    # (so our monkey-patch is active)
+    # (so our monkey-patch is active).
+    #
+    # IMPORTANT: We must provide a proper global namespace dict that
+    # simulates __main__ module scope.  Without this, execfile() runs
+    # in the caller's local scope, and module-level constants like
+    # TT_OPTION_PY / TT_OPTION_DAT won't be visible to functions
+    # defined in the script (their __globals__ would be wrong).
+    script_globals = {
+        '__name__': '__main__',
+        '__file__': real_script,
+        '__builtins__': __builtins__,
+    }
     try:
         # Python 2 has execfile; Python 3 uses exec+open
         if hasattr(__builtins__, 'execfile') or (
             isinstance(__builtins__, dict) and 'execfile' in __builtins__
         ):
-            execfile(real_script)
+            execfile(real_script, script_globals)
         else:
             with open(real_script, 'r') as f:
-                exec(compile(f.read(), real_script, 'exec'))
+                exec(compile(f.read(), real_script, 'exec'), script_globals)
     except SystemExit as e:
         # recipe_selection.py may call sys.exit — propagate it
         sys.exit(e.code if hasattr(e, 'code') else 0)
