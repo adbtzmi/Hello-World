@@ -270,9 +270,10 @@ class RecipeSelector:
     def _run_with_wrapper(self, tmptravl_path: str, timeout: int = 120) -> RecipeResult:
         """Run recipe selection via the fault-tolerant wrapper.
 
-        The wrapper monkey-patches ``Solutions.calc_all_rules()`` to skip
-        non-critical site-specific rules, then executes the real
-        ``recipe_selection.py`` in the same process.
+        The wrapper monkey-patches ``Solutions.__getitem__()`` to skip
+        non-critical site-specific rules at the source (preventing error
+        propagation through the rule dependency tree), then executes the
+        real ``recipe_selection.py`` in the same process.
 
         Parameters
         ----------

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Fault-tolerant wrapper for recipe_selection.py.
 
-This script monkey-patches the rule engine's calc_all_rules() method to
+This script monkey-patches the rule engine's __getitem__() method to
 gracefully handle non-critical rule failures (e.g., BOISE_PROGRAM_RECIPE
 failing when SITE_NAME=PENANG) instead of crashing the entire process.
 
@@ -13,9 +13,18 @@ table has no matching row for the current product configuration, it raises:
 
     ValueError: Hit the end of the table when looking up the value for rule <RULE>
 
-This wrapper catches those errors for non-critical site-specific rules
-and sets them to a placeholder value, allowing the remaining rules
-(including the correct site's PROGRAM_RECIPE) to resolve successfully.
+The problem is that rules form a dependency tree.  For example:
+
+    TEST_PROGRAM_PATH  depends on  PROGRAM_RECIPE  depends on  SITE_NAME
+    When SITE_NAME=PENANG, PROGRAM_RECIPE resolves to PENANG_PROGRAM_RECIPE
+    PENANG_PROGRAM_RECIPE is then resolved as a separate rule table
+
+If PENANG_PROGRAM_RECIPE fails, the error propagates UP through
+TEST_PROGRAM_PATH (a non-skippable rule), crashing the entire process.
+
+This wrapper patches __getitem__() to intercept the error at the SOURCE
+(the skippable rule itself), returning a placeholder value 'N/A' so that
+parent rules can continue resolving.
 
 Usage:
     python recipe_fault_tolerant.py <recipe_selection_dir> <tmptravl_path> [--tt_format dat]
@@ -23,7 +32,7 @@ Usage:
 The wrapper:
 1. Adds <recipe_selection_dir> to sys.path
 2. Changes cwd to <recipe_selection_dir>
-3. Patches Solutions.calc_all_rules() to be fault-tolerant
+3. Patches Solutions.__getitem__() to be fault-tolerant for skippable rules
 4. Runs the real recipe_selection.py with the remaining arguments
 
 NOTE: This script must be run with the SAME Python interpreter that
@@ -57,6 +66,9 @@ _SKIPPABLE_RULE_PATTERNS = [
 # Broader pattern fragments for future-proofing
 _SKIPPABLE_FRAGMENTS = ['_PROGRAM_RECIPE', '_JOBPATH']
 
+# Track skipped rules for diagnostics (populated during __getitem__ calls)
+_skipped_rules = []
+
 
 def _is_skippable_rule(rule_name):
     """Check if a rule failure can be safely ignored.
@@ -74,38 +86,61 @@ def _is_skippable_rule(rule_name):
     return False
 
 
-def _patch_calc_all_rules(solutions_class):
-    """Monkey-patch Solutions.calc_all_rules to be fault-tolerant.
+def _patch_getitem(solutions_class):
+    """Monkey-patch Solutions.__getitem__ to be fault-tolerant.
 
-    Instead of crashing on the first rule failure, this patched version:
-    1. Tries to resolve each rule
-    2. On ValueError/KeyError for skippable rules, sets a placeholder
-    3. Re-raises errors for critical (non-skippable) rules
-    4. Reports skipped rules to stderr for diagnostics
+    This patches the rule resolution at the lowest level — inside
+    __getitem__ itself.  When a skippable rule fails (ValueError from
+    "Hit the end of the table"), we catch it RIGHT THERE and return
+    a placeholder 'N/A' value.  This prevents the error from
+    propagating up through parent rules like TEST_PROGRAM_PATH.
+
+    The original __getitem__ flow:
+    1. Look up rule definition
+    2. Recursively resolve dependency columns via self[dep]
+    3. Iterate table rows to find a match
+    4. eval() the matched value
+    5. Replace rule definition with resolved value
+
+    Our patch wraps step 3-4: if the table lookup fails for a
+    skippable rule, we return 'N/A' instead of raising.
     """
-    def patched_calc_all_rules(self):
-        all_rules = list(self.keys())
-        skipped = []
-        for rule in all_rules:
-            try:
-                self[rule]
-            except (ValueError, KeyError) as e:
-                if _is_skippable_rule(rule):
-                    # Set a placeholder value so dependent rules don't fail
-                    # Use the same tuple format as the rule engine:
-                    #   (dependancies, [(match_conditions, value)])
-                    self[rule] = ((), [((), repr('N/A'))])
-                    skipped.append(rule)
-                else:
-                    raise
+    _original_getitem = solutions_class.__getitem__
 
-        if skipped:
-            sys.stderr.write(
-                "RECIPE_WRAPPER_INFO: Skipped %d non-critical rule(s): %s\n"
-                % (len(skipped), ", ".join(sorted(skipped)))
-            )
+    def patched_getitem(self, key):
+        try:
+            return _original_getitem(self, key)
+        except (ValueError, KeyError) as e:
+            error_msg = str(e)
+            # Check if this specific rule (key) is skippable
+            if _is_skippable_rule(key):
+                # Set a resolved placeholder so future lookups don't retry
+                self[key] = ((), [((), repr('N/A'))])
+                if key not in _skipped_rules:
+                    _skipped_rules.append(key)
+                    sys.stderr.write(
+                        "RECIPE_WRAPPER_INFO: Skipped rule %s: %s\n"
+                        % (key, error_msg)
+                    )
+                return 'N/A'
+            # For non-skippable rules, check if the error mentions a
+            # skippable rule (recursive resolution failure)
+            for pattern in _SKIPPABLE_RULE_PATTERNS:
+                if pattern in error_msg:
+                    # The error originated from a skippable sub-rule
+                    # but propagated to this non-skippable rule.
+                    # This shouldn't happen with our __getitem__ patch
+                    # (we catch it at the source), but handle it as
+                    # a safety net.
+                    sys.stderr.write(
+                        "RECIPE_WRAPPER_INFO: Rule %s failed due to "
+                        "skippable sub-rule: %s\n" % (key, error_msg)
+                    )
+                    return 'N/A'
+            # Truly non-skippable error — re-raise
+            raise
 
-    solutions_class.calc_all_rules = patched_calc_all_rules
+    solutions_class.__getitem__ = patched_getitem
 
 
 def main():
@@ -165,12 +200,12 @@ def main():
         # Import as bare "attributes" — same as SSDrules_loader does
         import attributes as attr_mod
         Solutions = attr_mod.Solutions
-        _patch_calc_all_rules(Solutions)
-        sys.stderr.write("RECIPE_WRAPPER_INFO: Patched calc_all_rules for fault tolerance\n")
+        _patch_getitem(Solutions)
+        sys.stderr.write("RECIPE_WRAPPER_INFO: Patched __getitem__ for fault tolerance\n")
     except ImportError as e:
         sys.stderr.write(
             "RECIPE_WRAPPER_WARNING: Could not import attributes "
-            "to patch calc_all_rules: %s\n" % str(e)
+            "to patch __getitem__: %s\n" % str(e)
         )
         # Continue anyway — the real recipe_selection.py will import it
 
@@ -206,9 +241,21 @@ def main():
             with open(real_script, 'r') as f:
                 exec(compile(f.read(), real_script, 'exec'), script_globals)
     except SystemExit as e:
+        # Emit summary of skipped rules before exiting
+        if _skipped_rules:
+            sys.stderr.write(
+                "RECIPE_WRAPPER_INFO: Skipped %d non-critical rule(s): %s\n"
+                % (len(_skipped_rules), ", ".join(sorted(_skipped_rules)))
+            )
         # recipe_selection.py may call sys.exit — propagate it
         sys.exit(e.code if hasattr(e, 'code') else 0)
     except Exception as e:
+        # Emit summary of skipped rules before reporting error
+        if _skipped_rules:
+            sys.stderr.write(
+                "RECIPE_WRAPPER_INFO: Skipped %d non-critical rule(s): %s\n"
+                % (len(_skipped_rules), ", ".join(sorted(_skipped_rules)))
+            )
         sys.stderr.write("RECIPE_WRAPPER_ERROR: %s\n" % str(e))
         traceback.print_exc(file=sys.stderr)
         sys.exit(1)

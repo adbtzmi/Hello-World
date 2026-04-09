@@ -311,20 +311,49 @@ flowchart TD
 
 | File | Action | Description |
 |------|--------|-------------|
-| `model/resources/recipe_fault_tolerant.py` | CREATE | Python 2 wrapper that patches calc_all_rules |
-| `model/recipe_selector.py` | MODIFY | Add retry logic using wrapper on known rule failure |
+| `model/resources/recipe_fault_tolerant.py` | CREATE | Python 2 wrapper that patches `__getitem__` |
+| `model/recipe_selector.py` | MODIFY | Use wrapper as primary, vanilla as fallback |
 | `model/orchestrators/checkout_orchestrator.py` | NO CHANGE | Existing flow handles it |
 
 ### Detailed Implementation Plan
 
-#### `recipe_fault_tolerant.py` — The Wrapper
+#### `recipe_fault_tolerant.py` — The Wrapper (IMPLEMENTED — v4: `__getitem__` patch)
 
-- Takes same args as `recipe_selection.py`: `<tmptravl_path> [--tt_format dat]`
-- Also takes `--recipe_dir <path>` to know where the real script lives
-- Patches `Solutions.calc_all_rules()` to catch `ValueError` for rules containing `_PROGRAM_RECIPE` or `_JOBPATH` prefixed with site names
-- Sets failed rules to `N/A` placeholder so dependent rules can still resolve
-- Runs the real `recipe_selection.py` via `execfile()` or `exec()`
+- Takes args: `<recipe_selection_dir> <tmptravl_path> [--tt_format dat]`
+- **Patches `Solutions.__getitem__()`** (NOT `calc_all_rules()`) to catch errors at the SOURCE rule
+- Uses `_is_skippable_rule()` to check rule names against known patterns (`_PROGRAM_RECIPE`, `_JOBPATH`)
+- Sets failed skippable rules to `N/A` placeholder via `self[key] = ((), [((), repr('N/A'))])`
+- Safety net: checks error message for skippable rule names (for edge cases)
+- Tracks skipped rules in `_skipped_rules` list for diagnostics
+- Runs the real `recipe_selection.py` via `execfile()` with proper `__main__` globals
 - Outputs the same `RECIPE_SEL_*` format
+
+##### Why `__getitem__` instead of `calc_all_rules`
+
+The rule engine forms a **recursive dependency tree**:
+
+```
+TEST_PROGRAM_PATH  →  PROGRAM_RECIPE  →  SITE_NAME
+                                          ↓ (when PENANG)
+                                     PENANG_PROGRAM_RECIPE  ← skippable
+```
+
+When `calc_all_rules()` iterates rules and hits `TEST_PROGRAM_PATH`, it recursively
+resolves `PENANG_PROGRAM_RECIPE` via `self[dep]` inside `__getitem__`. If
+`PENANG_PROGRAM_RECIPE` fails, the error propagates UP to `TEST_PROGRAM_PATH`
+(a non-skippable rule), and our `calc_all_rules()` patch would re-raise it.
+
+By patching `__getitem__` instead, we catch the error at the SOURCE rule
+(`PENANG_PROGRAM_RECIPE`) before it propagates to parent rules.
+
+##### Evolution of the wrapper (commit history)
+
+| Commit | Fix |
+|--------|-----|
+| `892c362` | Initial implementation — patched `calc_all_rules()` |
+| `6c38193` | Fixed `execfile()` scope — pass `script_globals` with `__name__='__main__'` |
+| `30e1b4d` | Fixed import path — import `attributes` as bare module (not `rules_mgr.attributes`) |
+| (pending) | Redesigned: patch `__getitem__` instead of `calc_all_rules` |
 
 #### `recipe_selector.py` Changes — IMPLEMENTED
 
@@ -354,15 +383,17 @@ Default site changed from SINGAPORE to **PENANG**:
 | Risk | Mitigation |
 |------|-----------|
 | Python 2 compatibility of wrapper | Wrapper uses only Python 2 syntax; tested with `C:\Python27\python.exe` |
-| Rule engine internals change | Wrapper only patches `calc_all_rules`; if the method signature changes, it falls back gracefully |
+| Rule engine internals change | Wrapper only patches `__getitem__`; if the method signature changes, it falls back gracefully |
 | Skipping a critical rule by mistake | Only skip rules matching `_PROGRAM_RECIPE` or `_JOBPATH` with site prefixes |
 | Wrapper file not found | Bundled in `model/resources/`; falls back to vanilla subprocess, then TGZ scan |
 | `execfile` not available in Python 3 | Wrapper is explicitly run with Python 2; has Python 3 fallback via `exec(compile(...))` |
+| Error propagation through dependency tree | `__getitem__` patch catches errors at the source rule, not at the top-level iteration |
 
 ### Expected Outcome
 
 After this fix:
-- **Primary attempt** with the fault-tolerant wrapper will succeed, skipping `BOISE_PROGRAM_RECIPE` and producing proper `RECIPE_SEL_*` output
+- **Primary attempt** with the fault-tolerant wrapper will succeed, skipping `BOISE_PROGRAM_RECIPE`, `SINGAPORE_PROGRAM_RECIPE`, and other non-matching site rules
+- The `__getitem__` patch prevents errors from propagating through the rule dependency tree (e.g., `PENANG_PROGRAM_RECIPE` → `PROGRAM_RECIPE` → `TEST_PROGRAM_PATH`)
 - Recipe, test program path, and file copy paths will all come from the **official rule engine** rather than TGZ scan
 - The vanilla subprocess and TGZ scan fallbacks remain as safety nets but should rarely be needed
 - Default site is now PENANG, matching the `PENANG_PROGRAM_RECIPE` rule table which has entries for most products
