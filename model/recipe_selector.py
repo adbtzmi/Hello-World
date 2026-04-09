@@ -1,8 +1,12 @@
 """Recipe Selection Engine — wraps the production recipe_selection.py subprocess.
 
 Mirrors CAT ProfileDump/main.py ProfileRecipe() and Extract() methods.
-When recipe_selection.py is not available (e.g., dev environments), falls back
-to scanning the TGZ for matching recipe files, then to the static RECIPE_MAP.
+
+**Primary approach**: Uses a fault-tolerant wrapper (``recipe_fault_tolerant.py``)
+that monkey-patches the rule engine's ``calc_all_rules()`` to skip non-critical
+site-specific rules (e.g., BOISE_PROGRAM_RECIPE when SITE_NAME=PENANG).
+
+**Fallback chain**: wrapper → vanilla subprocess → TGZ scan → static RECIPE_MAP.
 """
 
 import os
@@ -197,11 +201,30 @@ class RecipeSelector:
         """Check if recipe_selection.py exists and is accessible."""
         return bool(self._script_path) and os.path.isfile(self._script_path)
 
+    @property
+    def _wrapper_script_path(self) -> str:
+        """Path to the fault-tolerant wrapper script bundled with BENTO."""
+        return os.path.join(os.path.dirname(__file__), "resources", "recipe_fault_tolerant.py")
+
+    @property
+    def _wrapper_available(self) -> bool:
+        """Check if the fault-tolerant wrapper script exists."""
+        return os.path.isfile(self._wrapper_script_path)
+
+    # ------------------------------------------------------------------
+    # Primary entry point — fault-tolerant wrapper
+    # ------------------------------------------------------------------
+
     def select_recipe(self, tmptravl_path: str, timeout: int = 120) -> RecipeResult:
         """Run recipe selection subprocess against a tmptravl file.
 
-        Mirrors CAT ProfileRecipe() — runs:
-            [python2_exe, recipe_selection.py, tmptravl_path]
+        **Primary approach**: Uses the fault-tolerant wrapper script
+        (``recipe_fault_tolerant.py``) which monkey-patches the rule engine
+        to skip non-critical site-specific rules (e.g., BOISE_PROGRAM_RECIPE)
+        that would otherwise crash the subprocess.
+
+        **Fallback**: If the wrapper is unavailable, falls back to running
+        ``recipe_selection.py`` directly (vanilla mode).
 
         Parameters
         ----------
@@ -227,9 +250,147 @@ class RecipeSelector:
             logger.error(result.error)
             return result
 
+        # ── Primary: fault-tolerant wrapper ────────────────────────────
+        if self._wrapper_available:
+            result = self._run_with_wrapper(tmptravl_path, timeout)
+            if result.success:
+                return result
+            # Wrapper ran but failed — fall through to vanilla attempt
+            wrapper_error = result.error
+            logger.warning("Fault-tolerant wrapper did not produce a recipe — "
+                           "falling back to vanilla subprocess: %s", wrapper_error)
+        else:
+            logger.info("Fault-tolerant wrapper not found at %s — using vanilla subprocess",
+                        self._wrapper_script_path)
+
+        # ── Fallback: vanilla subprocess (direct recipe_selection.py) ──
+        result = self._run_vanilla(tmptravl_path, timeout)
+        return result
+
+    def _run_with_wrapper(self, tmptravl_path: str, timeout: int = 120) -> RecipeResult:
+        """Run recipe selection via the fault-tolerant wrapper.
+
+        The wrapper monkey-patches ``Solutions.calc_all_rules()`` to skip
+        non-critical site-specific rules, then executes the real
+        ``recipe_selection.py`` in the same process.
+
+        Parameters
+        ----------
+        tmptravl_path : str
+            Path to the customized .dat tmptravl file.
+        timeout : int
+            Subprocess timeout in seconds.
+
+        Returns
+        -------
+        RecipeResult
+            Parsed recipe selection output.
+        """
+        result = RecipeResult()
+
+        # The wrapper expects: python <wrapper> <recipe_dir> <tmptravl> [--tt_format dat]
+        cmd = [
+            self.python2_exe,
+            self._wrapper_script_path,
+            self.recipe_folder,
+            tmptravl_path,
+            "--tt_format", "dat",
+        ]
+        logger.info("Running recipe selection (fault-tolerant wrapper): %s", " ".join(cmd))
+
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            stdout = proc.stdout or ""
+            stderr = proc.stderr or ""
+            result.raw_output = stdout
+
+            # Log wrapper diagnostics from stderr
+            for line in stderr.splitlines():
+                if line.startswith("RECIPE_WRAPPER_INFO:"):
+                    logger.info("Wrapper: %s", line)
+                elif line.startswith("RECIPE_WRAPPER_WARNING:"):
+                    logger.warning("Wrapper: %s", line)
+                elif line.startswith("RECIPE_WRAPPER_ERROR:"):
+                    logger.error("Wrapper: %s", line)
+
+            logger.info("DIAG: Wrapper subprocess returncode=%d", proc.returncode)
+            if stdout:
+                logger.debug("DIAG: Wrapper stdout (first 2000 chars): %s", stdout[:2000])
+            if stderr:
+                logger.debug("DIAG: Wrapper stderr (first 2000 chars): %s", stderr[:2000])
+
+            # Check for RECIPE_SEL lines in stdout
+            has_recipe_sel_lines = any(
+                line.strip().startswith("RECIPE_SEL") for line in stdout.splitlines()
+            )
+
+            if proc.returncode != 0:
+                # Even with non-zero exit, check if we got recipe data
+                if not has_recipe_sel_lines:
+                    result.error = (f"Wrapper exited with code {proc.returncode}: "
+                                    f"{stderr[:500] if stderr else 'no stderr'}")
+                    logger.warning(result.error)
+                else:
+                    logger.info("Wrapper exited with code %d but produced RECIPE_SEL output — parsing",
+                                proc.returncode)
+
+            # Parse stdout output
+            if has_recipe_sel_lines:
+                result = self._extract(stdout, result)
+
+            # If stdout parsing didn't find recipe, try tmptravl file
+            if not result.recipe_name and os.path.isfile(tmptravl_path):
+                logger.debug("DIAG: Wrapper stdout had no recipe — trying tmptravl file: %s", tmptravl_path)
+                result = self._extract_from_tmptravl(tmptravl_path, result)
+                if result.recipe_name:
+                    result.source = "tmptravl"
+                    logger.info("Recovered recipe from tmptravl after wrapper run: %s (file_copy_paths=%d)",
+                                result.recipe_name, len(result.file_copy_paths))
+
+            if result.success and not result.source:
+                result.source = "subprocess"
+                logger.info("✓ Recipe selection succeeded via fault-tolerant wrapper: %s", result.recipe_name)
+
+        except subprocess.TimeoutExpired:
+            result.error = f"Wrapper timed out after {timeout}s"
+            logger.error(result.error)
+        except FileNotFoundError:
+            result.error = f"Python 2 executable not found: {self.python2_exe}"
+            logger.error(result.error)
+        except Exception as e:
+            result.error = f"Wrapper execution failed: {e}"
+            logger.exception(result.error)
+
+        return result
+
+    def _run_vanilla(self, tmptravl_path: str, timeout: int = 120) -> RecipeResult:
+        """Run recipe selection directly (without fault-tolerant wrapper).
+
+        This is the fallback path when the wrapper script is unavailable.
+        Runs ``recipe_selection.py`` directly, which may fail on non-critical
+        site-specific rules.
+
+        Parameters
+        ----------
+        tmptravl_path : str
+            Path to the customized .dat tmptravl file.
+        timeout : int
+            Subprocess timeout in seconds.
+
+        Returns
+        -------
+        RecipeResult
+            Parsed recipe selection output.
+        """
+        result = RecipeResult()
+
         cmd = [self.python2_exe, self._script_path, tmptravl_path]
-        logger.info(f"Running recipe selection: {' '.join(cmd)}")
-        logger.info("DIAG: RecipeSelector - script=%s, python2=%s, tmptravl=%s", self._script_path, self.python2_exe, tmptravl_path)
+        logger.info("Running recipe selection (vanilla): %s", " ".join(cmd))
 
         try:
             proc = subprocess.run(
@@ -244,10 +405,6 @@ class RecipeSelector:
             result.raw_output = stdout
 
             # Detect known rule-lookup failures (e.g., BOISE_PROGRAM_RECIPE).
-            # These occur when the external recipe_selection.py CSV rule table
-            # doesn't have a matching row for the given site/product combination.
-            # This is expected for certain configurations and NOT a real error —
-            # the TGZ scan fallback will resolve the recipe correctly.
             _KNOWN_RULE_FAILURE_RE = re.compile(
                 r"Hit the end of the table when looking up the value for rule (\S+)",
                 re.IGNORECASE,
@@ -257,42 +414,36 @@ class RecipeSelector:
 
             if is_known_rule_failure:
                 failed_rule = known_rule_match.group(1)
-                logger.info("Recipe selection subprocess: rule '%s' not found in lookup table "
-                            "(expected for this site/product — will use TGZ scan fallback)", failed_rule)
-                logger.debug("DIAG: RecipeSelector subprocess returncode=%d", proc.returncode)
-                logger.debug("DIAG: RecipeSelector stdout (first 2000 chars): %s", stdout[:2000] if stdout else "EMPTY")
-                logger.debug("DIAG: RecipeSelector stderr (first 2000 chars): %s", stderr[:2000] if stderr else "EMPTY")
-                # Mark as known failure so callers can log appropriately
+                logger.info("Vanilla subprocess: rule '%s' not found in lookup table "
+                            "(expected for this site/product)", failed_rule)
+                logger.debug("DIAG: Vanilla subprocess returncode=%d", proc.returncode)
+                logger.debug("DIAG: Vanilla stdout (first 2000 chars): %s", stdout[:2000] if stdout else "EMPTY")
+                logger.debug("DIAG: Vanilla stderr (first 2000 chars): %s", stderr[:2000] if stderr else "EMPTY")
                 result.error = f"Rule '{failed_rule}' not in lookup table (expected — using fallback)"
                 result._known_rule_failure = True  # type: ignore[attr-defined]
             else:
-                logger.info("DIAG: RecipeSelector subprocess returncode=%d", proc.returncode)
+                logger.info("DIAG: Vanilla subprocess returncode=%d", proc.returncode)
                 if stdout:
-                    logger.debug("DIAG: RecipeSelector stdout (first 2000 chars): %s", stdout[:2000])
+                    logger.debug("DIAG: Vanilla stdout (first 2000 chars): %s", stdout[:2000])
                 if stderr:
-                    logger.warning("DIAG: RecipeSelector stderr (first 2000 chars): %s", stderr[:2000])
+                    logger.warning("DIAG: Vanilla stderr (first 2000 chars): %s", stderr[:2000])
 
             has_recipe_sel_lines = any(
                 line.strip().startswith("RECIPE_SEL") for line in stdout.splitlines()
             )
 
             if not has_recipe_sel_lines and not is_known_rule_failure:
-                logger.warning("DIAG: Subprocess stdout contains NO RECIPE_SEL_* lines — will try tmptravl file")
+                logger.warning("DIAG: Vanilla stdout contains NO RECIPE_SEL_* lines — will try tmptravl file")
 
             if proc.returncode != 0 and not is_known_rule_failure:
                 result.error = f"recipe_selection.py exited with code {proc.returncode}: {stderr}"
                 logger.error(result.error)
-                # Don't return yet — try tmptravl file parsing below
 
-            # Parse the stdout output (only if it contains RECIPE_SEL lines)
+            # Parse stdout output
             if has_recipe_sel_lines:
                 result = self._extract(stdout, result)
 
-            # If stdout parsing failed (no RECIPE_SEL_PROGRAM_RECIPE found),
-            # try parsing the tmptravl file itself. recipe_selection.py writes
-            # RECIPE_SEL_* results into the $$_BEGIN_SECTION_RECIPE_SELECTION
-            # section of the tmptravl file before it may crash on secondary rules
-            # (e.g., BOISE_PROGRAM_RECIPE). This recovers the recipe + file_copy_paths.
+            # Try tmptravl file if stdout parsing didn't find recipe
             if not result.recipe_name and tmptravl_path and os.path.isfile(tmptravl_path):
                 logger.debug("DIAG: Attempting to extract RECIPE_SEL_* from tmptravl file: %s", tmptravl_path)
                 result = self._extract_from_tmptravl(tmptravl_path, result)
@@ -503,7 +654,7 @@ class RecipeSelector:
                         result.recipe_name, len(result.file_copy_paths))
             return result
 
-        # ── Priority 1: Subprocess recipe selection ────────────────────
+        # ── Priority 1: Subprocess recipe selection (wrapper → vanilla) ─
         is_known_rule_failure = False
         if self.is_available and tmptravl_path and os.path.isfile(tmptravl_path):
             result = self.select_recipe(tmptravl_path, timeout)
@@ -511,7 +662,7 @@ class RecipeSelector:
                 # Preserve source set by select_recipe() — "subprocess" or "tmptravl"
                 if not result.source:
                     result.source = "subprocess"
-                logger.info("DIAG: Recipe selection SUCCEEDED - recipe=%s, file_copy_paths_count=%d, source=%s",
+                logger.info("✓ Recipe selection SUCCEEDED - recipe=%s, file_copy_paths_count=%d, source=%s",
                             result.recipe_name, len(result.file_copy_paths), result.source)
                 return result
 
