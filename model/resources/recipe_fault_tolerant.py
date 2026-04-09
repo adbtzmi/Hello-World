@@ -44,46 +44,102 @@ import os
 import traceback
 
 # ---------------------------------------------------------------------------
-# Site-specific rule name patterns that can safely fail.
-# These are rules for OTHER sites that don't affect the current site's output.
-# The pattern matching is intentionally broad to cover future site additions.
+# Rule name patterns that can safely fail.
+#
+# Two categories:
+# 1. Site-specific rules — recipe/jobpath rules for OTHER sites that don't
+#    affect the current site's output.  The current site's rules are NOT
+#    skipped so they can produce the actual recipe/test-program output.
+# 2. Platform-specific checks — validation rules that require tester
+#    equipment data (software versions, machine model, etc.) which BENTO
+#    does not have.  These are defined in the .rul file as
+#    PLATFORM_SPECIFIC_CHECKS and run AFTER recipe selection in production
+#    CAT.  They don't affect the recipe/test-program output.
 # ---------------------------------------------------------------------------
-_SKIPPABLE_RULE_PATTERNS = [
-    # Site-specific program recipe rules
-    'BOISE_PROGRAM_RECIPE',
-    'SINGAPORE_PROGRAM_RECIPE',
-    'PENANG_PROGRAM_RECIPE',
-    'SANAND_PROGRAM_RECIPE',
-    'ATMES_SANAND_PROGRAM_RECIPE',
-    # Site-specific job path rules
-    'BOISE_JOBPATH',
-    'SINGAPORE_JOBPATH',
-    'PENANG_JOBPATH',
-    'SANAND_JOBPATH',
-    'ATMES_SANAND_JOBPATH',
+
+# Map of SITE_NAME values to their rule name prefixes.
+# Used to determine which site-specific rules belong to the CURRENT site
+# (and therefore should NOT be skipped).
+_SITE_RULE_PREFIXES = {
+    'BOISE':    ['BOISE_'],
+    'SINGAPORE':['SINGAPORE_'],
+    'PENANG':   ['PENANG_'],
+    'SANAND':   ['SANAND_', 'ATMES_SANAND_'],
+    'XIAN':     ['XIAN_'],
+}
+
+# All known site-specific rule names (for all sites)
+_ALL_SITE_RULES = [
+    'BOISE_PROGRAM_RECIPE', 'BOISE_JOBPATH',
+    'SINGAPORE_PROGRAM_RECIPE', 'SINGAPORE_JOBPATH',
+    'PENANG_PROGRAM_RECIPE', 'PENANG_JOBPATH',
+    'SANAND_PROGRAM_RECIPE', 'SANAND_JOBPATH',
+    'ATMES_SANAND_PROGRAM_RECIPE', 'ATMES_SANAND_JOBPATH',
 ]
 
-# Broader pattern fragments for future-proofing
-_SKIPPABLE_FRAGMENTS = ['_PROGRAM_RECIPE', '_JOBPATH']
+# Platform-specific checks — always skippable (require tester equipment data)
+_PLATFORM_CHECK_RULES = [
+    'VERSION_CHECK',
+    'MACHINE_CHECKING',
+    'PASS_MFG_STATUS_CHECK',
+    'PROG_RECIPE_CHECK',
+]
+
+# Broader pattern fragments for future-proofing site rules
+_SITE_RULE_FRAGMENTS = ['_PROGRAM_RECIPE', '_JOBPATH']
 
 # Track skipped rules for diagnostics (populated during __getitem__ calls)
 _skipped_rules = []
+
+# Current site name — set by main() after reading tmptravl
+_current_site = None
+
+
+def _read_site_from_tmptravl(tmptravl_path):
+    """Read SITE_NAME from the tmptravl file."""
+    try:
+        with open(tmptravl_path, 'r') as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith('SITE_NAME:'):
+                    return stripped.split(':', 1)[1].strip().upper()
+    except (IOError, OSError):
+        pass
+    return None
 
 
 def _is_skippable_rule(rule_name):
     """Check if a rule failure can be safely ignored.
 
-    A rule is skippable if it's a site-specific recipe/jobpath rule
-    that doesn't apply to the current site configuration.
+    A rule is skippable if:
+    - It's a platform-specific check (VERSION_CHECK, etc.)
+    - It's a site-specific rule for a DIFFERENT site than the current one
     """
-    # Exact match against known skippable rules
-    if rule_name in _SKIPPABLE_RULE_PATTERNS:
+    # Platform checks are always skippable
+    if rule_name in _PLATFORM_CHECK_RULES:
         return True
-    # Fragment match for future site additions
-    for fragment in _SKIPPABLE_FRAGMENTS:
-        if fragment in rule_name:
-            return True
-    return False
+
+    # Check if it's a site-specific rule
+    is_site_rule = rule_name in _ALL_SITE_RULES
+    if not is_site_rule:
+        for fragment in _SITE_RULE_FRAGMENTS:
+            if fragment in rule_name:
+                is_site_rule = True
+                break
+
+    if not is_site_rule:
+        return False
+
+    # It's a site-specific rule — only skip if it's NOT for the current site
+    if _current_site and _current_site in _SITE_RULE_PREFIXES:
+        current_prefixes = _SITE_RULE_PREFIXES[_current_site]
+        for prefix in current_prefixes:
+            if rule_name.startswith(prefix):
+                # This rule belongs to the CURRENT site — do NOT skip
+                return False
+
+    # It's a site rule for a different site — safe to skip
+    return True
 
 
 def _patch_getitem(solutions_class):
@@ -124,17 +180,22 @@ def _patch_getitem(solutions_class):
                     )
                 return 'N/A'
             # For non-skippable rules, check if the error mentions a
-            # skippable rule (recursive resolution failure)
-            for pattern in _SKIPPABLE_RULE_PATTERNS:
-                if pattern in error_msg:
-                    # The error originated from a skippable sub-rule
-                    # but propagated to this non-skippable rule.
-                    # This shouldn't happen with our __getitem__ patch
-                    # (we catch it at the source), but handle it as
-                    # a safety net.
+            # skippable rule (recursive resolution failure).
+            # Extract the failing rule name from the error message and
+            # check if THAT rule is skippable (not just a string match).
+            # This prevents false positives where the current site's
+            # rule name appears in the error message.
+            import re as _re
+            match = _re.search(
+                r'rule\s+(\w+)', error_msg
+            )
+            if match:
+                failing_rule = match.group(1)
+                if failing_rule != key and _is_skippable_rule(failing_rule):
                     sys.stderr.write(
                         "RECIPE_WRAPPER_INFO: Rule %s failed due to "
-                        "skippable sub-rule: %s\n" % (key, error_msg)
+                        "skippable sub-rule %s: %s\n"
+                        % (key, failing_rule, error_msg)
                     )
                     return 'N/A'
             # Truly non-skippable error — re-raise
@@ -159,6 +220,21 @@ def main():
     if not os.path.isdir(recipe_dir):
         sys.stderr.write("ERROR: Recipe directory not found: %s\n" % recipe_dir)
         sys.exit(1)
+
+    # Read SITE_NAME from tmptravl to determine which site-specific rules
+    # belong to the current site (and should NOT be skipped).
+    global _current_site
+    _current_site = _read_site_from_tmptravl(tmptravl_path)
+    if _current_site:
+        sys.stderr.write(
+            "RECIPE_WRAPPER_INFO: Site=%s (will preserve %s_* rules)\n"
+            % (_current_site, _current_site)
+        )
+    else:
+        sys.stderr.write(
+            "RECIPE_WRAPPER_WARNING: Could not read SITE_NAME from tmptravl "
+            "— all site-specific rules will be skippable\n"
+        )
 
     # Determine the versioned recipe directory
     # The root recipe_selection.py reads RELEASE_VERSION.txt and delegates
