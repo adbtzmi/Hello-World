@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 import os
+import logging
 import tkinter as tk
 from tkinter import ttk, filedialog, simpledialog, messagebox
 from typing import Any, List, Dict
 from view.tabs.base_tab import BaseTab
+
+logger = logging.getLogger("bento_app")
 
 # Status constants (shared with result_collector model)
 _STATUS_PASS    = "PASS"
@@ -152,6 +155,12 @@ class CheckoutTab(BaseTab):
         self._tester_frame: Any        = None
         self._tester_row               = 0
         self._profile_data: List[Dict] = []
+
+        # ── Task 2: Result collection state ───────────────────────────
+        self._rc_checkout_results: Dict[str, dict] = {}   # hostname → result
+        self._rc_checkout_hostnames: List[str]      = []   # testers used
+        self._rc_mids_file: str                     = ""   # auto-generated MIDs.txt path
+
         self._init_vars()
         self._build_ui()
 
@@ -244,6 +253,7 @@ class CheckoutTab(BaseTab):
         self._build_detection_tester_section(f, row=2)
         self._build_action_buttons(f, row=3)
         self._build_results_section(f, row=4)
+        self._build_test_progress_section(f, row=5)
 
         # ── Keyboard shortcuts ───────────────────────────────────────────
         self.bind_all("<Control-Return>", lambda e: self._start_checkout())
@@ -1616,6 +1626,11 @@ class CheckoutTab(BaseTab):
         self._set_phase(hostname, "")
         self._append_result(f"[{hostname}] {status}  ({elapsed}s)  {detail}")
 
+        # Store result for auto-detect
+        self._rc_checkout_results[hostname] = result
+        if hostname not in self._rc_checkout_hostnames:
+            self._rc_checkout_hostnames.append(hostname)
+
         # Per-MID results (mirrors CAT's profile_gen_completed)
         if mid_results:
             for mid, mid_info in mid_results.items():
@@ -1639,6 +1654,21 @@ class CheckoutTab(BaseTab):
         if not running:
             self.stop_btn.state(["disabled"])
             self.unlock_gui()
+
+            # ── Task 2: Auto-start result collection ──────────────────
+            any_success = any(
+                r.get("status", "").lower() in ("success", "partial")
+                for r in self._rc_checkout_results.values()
+            )
+            if any_success and self._rc_checkout_hostnames:
+                primary_host = self._rc_checkout_hostnames[0]
+                self.log(f"🔍 All testers done — auto-starting result "
+                         f"collection for {primary_host}...")
+                try:
+                    self._rc_auto_start_monitoring(primary_host)
+                except Exception as e:
+                    self.log(f"⚠ Auto-start failed: {e}")
+                    logger.error(f"Auto-start result collection failed: {e}")
 
     def on_xml_generation_completed(self, hostname, result):
         """Handle XML-only generation completion (distinct from checkout)."""
@@ -1670,3 +1700,318 @@ class CheckoutTab(BaseTab):
 
     def get_profile_table_data(self) -> List[Dict]:
         return self._profile_data.copy()
+
+    # ──────────────────────────────────────────────────────────────────────
+    # SECTION 6 — Test Progress (Result Collection)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _build_test_progress_section(self, parent, row):
+        """Build the auto-detect test progress section with MID status treeview."""
+        frm = ttk.LabelFrame(parent, text="  Test Progress (Auto-Detect)  ",
+                             padding=(8, 6, 8, 8))
+        frm.grid(row=row, column=0, sticky="we", pady=(0, 14))
+        frm.columnconfigure(0, weight=1)
+
+        # ── Summary bar ───────────────────────────────────────────────
+        summary_frm = ttk.Frame(frm)
+        summary_frm.grid(row=0, column=0, sticky="we", pady=(0, 4))
+
+        self._rc_status_indicator = ttk.Label(
+            summary_frm, text="⏸ Idle", font=("Segoe UI", 9, "bold"))
+        self._rc_status_indicator.pack(side=tk.LEFT, padx=(0, 12))
+
+        self._rc_summary_label = ttk.Label(
+            summary_frm, text="", font=("Segoe UI", 8))
+        self._rc_summary_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # ── Toolbar ───────────────────────────────────────────────────
+        toolbar = ttk.Frame(frm)
+        toolbar.grid(row=1, column=0, sticky="we", pady=(0, 4))
+
+        self._rc_refresh_btn = ttk.Button(
+            toolbar, text="🔄 Refresh", width=10,
+            command=self._rc_refresh_status)
+        self._rc_refresh_btn.pack(side=tk.LEFT, padx=(0, 4))
+        _tip(self._rc_refresh_btn, "Force re-check all MID statuses.")
+
+        self._rc_collect_btn = ttk.Button(
+            toolbar, text="📁 Collect", width=10,
+            command=self._rc_collect_selected)
+        self._rc_collect_btn.pack(side=tk.LEFT, padx=(0, 4))
+        _tip(self._rc_collect_btn, "Manually collect files for selected MID(s).")
+
+        self._rc_spool_btn = ttk.Button(
+            toolbar, text="📊 Spool", width=10,
+            command=self._rc_spool_selected)
+        self._rc_spool_btn.pack(side=tk.LEFT, padx=(0, 4))
+        _tip(self._rc_spool_btn, "Manually spool summary for selected MID(s).")
+
+        self._rc_stop_btn = ttk.Button(
+            toolbar, text="⏹ Stop", width=8,
+            command=self._rc_stop_monitoring, state=tk.DISABLED)
+        self._rc_stop_btn.pack(side=tk.RIGHT)
+        _tip(self._rc_stop_btn, "Stop the background result collector.")
+
+        # ── Treeview ──────────────────────────────────────────────────
+        tree_frm = ttk.Frame(frm)
+        tree_frm.grid(row=2, column=0, sticky="nsew")
+        tree_frm.columnconfigure(0, weight=1)
+
+        columns = ("mid", "location", "name", "status", "fail_info",
+                   "collected", "error")
+        self._rc_tree = ttk.Treeview(
+            tree_frm, columns=columns, show="headings", height=5,
+            selectmode="extended")
+
+        self._rc_tree.heading("mid",       text="MID")
+        self._rc_tree.heading("location",  text="Location")
+        self._rc_tree.heading("name",      text="Name")
+        self._rc_tree.heading("status",    text="Status")
+        self._rc_tree.heading("fail_info", text="Fail Info")
+        self._rc_tree.heading("collected", text="Collected")
+        self._rc_tree.heading("error",     text="Error")
+
+        self._rc_tree.column("mid",       width=90,  minwidth=70)
+        self._rc_tree.column("location",  width=50,  minwidth=40)
+        self._rc_tree.column("name",      width=120, minwidth=80)
+        self._rc_tree.column("status",    width=70,  minwidth=50)
+        self._rc_tree.column("fail_info", width=150, minwidth=80)
+        self._rc_tree.column("collected", width=60,  minwidth=40)
+        self._rc_tree.column("error",     width=150, minwidth=80)
+
+        rc_scroll = ttk.Scrollbar(tree_frm, orient=tk.VERTICAL,
+                                  command=self._rc_tree.yview)
+        self._rc_tree.configure(yscrollcommand=rc_scroll.set)
+        self._rc_tree.grid(row=0, column=0, sticky="nsew")
+        rc_scroll.grid(row=0, column=1, sticky="ns")
+
+        # Row colour tags
+        self._rc_tree.tag_configure("pass",    foreground="green")
+        self._rc_tree.tag_configure("fail",    foreground="red")
+        self._rc_tree.tag_configure("running", foreground="blue")
+        self._rc_tree.tag_configure("unknown", foreground="gray")
+        self._rc_tree.tag_configure("error",   foreground="orange")
+
+    # ──────────────────────────────────────────────────────────────────────
+    # SECTION 6 — Toolbar actions
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _rc_refresh_status(self):
+        """Force a status refresh via ResultController."""
+        controller = self.context.controller
+        if controller and hasattr(controller, "result_controller"):
+            rc = controller.result_controller
+            if rc and rc.is_running():
+                rc.refresh_status()
+            else:
+                self.log("⚠ Result collector is not running.")
+
+    def _rc_collect_selected(self):
+        """Manually collect files for selected MIDs."""
+        selected = self._rc_tree.selection()
+        if not selected:
+            messagebox.showinfo("Info", "Select one or more MIDs to collect.")
+            return
+        controller = self.context.controller
+        if not controller or not hasattr(controller, "result_controller"):
+            return
+        rc = controller.result_controller
+        if not rc or not rc.is_running():
+            self.log("⚠ Result collector is not running.")
+            return
+        for item_id in selected:
+            values = self._rc_tree.item(item_id, "values")
+            mid = values[0] if values else ""
+            if mid:
+                rc.collect_single(mid)
+
+    def _rc_spool_selected(self):
+        """Manually spool summary for selected MIDs."""
+        selected = self._rc_tree.selection()
+        if not selected:
+            messagebox.showinfo("Info", "Select one or more MIDs to spool.")
+            return
+        controller = self.context.controller
+        if not controller or not hasattr(controller, "result_controller"):
+            return
+        rc = controller.result_controller
+        if not rc or not rc.is_running():
+            self.log("⚠ Result collector is not running.")
+            return
+        for item_id in selected:
+            values = self._rc_tree.item(item_id, "values")
+            mid = values[0] if values else ""
+            if mid:
+                rc.spool_single(mid)
+
+    def _rc_stop_monitoring(self):
+        """Stop the background result collector."""
+        controller = self.context.controller
+        if controller and hasattr(controller, "result_controller"):
+            rc = controller.result_controller
+            if rc:
+                rc.stop_monitoring()
+        self._rc_stop_btn.config(state=tk.DISABLED)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # SECTION 6 — Auto-detect: generate MIDs.txt + start monitoring
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _rc_auto_start_monitoring(self, hostname: str):
+        """
+        Auto-generate MIDs.txt from profile table and start ResultCollector.
+
+        Called when all checkout testers have completed.  Builds a MIDs.txt
+        from the profile_data rows (MID + Primitive + Dut) and starts the
+        background result collector.
+        """
+        controller = self.context.controller
+        if not controller or not hasattr(controller, "result_controller"):
+            self.log("⚠ ResultController not available — skipping auto-detect.")
+            return
+
+        rc = controller.result_controller
+        if rc.is_running():
+            self.log("⚠ Result collector already running — skipping auto-start.")
+            return
+
+        # ── Build MIDs.txt from profile table ─────────────────────────
+        if not self._profile_data:
+            self.log("⚠ No profile data — cannot auto-start result collection.")
+            return
+
+        mids_lines = []
+        for row in self._profile_data:
+            mid  = row.get("MID", "").strip()
+            loc  = row.get("Primitive", row.get("PRIMITIVE", "")).strip()
+            name = row.get("Dut", row.get("DUT", "")).strip()
+            if not mid:
+                continue
+            loc_str  = loc if loc else "0"
+            name_str = name if name else mid
+            mids_lines.append(f"{mid}  {loc_str}  {name_str}  False")
+
+        if not mids_lines:
+            self.log("⚠ No MIDs found in profile table — skipping auto-detect.")
+            return
+
+        # Write to temp file
+        try:
+            mids_dir = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..", "..", "temp"
+            )
+            os.makedirs(mids_dir, exist_ok=True)
+            mids_path = os.path.join(mids_dir, f"MIDs_{hostname}.txt")
+            with open(mids_path, "w") as f:
+                f.write("# Auto-generated by BENTO Checkout\n")
+                f.write(f"# Hostname: {hostname}\n")
+                for line in mids_lines:
+                    f.write(line + "\n")
+            self._rc_mids_file = mids_path
+            self.log(f"✓ Auto-generated MIDs.txt: {mids_path}")
+        except Exception as e:
+            self.log(f"✗ Failed to generate MIDs.txt: {e}")
+            logger.error(f"MIDs.txt generation failed: {e}")
+            return
+
+        # ── Resolve parameters from context ───────────────────────────
+        site         = self.context.get_var('checkout_site').get().strip()
+        webhook_url  = self.context.get_var('checkout_webhook_url').get().strip()
+        notify_teams = self.context.get_var('checkout_notify_teams').get()
+
+        # ── Start monitoring ──────────────────────────────────────────
+        self.log(f"🚀 Auto-starting result collection for {hostname}...")
+        self._rc_status_indicator.config(
+            text="🔄 MONITORING", foreground="blue")
+        self._rc_stop_btn.config(state=tk.NORMAL)
+
+        rc.start_monitoring(
+            mids_file       = mids_path,
+            target_path     = "",
+            site            = site,
+            machine_type    = "",
+            tester_hostname = hostname,
+            poll_interval   = 30,
+            auto_collect    = True,
+            auto_spool      = False,
+            webhook_url     = webhook_url,
+            notify_teams    = bool(notify_teams),
+        )
+
+    # ──────────────────────────────────────────────────────────────────────
+    # SECTION 6 — Controller → View callbacks
+    # ──────────────────────────────────────────────────────────────────────
+
+    def on_rc_progress_update(self, summary: dict, entries: dict):
+        """
+        Called by ResultController (via root.after) when progress updates.
+        Updates the Section 6 treeview and summary bar.
+        """
+        total      = summary.get("total", 0)
+        passed     = summary.get("passed", 0)
+        failed     = summary.get("failed", 0)
+        running    = summary.get("running", 0)
+        collected  = summary.get("collected", 0)
+        unresolved = summary.get("unresolved", 0)
+        machine    = summary.get("machine", "")
+        site       = summary.get("site", "")
+
+        unresolved_str = f"  |  ⚠ Unresolved: {unresolved}" if unresolved else ""
+        self._rc_summary_label.config(
+            text=(
+                f"Machine: {machine}  |  Site: {site}  |  "
+                f"Total: {total}  |  "
+                f"✅ Pass: {passed}  |  ❌ Fail: {failed}  |  "
+                f"🔄 Running: {running}  |  📁 Collected: {collected}"
+                f"{unresolved_str}"
+            )
+        )
+
+        # Update treeview
+        self._rc_tree.delete(*self._rc_tree.get_children())
+
+        for mid, entry_data in entries.items():
+            status    = entry_data.get("status", "UNKNOWN")
+            fail_info = ""
+            if status == "FAIL":
+                fail_info = (f"{entry_data.get('fail_reg', '')} - "
+                             f"{entry_data.get('fail_code', '')}")
+
+            collected_str = "✓" if entry_data.get("collected", False) else ""
+            error_str     = entry_data.get("error", "")
+
+            tag = status.lower() if status.lower() in (
+                "pass", "fail", "running") else "unknown"
+            if error_str:
+                tag = "error"
+
+            self._rc_tree.insert("", tk.END, values=(
+                entry_data.get("mid", mid),
+                entry_data.get("location", ""),
+                entry_data.get("name", ""),
+                status,
+                fail_info,
+                collected_str,
+                error_str,
+            ), tags=(tag,))
+
+    def on_rc_collection_complete(self, summary: dict):
+        """
+        Called by ResultController when monitoring ends.
+        Resets button states and updates status indicator.
+        """
+        self._rc_stop_btn.config(state=tk.DISABLED)
+
+        all_done = summary.get("all_done", False)
+        failed   = summary.get("failed", 0)
+
+        if all_done and failed == 0:
+            self._rc_status_indicator.config(
+                text="✅ ALL PASSED", foreground="green")
+        elif all_done and failed > 0:
+            self._rc_status_indicator.config(
+                text="⚠ COMPLETED (with failures)", foreground="orange")
+        else:
+            self._rc_status_indicator.config(
+                text="⏹ STOPPED", foreground="gray")
