@@ -781,14 +781,19 @@ class CheckoutController(object):
                             generated_files.append(os.path.basename(xml_path))
                             log_cb(f"  ✓ File saved: {os.path.basename(xml_path)} → {output_dir}")
 
-                    # Check for tmptravl files in Traces subfolder
+                    # Track only the specific tmptravl file for each
+                    # successfully generated MID (not all files in Traces/).
+                    # Pattern: {MID}_tmptravl_{STEP}.dat
                     traces_dir = os.path.join(output_dir, "Traces")
                     if os.path.isdir(traces_dir):
-                        for fname in os.listdir(traces_dir):
-                            fpath = os.path.join(traces_dir, fname)
-                            if os.path.isfile(fpath):
-                                generated_files.append(fname)
-                                log_cb(f"  ✓ File saved: {fname} → {traces_dir}")
+                        for mid_key, mid_info in mid_results.items():
+                            if mid_info.get("status") != "success":
+                                continue
+                            tmptravl_name = f"{mid_key}_tmptravl_{env.strip().upper()}.dat"
+                            tmptravl_fpath = os.path.join(traces_dir, tmptravl_name)
+                            if os.path.isfile(tmptravl_fpath):
+                                generated_files.append(tmptravl_name)
+                                log_cb(f"  ✓ File saved: {tmptravl_name} → {traces_dir}")
 
                     # Sort generated profiles into step/recipe folders
                     step = params.get("step", "")

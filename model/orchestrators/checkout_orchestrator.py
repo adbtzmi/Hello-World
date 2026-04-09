@@ -1554,13 +1554,17 @@ def run_checkout(
              f"    Waiting for checkout_watcher.py on {hostname} to pick up...",
              log_callback)
 
-        # Track tmptravl file if generated alongside the XML
-        traces_dir = os.path.join(_queue, "Traces")
-        if os.path.isdir(traces_dir):
-            for fname in os.listdir(traces_dir):
-                fpath = os.path.join(traces_dir, fname)
-                if os.path.isfile(fpath) and fpath not in generated_files:
-                    generated_files.append(fpath)
+        # Track only the specific tmptravl file for this MID, not all
+        # files in Traces/.  The tmptravl generator creates per-MID files
+        # named {MID}_tmptravl_{STEP}.dat — we only want that one file
+        # so the generated-files count matches expectations (2 per MID:
+        # 1 XML + 1 tmptravl).
+        if mid and env:
+            tmptravl_name = f"{mid}_tmptravl_{env.strip().upper()}.dat"
+            traces_dir = os.path.join(_queue, "Traces")
+            tmptravl_fpath = os.path.join(traces_dir, tmptravl_name)
+            if os.path.isfile(tmptravl_fpath) and tmptravl_fpath not in generated_files:
+                generated_files.append(tmptravl_fpath)
 
         # ── Poll for SLATE completion ──────────────────────────────────
         tc_result = wait_for_checkout(
