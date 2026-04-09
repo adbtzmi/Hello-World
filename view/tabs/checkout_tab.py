@@ -73,8 +73,10 @@ class CheckoutTab(BaseTab):
          - CRT source row: Excel path + Browse + Filter CFGPN
          - Editable Treeview grid (11 columns)
          - Status bar
-      2. Checkout Paths & Test Cases
-         - TGZ path
+      2. Checkout Paths & Test Cases  (3-column grid: Label | Input | Button)
+         - Site, Form Factor, Generate TempTraveler, Auto Start  (single left-aligned row)
+         - TGZ path + Browse
+         - Recipe override + Scan TGZ
          - Test Cases (PASS / FAIL)
          - Hot Folder
       3. SLATE Detection  |  Tester Selection   (side-by-side)
@@ -368,68 +370,84 @@ class CheckoutTab(BaseTab):
         frm = ttk.LabelFrame(parent, text="  Checkout Paths & Test Cases  ",
                              padding=(8, 6, 8, 8))
         frm.grid(row=row, column=0, sticky="we", pady=(0, 14))
+        # 3-column grid: Label (col 0) | Input (col 1, expands) | Button (col 2)
+        frm.columnconfigure(0, weight=0)
         frm.columnconfigure(1, weight=1)
+        frm.columnconfigure(2, weight=0)
 
-        # Site selection row
+        cur_row = 0
+
+        # ── Row 0: Site, Form Factor, Generate TempTraveler, Auto Start ──
+        opts_row = ttk.Frame(frm)
+        opts_row.grid(row=cur_row, column=0, columnspan=3,
+                      sticky=tk.W, pady=(0, 6))
+
         from model.site_config import _DEFAULT_SITES, _DEFAULT_FORM_FACTORS
-        ttk.Label(frm, text="Site:").grid(
-            row=0, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
+
+        ttk.Label(opts_row, text="Site:").pack(
+            side=tk.LEFT, padx=(0, 4))
         site_combo = ttk.Combobox(
-            frm, textvariable=self.context.get_var('checkout_site'),
+            opts_row, textvariable=self.context.get_var('checkout_site'),
             values=list(_DEFAULT_SITES), state="readonly", width=15)
-        site_combo.grid(row=0, column=1, sticky=tk.W, pady=(0, 4))
+        site_combo.pack(side=tk.LEFT, padx=(0, 16))
         _tip(site_combo,
              "Select the manufacturing site.\n"
              "Routes MAM queries and other operations to the correct servers.")
 
-        # Form Factor dropdown (global default for all profile rows)
-        ttk.Label(frm, text="Form Factor:").grid(
-            row=0, column=2, sticky=tk.W, padx=(16, 8), pady=(0, 4))
+        ttk.Label(opts_row, text="Form Factor:").pack(
+            side=tk.LEFT, padx=(0, 4))
         ff_combo = ttk.Combobox(
-            frm, textvariable=self.context.get_var('checkout_form_factor'),
+            opts_row, textvariable=self.context.get_var('checkout_form_factor'),
             values=[""] + list(_DEFAULT_FORM_FACTORS),
             state="readonly", width=10)
-        ff_combo.grid(row=0, column=3, sticky=tk.W, pady=(0, 4))
+        ff_combo.pack(side=tk.LEFT, padx=(0, 16))
         _tip(ff_combo,
              "Default form factor for new profile rows.\n"
              "Per-row Form_Factor in the profile table takes precedence.")
 
-        # Generate TempTraveler checkbox
         gen_tt_cb = ttk.Checkbutton(
-            frm, text="Generate TempTraveler",
+            opts_row, text="Generate TempTraveler",
             variable=self.context.get_var('checkout_gen_tmptravl'))
-        gen_tt_cb.grid(row=0, column=4, sticky=tk.W, padx=(16, 0), pady=(0, 4))
+        gen_tt_cb.pack(side=tk.LEFT, padx=(0, 16))
         _tip(gen_tt_cb,
              "Generate a TempTraveler .dat file for each MID.\n"
              "Uses the template in model/resources/template_tmptravl.dat.")
 
-        # Auto Start checkbox — mirrors CAT's autostart_checkbox
         autostart_cb = ttk.Checkbutton(
-            frm, text="Auto Start",
+            opts_row, text="Auto Start",
             variable=self.context.get_var('checkout_autostart'))
-        autostart_cb.grid(row=0, column=5, sticky=tk.W, padx=(16, 0), pady=(0, 4))
+        autostart_cb.pack(side=tk.LEFT)
         _tip(autostart_cb,
              "Set AutoStart=True in the generated XML profile.\n"
              "When enabled, SLATE automatically starts the test without\n"
              "requiring a manual 'Run Test' click.\n"
              "Mirrors CAT's Auto Start checkbox.")
 
-        # TGZ row
+        cur_row += 1
+
+        # ── Separator ─────────────────────────────────────────────────
+        ttk.Separator(frm, orient=tk.HORIZONTAL).grid(
+            row=cur_row, column=0, columnspan=3, sticky="we", pady=(0, 4))
+        cur_row += 1
+
+        # ── Row 3: TGZ path ──────────────────────────────────────────
         ttk.Label(frm, text="TGZ:").grid(
-            row=1, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
+            row=cur_row, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
         tgz_entry = ttk.Entry(frm, textvariable=self.context.get_var('checkout_tgz_path'))
-        tgz_entry.grid(row=1, column=1, sticky="we", pady=(0, 4))
+        tgz_entry.grid(row=cur_row, column=1, sticky="we", pady=(0, 4))
         _tip(tgz_entry, "Path to the compiled .tgz test program archive.\n"
              "Default browse location: P:\\temp\\BENTO\\RELEASE_TGZ")
-        tgz_btn = ttk.Button(frm, text="…", width=3, command=self._browse_tgz)
-        tgz_btn.grid(row=1, column=2, padx=(6, 0), pady=(0, 4))
+        tgz_btn = ttk.Button(frm, text="Browse TGZ", width=3, command=self._browse_tgz)
+        tgz_btn.grid(row=cur_row, column=2, padx=(6, 0), pady=(0, 4))
         _tip(tgz_btn, "Browse for a compiled TGZ archive.")
+        cur_row += 1
 
-        # Recipe override row
+        # ── Row 4: Recipe override ───────────────────────────────────
         ttk.Label(frm, text="Recipe:").grid(
-            row=2, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
+            row=cur_row, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
         recipe_frame = ttk.Frame(frm)
-        recipe_frame.grid(row=2, column=1, columnspan=2, sticky="we", pady=(0, 4))
+        recipe_frame.grid(row=cur_row, column=1, columnspan=2,
+                          sticky="we", pady=(0, 4))
         self._recipe_combo = ttk.Combobox(
             recipe_frame,
             textvariable=self.context.get_var('checkout_recipe_override'),
@@ -446,14 +464,17 @@ class CheckoutTab(BaseTab):
         scan_btn.pack(side=tk.LEFT, padx=(6, 0))
         _tip(scan_btn, "Scan the selected TGZ archive for available recipe files\n"
              "and populate the dropdown list.")
+        cur_row += 1
 
-        # Separator
+        # ── Separator ─────────────────────────────────────────────────
         ttk.Separator(frm, orient=tk.HORIZONTAL).grid(
-            row=3, column=0, columnspan=3, sticky="we", pady=(0, 4))
+            row=cur_row, column=0, columnspan=3, sticky="we", pady=(0, 4))
+        cur_row += 1
 
-        # Test Cases row
+        # ── Row 6: Test Cases ────────────────────────────────────────
         tc_frame = ttk.Frame(frm)
-        tc_frame.grid(row=4, column=0, columnspan=3, sticky="we", pady=(0, 4))
+        tc_frame.grid(row=cur_row, column=0, columnspan=3,
+                      sticky="we", pady=(0, 4))
 
         ttk.Label(tc_frame, text="TC:").pack(side=tk.LEFT, padx=(0, 8))
 
@@ -484,16 +505,18 @@ class CheckoutTab(BaseTab):
                    width=28)
         fail_desc_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         _tip(fail_desc_entry, "Optional description for the force-fail test case.")
+        cur_row += 1
 
-        # Separator
+        # ── Separator ─────────────────────────────────────────────────
         ttk.Separator(frm, orient=tk.HORIZONTAL).grid(
-            row=5, column=0, columnspan=3, sticky="we", pady=(0, 4))
+            row=cur_row, column=0, columnspan=3, sticky="we", pady=(0, 4))
+        cur_row += 1
 
-        # Hot Folder row
+        # ── Row 8: Hot Folder ────────────────────────────────────────
         ttk.Label(frm, text="Hot Folder:").grid(
-            row=6, column=0, sticky=tk.W, padx=(0, 8))
+            row=cur_row, column=0, sticky=tk.W, padx=(0, 8))
         hot_entry = ttk.Entry(frm, textvariable=self.context.get_var('checkout_hot_folder'))
-        hot_entry.grid(row=6, column=1, columnspan=2, sticky="we")
+        hot_entry.grid(row=cur_row, column=1, columnspan=2, sticky="we")
         _tip(hot_entry, "Path to the SLATE hot folder where XML profiles are dropped.\n"
              "Default: C:\\test_program\\playground_queue")
 
