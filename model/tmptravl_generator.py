@@ -122,6 +122,25 @@ class TmptravlGenerator:
         if constant_dict.get("LOT") and "LOT" not in mam_dict:
             mam_dict["LOT"] = constant_dict["LOT"]
 
+        # Inject CFGPN-only attributes into MAM section.
+        # recipe_selection.py pops the entire CFGPN section from the
+        # tmptravl dict BEFORE loading attributes into CESI (the central
+        # environment system information).  Only SAP_EXCEPTION keys
+        # (DENSITY, MFG_STATUS, PROD_CLASSIFICATION) are put back.
+        # This means attributes that exist ONLY in the CFGPN section
+        # (not duplicated in MAM or MCTO) become UNDEFINED_ATTR in the
+        # rule engine's Solutions dict.  Since the rule tables use '*'
+        # (requires DEFINED) for these columns, the table lookup fails
+        # with "Hit the end of the table".
+        #
+        # Affected attributes:
+        #   BASE_CFGPN  — used by PENANG_PROGRAM_RECIPE and PENANG_JOBPATH
+        #   FW_WAVE_ID  — used by PENANG_JOBPATH (some product rows)
+        _cfgpn_to_mam = ["BASE_CFGPN", "FW_WAVE_ID"]
+        for attr in _cfgpn_to_mam:
+            if cfgpn_dict.get(attr) and attr not in mam_dict:
+                mam_dict[attr] = cfgpn_dict[attr]
+
         # Create per-MID filename: {MID}_tmptravl_{STEP}.dat
         filename = f"{mid}_tmptravl_{step}.dat"
         output_path = os.path.join(self._output_dir, filename)
