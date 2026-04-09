@@ -38,7 +38,7 @@
     "recipe_folder": "\\\\sifsmodauto\\modauto\\release\\ssd\\recipe_selection",
     "python2_exe": "C:\\Python27\\python.exe",
     "generate_tmptravl": true,
-    "mam_site": "singapore",
+    "mam_site": "penang",
     "sap_instance": "PR1",
     "sap_enabled": true
   },
