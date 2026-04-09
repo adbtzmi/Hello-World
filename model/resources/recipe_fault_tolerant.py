@@ -148,19 +148,28 @@ def main():
     # Change to versioned dir (recipe_selection.py expects this)
     os.chdir(versioned_dir)
 
-    # Import and patch the rule engine BEFORE recipe_selection.py uses it
+    # Import and patch the rule engine BEFORE recipe_selection.py uses it.
+    #
+    # CRITICAL: SSDrules_loader.py imports `attributes` as a BARE module
+    # (not `rules_mgr.attributes`) by inserting the `rules_mgr/` directory
+    # into sys.path and doing `__import__("attributes")`.  We MUST import
+    # it the same way so we patch the SAME class that gets used at runtime.
+    # If we used `from rules_mgr.attributes import Solutions`, Python would
+    # cache it as a separate module object in sys.modules and our patch
+    # would be applied to a different Solutions class.
     try:
-        # The rules_mgr package is inside the versioned directory
         rules_mgr_path = os.path.join(versioned_dir, 'rules_mgr')
         if os.path.isdir(rules_mgr_path) and rules_mgr_path not in sys.path:
-            sys.path.insert(0, os.path.dirname(rules_mgr_path))
+            sys.path.insert(0, rules_mgr_path)
 
-        from rules_mgr.attributes import Solutions
+        # Import as bare "attributes" — same as SSDrules_loader does
+        import attributes as attr_mod
+        Solutions = attr_mod.Solutions
         _patch_calc_all_rules(Solutions)
         sys.stderr.write("RECIPE_WRAPPER_INFO: Patched calc_all_rules for fault tolerance\n")
     except ImportError as e:
         sys.stderr.write(
-            "RECIPE_WRAPPER_WARNING: Could not import rules_mgr.attributes "
+            "RECIPE_WRAPPER_WARNING: Could not import attributes "
             "to patch calc_all_rules: %s\n" % str(e)
         )
         # Continue anyway — the real recipe_selection.py will import it
