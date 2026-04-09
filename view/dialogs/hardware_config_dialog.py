@@ -10,7 +10,7 @@ GUI/panels/profile_generate_panel.py:200-280.
 """
 import tkinter as tk
 from tkinter import ttk, messagebox
-from typing import Dict
+from typing import Dict, Optional
 
 from model.hardware_config import (
     HardwareConfig,
@@ -44,7 +44,7 @@ class HardwareConfigDialog(tk.Toplevel):
         └─────────────────────────────────────────────────────────┘
     """
 
-    def __init__(self, parent: tk.Widget, hw_config: HardwareConfig = None):
+    def __init__(self, parent, hw_config: Optional[HardwareConfig] = None):
         super().__init__(parent)
         self.title("View / Edit Hardware Configuration")
         self.resizable(False, False)
@@ -64,7 +64,7 @@ class HardwareConfigDialog(tk.Toplevel):
     # ──────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
-        pad = dict(padx=4, pady=2)
+        _px, _py = 4, 2
 
         # ── DIB_TYPE section ─────────────────────────────────────────
         dib_frame = ttk.LabelFrame(self, text="  DIB_TYPE  ", padding=(10, 6, 10, 10))
@@ -72,15 +72,15 @@ class HardwareConfigDialog(tk.Toplevel):
 
         # Column headers
         ttk.Label(dib_frame, text="Step", font=("", 9, "bold")).grid(
-            row=0, column=0, sticky=tk.W, **pad)
+            row=0, column=0, sticky=tk.W, padx=_px, pady=_py)
         for col_idx, ff in enumerate(VALID_FORM_FACTORS):
             ttk.Label(dib_frame, text=ff, font=("", 9, "bold")).grid(
-                row=0, column=col_idx + 1, **pad)
+                row=0, column=col_idx + 1, padx=_px, pady=_py)
 
         dib_dict = self._hw.get_dib_dict()
         for row_idx, step in enumerate(VALID_STEPS):
             ttk.Label(dib_frame, text=step, font=("", 9, "bold")).grid(
-                row=row_idx + 1, column=0, sticky=tk.W, **pad)
+                row=row_idx + 1, column=0, sticky=tk.W, padx=_px, pady=_py)
             self._dib_vars[step] = {}
             step_dibs = dib_dict.get(step, {})
             for col_idx, ff in enumerate(VALID_FORM_FACTORS):
@@ -88,7 +88,7 @@ class HardwareConfigDialog(tk.Toplevel):
                 self._dib_vars[step][ff] = var
                 entry = ttk.Entry(dib_frame, textvariable=var, width=10,
                                   justify=tk.CENTER)
-                entry.grid(row=row_idx + 1, column=col_idx + 1, **pad)
+                entry.grid(row=row_idx + 1, column=col_idx + 1, padx=_px, pady=_py)
 
         # ── MACHINE_MODEL / MACHINE_VENDOR section ───────────────────
         machine_frame = ttk.LabelFrame(
@@ -97,28 +97,28 @@ class HardwareConfigDialog(tk.Toplevel):
         machine_frame.grid(row=1, column=0, sticky="we", padx=12, pady=(6, 6))
 
         ttk.Label(machine_frame, text="Step", font=("", 9, "bold")).grid(
-            row=0, column=0, sticky=tk.W, **pad)
+            row=0, column=0, sticky=tk.W, padx=_px, pady=_py)
         ttk.Label(machine_frame, text="Model", font=("", 9, "bold")).grid(
-            row=0, column=1, **pad)
+            row=0, column=1, padx=_px, pady=_py)
         ttk.Label(machine_frame, text="Vendor", font=("", 9, "bold")).grid(
-            row=0, column=2, **pad)
+            row=0, column=2, padx=_px, pady=_py)
 
         model_dict = self._hw.get_machine_model_dict()
         vendor_dict = self._hw.get_machine_vendor_dict()
 
         for row_idx, step in enumerate(VALID_STEPS):
             ttk.Label(machine_frame, text=step, font=("", 9, "bold")).grid(
-                row=row_idx + 1, column=0, sticky=tk.W, **pad)
+                row=row_idx + 1, column=0, sticky=tk.W, padx=_px, pady=_py)
 
             model_var = tk.StringVar(value=model_dict.get(step, ""))
             self._model_vars[step] = model_var
             ttk.Entry(machine_frame, textvariable=model_var, width=18).grid(
-                row=row_idx + 1, column=1, **pad)
+                row=row_idx + 1, column=1, padx=_px, pady=_py)
 
             vendor_var = tk.StringVar(value=vendor_dict.get(step, ""))
             self._vendor_vars[step] = vendor_var
             ttk.Entry(machine_frame, textvariable=vendor_var, width=18).grid(
-                row=row_idx + 1, column=2, **pad)
+                row=row_idx + 1, column=2, padx=_px, pady=_py)
 
         # ── Buttons ──────────────────────────────────────────────────
         btn_frame = ttk.Frame(self)
