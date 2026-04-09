@@ -1274,36 +1274,58 @@ def send_teams_notification(
 
     try:
         import urllib.request
-        icon    = "✅" if status.lower() == "success" else "❌"
-        payload = {
-            "@type":      "MessageCard",
-            "@context":   "http://schema.org/extensions",
-            "themeColor": "0076D7" if status.lower() == "success"
-                          else "D40000",
-            "summary":    f"BENTO Checkout {status.upper()} — {jira_key}",
-            "sections": [{
-                "activityTitle":    f"{icon} BENTO Auto Checkout — "
-                                    f"{status.upper()}",
-                "activitySubtitle": f"Tester: {hostname}  |  "
-                                    f"JIRA: {jira_key}",
-                "facts": [
-                    {"name": "Status",  "value": status.upper()},
-                    {"name": "Detail",  "value": detail},
-                    {"name": "Elapsed",
-                     "value": f"{elapsed}s "
-                              f"({elapsed // 60}m {elapsed % 60}s)"},
-                    {"name": "Time",
-                     "value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
-                ],
-            }]
+        icon       = "✅" if status.lower() == "success" else "❌"
+        color      = "Good" if status.lower() == "success" else "Attention"
+        elapsed_s  = f"{elapsed // 60}m {elapsed % 60}s"
+        timestamp  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Build fact rows for the Adaptive Card FactSet
+        facts = [
+            {"title": "Status",  "value": f"**{status.upper()}**"},
+            {"title": "Tester",  "value": hostname},
+            {"title": "JIRA",    "value": jira_key},
+            {"title": "Elapsed", "value": elapsed_s},
+            {"title": "Time",    "value": timestamp},
+        ]
+        if detail:
+            facts.append({"title": "Detail", "value": detail})
+
+        # Adaptive Card payload (Teams Workflows format)
+        adaptive_card = {
+            "type":    "AdaptiveCard",
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "version": "1.4",
+            "body": [
+                {
+                    "type":   "TextBlock",
+                    "size":   "Medium",
+                    "weight": "Bolder",
+                    "text":   f"{icon} BENTO Auto Checkout — {status.upper()}",
+                    "color":  color,
+                },
+                {
+                    "type":      "FactSet",
+                    "facts":     facts,
+                },
+            ],
         }
+
+        payload = {
+            "type":        "message",
+            "attachments": [{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "contentUrl":  None,
+                "content":     adaptive_card,
+            }],
+        }
+
         data = json.dumps(payload).encode("utf-8")
         req  = urllib.request.Request(
             url, data=data,
             headers={"Content-Type": "application/json"}
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
-            if resp.status == 200:
+            if resp.status in (200, 202):
                 _log(logger, "✓ Teams notification sent.", log_callback)
                 return True
             else:
