@@ -378,14 +378,15 @@ class CheckoutTab(BaseTab):
         cur_row = 0
 
         # ── Row 0: Site, Form Factor, Generate TempTraveler, Auto Start ──
-        opts_row = ttk.Frame(frm)
-        opts_row.grid(row=cur_row, column=0, columnspan=3,
-                      sticky=tk.W, pady=(0, 6))
-
         from model.site_config import _DEFAULT_SITES, _DEFAULT_FORM_FACTORS
 
-        ttk.Label(opts_row, text="Site:").pack(
-            side=tk.LEFT, padx=(0, 4))
+        ttk.Label(frm, text="Site:").grid(
+            row=cur_row, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
+
+        opts_row = ttk.Frame(frm)
+        opts_row.grid(row=cur_row, column=1, columnspan=2,
+                      sticky=tk.W, pady=(0, 6))
+
         site_combo = ttk.Combobox(
             opts_row, textvariable=self.context.get_var('checkout_site'),
             values=list(_DEFAULT_SITES), state="readonly", width=15)
@@ -437,7 +438,7 @@ class CheckoutTab(BaseTab):
         tgz_entry.grid(row=cur_row, column=1, sticky="we", pady=(0, 4))
         _tip(tgz_entry, "Path to the compiled .tgz test program archive.\n"
              "Default browse location: P:\\temp\\BENTO\\RELEASE_TGZ")
-        tgz_btn = ttk.Button(frm, text="Browse TGZ", width=3, command=self._browse_tgz)
+        tgz_btn = ttk.Button(frm, text="Browse TGZ", width=12, command=self._browse_tgz)
         tgz_btn.grid(row=cur_row, column=2, padx=(6, 0), pady=(0, 4))
         _tip(tgz_btn, "Browse for a compiled TGZ archive.")
         cur_row += 1
@@ -459,7 +460,7 @@ class CheckoutTab(BaseTab):
              "Recipe file override. Leave empty for auto-detection.\n"
              "Click 'Scan' to list available recipes from the TGZ archive.\n"
              "Format: RECIPE\\ProductName_neosem_STEP.XML")
-        scan_btn = ttk.Button(recipe_frame, text="Scan TGZ", width=9,
+        scan_btn = ttk.Button(recipe_frame, text="Scan TGZ", width=12,
                               command=self._scan_tgz_recipes)
         scan_btn.pack(side=tk.LEFT, padx=(6, 0))
         _tip(scan_btn, "Scan the selected TGZ archive for available recipe files\n"
@@ -472,11 +473,12 @@ class CheckoutTab(BaseTab):
         cur_row += 1
 
         # ── Row 6: Test Cases ────────────────────────────────────────
-        tc_frame = ttk.Frame(frm)
-        tc_frame.grid(row=cur_row, column=0, columnspan=3,
-                      sticky="we", pady=(0, 4))
+        ttk.Label(frm, text="TC:").grid(
+            row=cur_row, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
 
-        ttk.Label(tc_frame, text="TC:").pack(side=tk.LEFT, padx=(0, 8))
+        tc_frame = ttk.Frame(frm)
+        tc_frame.grid(row=cur_row, column=1, columnspan=2,
+                      sticky="we", pady=(0, 4))
 
         pass_cb = ttk.Checkbutton(tc_frame, text="PASS",
                       variable=self.context.get_var('checkout_tc_passing'))
