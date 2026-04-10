@@ -721,6 +721,207 @@ def query_lot_cfgpn_mcto(
     return result
 
 
+# ── CFGPN-BASED LOT SEARCH ────────────────────────────────────────────────────
+
+
+def _build_cfgpn_report_soap(dest: str, system: str, cfgpn: str) -> str:
+    """Build SOAP message to query MAM lots by BASE CFGPN.
+
+    Same structure as ``_build_lot_report_soap`` but uses
+    ``<Item>BASE CFGPN</Item>`` as the criteria instead of
+    ``<Item>MODULE LOT ID</Item>``.
+
+    Parameters
+    ----------
+    dest : str
+        MIPC destination path.
+    system : str
+        MAM system identifier (e.g. ``"MODSI"``, ``"MODPG"``).
+    cfgpn : str
+        CFGPN value to search for (e.g. ``"923111"``).
+
+    Returns
+    -------
+    str
+        SOAP XML message string.
+    """
+    # We only need a subset of attributes for the suggestion display
+    suggestion_attrs = [
+        "STEP OR LOCATION",
+        "BASE CFGPN",
+        "MODULE FGPN",
+        "MODULE FORM FACTOR",
+        "MATERIAL DESCRIPTION",
+        "PCB DESIGN ID",
+        "DESIGN ID",
+        "DIE2 DESIGN ID",
+        "PCB ARTWORK REV",
+        "PRODUCT GROUP",
+    ]
+    attrs_xml = "\n".join(
+        f"<Value>{attr}</Value>" for attr in suggestion_attrs
+    )
+    return f"""
+    <SOAP-ENV:Envelope xmlns:SOAP-ENV='http://schemas.xmlsoap.org/soap/envelope'>
+        <SOAP-ENV:Header>
+            <MTXMLMsg MsgType='CMD'/>
+            <Delivery>
+                <Dest>{dest}</Dest>
+                <Src/>
+                <Reply/>
+                <TransportType>MIPC</TransportType>
+            </Delivery>
+        </SOAP-ENV:Header>
+        <SOAP-ENV:Body>
+            <MAMReport>
+                <REPORTID>Module Lots with Attributes</REPORTID>
+                <APP>{system}</APP>
+                <FORMAT>XML</FORMAT>
+                <ACTION>REPORT</ACTION>
+                <CRITERIA>
+                    <CriteriaList>
+                        <Criteria>
+                            <Item>BASE CFGPN</Item>
+                            <Rel>in</Rel>
+                            <ValueList>
+                                <Value>{cfgpn}</Value>
+                            </ValueList>
+                        </Criteria>
+                        <Criteria>
+                            <Item>ATTRS TO DISPLAY</Item>
+                            <Rel>in</Rel>
+                            <ValueList>
+                                {attrs_xml}
+                            </ValueList>
+                        </Criteria>
+                    </CriteriaList>
+                </CRITERIA>
+            </MAMReport>
+        </SOAP-ENV:Body>
+    </SOAP-ENV:Envelope>"""
+
+
+def query_lots_by_cfgpn(
+    cfgpn: str,
+    site: str = "",
+    sap_attrs: Optional[Dict[str, str]] = None,
+    timeout: int = 360,
+    max_suggestions: int = 5,
+) -> List[Dict[str, str]]:
+    """Query MAM for lots matching a given CFGPN and filter by SAP attributes.
+
+    Used by the pre-flight mismatch handler to suggest alternative lots
+    whose MAM attributes actually match the CFGPN specification in SAP.
+
+    Parameters
+    ----------
+    cfgpn : str
+        CFGPN value to search for (e.g. ``"923111"``).
+    site : str, optional
+        Force a specific site (``"SINGAPORE"`` or ``"PENANG"``).
+        If empty, tries PENANG first (most common for J-prefix lots).
+    sap_attrs : dict, optional
+        SAP CFGPN attributes to filter against. If provided, only lots
+        whose MAM critical attributes match SAP are returned.
+        Expected keys: ``PCB_DESIGN_ID``, ``COMP1_DESIGN_ID``,
+        ``COMP2_DESIGN_ID``, ``PCB_ARTWORK_REV``.
+    timeout : int
+        MIPC timeout in seconds (default 360).
+    max_suggestions : int
+        Maximum number of matching lots to return (default 5).
+
+    Returns
+    -------
+    list of dict
+        Each dict has keys: ``lot_id``, ``step``, ``form_factor``,
+        ``pcb``, ``design_id``, ``die2``, ``rev``, ``product_group``,
+        ``material_desc``.
+        Empty list if no matching lots found or query fails.
+    """
+    if not cfgpn or not cfgpn.strip():
+        return []
+
+    cfgpn = cfgpn.strip()
+
+    if not HAS_ZEEP:
+        logger.warning("zeep not available — cannot query MAM for lots by CFGPN")
+        return []
+
+    # Determine facility — if site given use it, otherwise try PENANG first
+    facility = site.upper() if site else "PENANG"
+    if facility not in _MAM_REPORT_DESTINATIONS:
+        logger.warning("Unknown facility '%s' for CFGPN lot search", facility)
+        return []
+
+    config = _MAM_REPORT_DESTINATIONS[facility]
+    dest = config["dest"]
+    system = config["system"]
+
+    logger.info(
+        "Querying MAM for lots with BASE_CFGPN=%s facility=%s",
+        cfgpn, facility,
+    )
+
+    # SAP-to-MAM key mapping for filtering
+    _SAP_TO_MAM_FILTER = {
+        "PCB_DESIGN_ID":   "PCB_DESIGN_ID",
+        "COMP1_DESIGN_ID": "DESIGN_ID",
+        "COMP2_DESIGN_ID": "DIE2_DESIGN_ID",
+        "PCB_ARTWORK_REV": "PCB_ARTWORK_REV",
+    }
+
+    try:
+        soap_msg = _build_cfgpn_report_soap(dest, system, cfgpn)
+        items = _pull_mam_report(dest, soap_msg, timeout)
+
+        if not items:
+            logger.info("MAM returned no lots for CFGPN=%s at %s", cfgpn, facility)
+            return []
+
+        logger.info("MAM returned %d lot(s) for CFGPN=%s", len(items), cfgpn)
+
+        matching_lots: List[Dict[str, str]] = []
+        for row in items:
+            lot_id = row.get("ModuleLotID", row.get("MODULE_LOT_ID", "?"))
+            lot_info = {
+                "lot_id":        lot_id,
+                "step":          row.get("STEP_OR_LOCATION", ""),
+                "form_factor":   row.get("MODULE_FORM_FACTOR", ""),
+                "pcb":           row.get("PCB_DESIGN_ID", ""),
+                "design_id":     row.get("DESIGN_ID", ""),
+                "die2":          row.get("DIE2_DESIGN_ID", ""),
+                "rev":           row.get("PCB_ARTWORK_REV", ""),
+                "product_group": row.get("PRODUCT_GROUP", ""),
+                "material_desc": row.get("MATERIAL_DESCRIPTION", ""),
+            }
+
+            # If SAP attrs provided, filter: only include lots that match
+            if sap_attrs:
+                is_match = True
+                for sap_key, mam_key in _SAP_TO_MAM_FILTER.items():
+                    sap_val = sap_attrs.get(sap_key, "")
+                    mam_val = row.get(mam_key, "")
+                    if sap_val and mam_val and sap_val != mam_val:
+                        is_match = False
+                        break
+                if not is_match:
+                    continue
+
+            matching_lots.append(lot_info)
+            if len(matching_lots) >= max_suggestions:
+                break
+
+        logger.info(
+            "CFGPN=%s: %d total lots, %d matching SAP attrs",
+            cfgpn, len(items), len(matching_lots),
+        )
+        return matching_lots
+
+    except Exception as e:
+        logger.warning("MAM CFGPN lot search failed: %s", e)
+        return []
+
+
 # ── MID VALIDATION ─────────────────────────────────────────────────────────────
 
 

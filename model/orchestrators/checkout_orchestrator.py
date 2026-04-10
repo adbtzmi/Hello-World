@@ -37,7 +37,7 @@ from typing import Optional, Dict, List
 from model.hardware_config import get_hardware_config
 from model.tmptravl_generator import TmptravlGenerator
 from model.recipe_selector import RecipeSelector, RecipeResult
-from model.mam_communicator import MAMCommunicator, MAMResult, query_lot_cfgpn_mcto
+from model.mam_communicator import MAMCommunicator, MAMResult, query_lot_cfgpn_mcto, query_lots_by_cfgpn
 from model.sap_communicator import SAPCommunicator, SAPResult, SAP_FIRMWARE_KEYS
 from model.profile_sorter import ProfileSorter
 
@@ -679,14 +679,93 @@ def generate_slate_xml(
                         f"  {cfgpn_key}: CFGPN='{cfgpn_val}' vs MAM({mam_key})='{mam_val}'"
                     )
             if mismatches:
+                # ── Enhanced DIAG: SAP vs MAM side-by-side comparison ──
+                diag_header = (
+                    f"╔══════════════════════════════════════════════════════════╗\n"
+                    f"║  CRITICAL ATTRIBUTE MISMATCH — SAP vs MAM Comparison    ║\n"
+                    f"╠══════════════════════════════════════════════════════════╣\n"
+                    f"║  Lot: {lot_prefix:<20s}  CFGPN: {cfgpn:<20s}  ║\n"
+                    f"╠══════════════════════════════════════════════════════════╣\n"
+                    f"║  {'Attribute':<22s} {'SAP (CFGPN)':<16s} {'MAM (Lot)':<16s} ║\n"
+                    f"╠══════════════════════════════════════════════════════════╣"
+                )
+                diag_rows = []
+                for cfgpn_key, mam_key in CFGPN_TO_MAM_CRITICAL_MAPPING.items():
+                    cfgpn_val = cfgpn_attrs.get(cfgpn_key, "-")
+                    mam_val = mam_attrs.get(mam_key, "-")
+                    match_icon = "✓" if cfgpn_val == mam_val else "✗ MISMATCH"
+                    diag_rows.append(
+                        f"║  {cfgpn_key:<22s} {cfgpn_val:<16s} {mam_val:<16s} ║  {match_icon}"
+                    )
+                diag_footer = (
+                    f"╚══════════════════════════════════════════════════════════╝"
+                )
+                diag_table = "\n".join([diag_header] + diag_rows + [diag_footer])
+
+                # Log the full DIAG table
+                logger.error("PREFLIGHT DIAG — SAP vs MAM comparison:\n%s", diag_table)
+
+                # ── Suggest matching lots via MAM CFGPN query ──────────
+                suggestion_msg = ""
+                try:
+                    _log(logger,
+                         f"Searching MAM for lots matching CFGPN '{cfgpn}' "
+                         f"with correct SAP attributes...",
+                         log_callback)
+                    suggested_lots = query_lots_by_cfgpn(
+                        cfgpn=cfgpn,
+                        site=site or "",
+                        sap_attrs=cfgpn_attrs,
+                        max_suggestions=5,
+                    )
+                    if suggested_lots:
+                        suggestion_lines = [
+                            f"\n── SUGGESTED MATCHING LOTS (CFGPN {cfgpn}) ──",
+                            f"  {'Lot ID':<14s} {'Step':<8s} {'PCB':<6s} "
+                            f"{'Design':<8s} {'Die2':<8s} {'Rev':<4s} "
+                            f"{'Form Factor':<12s}",
+                            f"  {'─'*14:<14s} {'─'*8:<8s} {'─'*6:<6s} "
+                            f"{'─'*8:<8s} {'─'*8:<8s} {'─'*4:<4s} "
+                            f"{'─'*12:<12s}",
+                        ]
+                        for sl in suggested_lots:
+                            suggestion_lines.append(
+                                f"  {sl['lot_id']:<14s} {sl['step']:<8s} "
+                                f"{sl['pcb']:<6s} {sl['design_id']:<8s} "
+                                f"{sl['die2']:<8s} {sl['rev']:<4s} "
+                                f"{sl['form_factor']:<12s}"
+                            )
+                        suggestion_lines.append(
+                            f"\nUse one of these lots instead of '{lot_prefix}' "
+                            f"for CFGPN '{cfgpn}'."
+                        )
+                        suggestion_msg = "\n".join(suggestion_lines)
+                        _log(logger, suggestion_msg, log_callback)
+                    else:
+                        suggestion_msg = (
+                            f"\nNo matching lots found in MAM for CFGPN '{cfgpn}' "
+                            f"with correct SAP attributes.\n"
+                            f"FIX: Update lot '{lot_prefix}' MAM attributes to match "
+                            f"CFGPN '{cfgpn}', or contact MAM admin."
+                        )
+                        _log(logger, suggestion_msg, log_callback, "warning")
+                except Exception as e:
+                    logger.warning("Lot suggestion query failed: %s", e)
+                    suggestion_msg = (
+                        f"\n(Could not search for matching lots: {e})"
+                    )
+
+                # Build the user-facing error message
                 mismatch_msg = (
                     f"CRITICAL ATTRIBUTE MISMATCH for lot '{lot_prefix}'!\n"
-                    f"The lot's MAM attributes do NOT match the CFGPN specification.\n"
-                    f"This WILL cause 'Failed to Create Lot Cache' on the tester.\n"
-                    + "\n".join(mismatches) + "\n"
-                    f"FIX: Use a different dummy lot whose MAM attributes match "
-                    f"CFGPN '{cfgpn}', or update this lot's MAM attributes.\n"
-                    f"ABORTING checkout — will NOT send mismatched profile to tester."
+                    f"The lot's MAM attributes do NOT match the SAP CFGPN "
+                    f"specification.\n"
+                    f"This WILL cause 'Failed to Create Lot Cache' on the "
+                    f"tester.\n\n"
+                    + diag_table + "\n"
+                    + suggestion_msg + "\n\n"
+                    f"ABORTING checkout — will NOT send mismatched profile "
+                    f"to tester."
                 )
                 _log(logger, mismatch_msg, log_callback, "error")
                 logger.error("PREFLIGHT: Critical attribute mismatch detected — "
