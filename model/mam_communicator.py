@@ -337,13 +337,22 @@ _LOT_PREFIX_FACILITY = {
     "C": "SINGAPORE",  # Singapore lots start with C
 }
 
-# MAM attributes we want to retrieve for lot lookup
+# MAM attributes we want to retrieve for lot lookup.
+# Includes the critical attributes that recipe_selection.py's eval_rules()
+# compares against CFGPN — without these, BENTO cannot detect mismatches
+# early and the tester shows "Critical Attribute check failed".
 _LOT_LOOKUP_ATTRS = [
     "STEP OR LOCATION",
     "BASE CFGPN",
     "MODULE FGPN",
     "MODULE FORM FACTOR",
     "MATERIAL DESCRIPTION",
+    # Critical attributes for MAM vs CFGPN validation
+    "PCB DESIGN ID",
+    "DESIGN ID",           # maps to CFGPN COMP1_DESIGN_ID
+    "DIE2 DESIGN ID",      # maps to CFGPN COMP2_DESIGN_ID
+    "PCB ARTWORK REV",
+    "PRODUCT GROUP",
 ]
 
 

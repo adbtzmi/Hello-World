@@ -587,6 +587,26 @@ def generate_slate_xml(
                     _log(logger, f"✓ MCTO from dummy lot: {mcto_from_lot}", log_callback)
                 if lot_result.get("step"):
                     _log(logger, f"  Lot step/location: {lot_result['step']}", log_callback)
+
+                # ── Populate mam_attrs from SOAP result ──────────────
+                # When PyMIPC is unavailable, mam_attrs is empty.
+                # The SOAP query now returns the critical attributes
+                # (PCB_DESIGN_ID, DESIGN_ID, etc.) directly from MAM.
+                # Populate mam_attrs so the pre-flight validation and
+                # tmptravl generation use REAL MAM values, not CFGPN copies.
+                soap_all = lot_result.get("all_attrs", {})
+                if soap_all and not mam_attrs:
+                    _log(logger, f"  Populating mam_attrs from SOAP ({len(soap_all)} keys)",
+                         log_callback)
+                    mam_attrs = dict(soap_all)  # copy to avoid mutation
+                    logger.info("DIAG: mam_attrs populated from SOAP: %s",
+                                list(mam_attrs.keys()))
+                elif soap_all and mam_attrs:
+                    # PyMIPC returned some attrs; merge SOAP attrs as fallback
+                    for k, v in soap_all.items():
+                        if v and not mam_attrs.get(k):
+                            mam_attrs[k] = v
+                    logger.info("DIAG: mam_attrs merged with SOAP fallback keys")
             else:
                 _log(logger,
                      f"⚠ Dummy lot lookup failed: {lot_result.get('error', 'unknown')}",
@@ -697,10 +717,12 @@ def generate_slate_xml(
                 tmptravl_constants.update(sap_constant_dict)
 
                 # Cross-populate critical MAM attributes from SAP CFGPN data
-                # when PyMIPC is unavailable (BENTO checkout without factory MAM access).
-                # recipe_selection.py eval_rules() compares MAM vs CFGPN values;
-                # without these keys in the [MAM] section, critical attribute checks fail.
-                # setdefault() ensures real MAM values take precedence when available.
+                # as a FALLBACK — only fills gaps where MAM has no value.
+                # Now that the SOAP query fetches critical attrs directly from
+                # the factory MAM database, mam_attrs should already contain
+                # real values (PCB_DESIGN_ID, DESIGN_ID, etc.).
+                # setdefault() ensures real MAM values are NEVER overwritten.
+                # This fallback only activates when BOTH PyMIPC AND SOAP fail.
 
                 if mam_attrs is None:
                     mam_attrs = {}
