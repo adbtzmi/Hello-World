@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 import os
+import json
 import logging
+from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, simpledialog, messagebox
 from typing import Any, List, Dict
@@ -1670,6 +1672,63 @@ class CheckoutTab(BaseTab):
                     self.log(f"⚠ Auto-start failed: {e}")
                     logger.error(f"Auto-start result collection failed: {e}")
 
+                # ── Task 3: Auto-start manifest polling ─────────────────
+                # The watcher writes a file_manifest JSON after scanning
+                # the workspace.  Poll for it so we can show the file
+                # selection dialog to the user.
+                try:
+                    jira_key = (
+                        self.context.get_var('issue_var').get().strip().upper()
+                    )
+                    if not jira_key or jira_key.endswith("-"):
+                        # Fallback: extract from TGZ filename
+                        import re as _re
+                        tgz = self.context.get_var(
+                            'checkout_tgz_path').get().strip()
+                        m = _re.search(r'([A-Za-z]+-\d+)',
+                                       os.path.basename(tgz))
+                        jira_key = m.group(1).upper() if m else ""
+
+                    if jira_key:
+                        # Resolve ENV for the primary host
+                        ctrl = self.context.controller
+                        env = ""
+                        if ctrl and hasattr(ctrl, "checkout_controller"):
+                            env = (ctrl.checkout_controller
+                                   ._get_env_for_hostname(primary_host))
+
+                        # Build base search path:
+                        #   CHECKOUT_RESULTS / <host>_<ENV> / <jira_key>
+                        CHECKOUT_RESULTS = (
+                            r"P:\temp\BENTO\CHECKOUT_RESULTS"
+                        )
+                        tester_folder = (
+                            f"{primary_host}_{env.upper()}"
+                            if env else primary_host
+                        )
+                        results_base = os.path.join(
+                            CHECKOUT_RESULTS, tester_folder, jira_key
+                        )
+
+                        self._manifest_poll_count = 0
+                        self.log(
+                            f"📋 Polling for file manifest from "
+                            f"{primary_host} ({jira_key})..."
+                        )
+                        # Start polling after a short delay (watcher
+                        # needs time to scan + write the manifest)
+                        self.context.root.after(
+                            3000,
+                            lambda: self._poll_for_manifest(
+                                primary_host, jira_key, results_base
+                            )
+                        )
+                    else:
+                        self.log("⚠ No JIRA key — skipping manifest poll")
+                except Exception as e:
+                    self.log(f"⚠ Manifest poll setup failed: {e}")
+                    logger.error(f"Manifest poll setup failed: {e}")
+
     def on_xml_generation_completed(self, hostname, result):
         """Handle XML-only generation completion (distinct from checkout)."""
         status      = result.get("status", "xml_fail").upper()
@@ -2015,3 +2074,253 @@ class CheckoutTab(BaseTab):
         else:
             self._rc_status_indicator.config(
                 text="⏹ STOPPED", foreground="gray")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 7 — MANIFEST-BASED FILE SELECTION (BENTO ↔ Watcher)
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _poll_for_manifest(self, hostname: str, job_id: str,
+                           results_base: str):
+        """
+        Poll CHECKOUT_RESULTS for a manifest JSON written by the watcher.
+        When found, show a file selection dialog to the user.
+
+        Called automatically after checkout completes (from on_checkout_completed).
+        Runs as a background poll via root.after() to avoid blocking the GUI.
+
+        The watcher writes the manifest to a workspace-specific subfolder
+        whose name is not known to BENTO at poll-start time, so we search
+        recursively under ``results_base`` for the manifest file.
+
+        Args:
+            hostname     : tester hostname (e.g. "IBIR-0383")
+            job_id       : JIRA key (e.g. "TSESSD-14270")
+            results_base : base path under CHECKOUT_RESULTS to search
+                           (e.g. P:\\temp\\BENTO\\CHECKOUT_RESULTS\\HOST_ENV\\JIRA)
+        """
+        import glob as _glob
+
+        manifest_pattern = os.path.join(
+            results_base, "**",
+            f"file_manifest_{hostname}_{job_id}.json",
+        )
+        matches = _glob.glob(manifest_pattern, recursive=True)
+
+        if matches:
+            manifest_path = matches[0]
+            results_folder = os.path.dirname(manifest_path)
+            try:
+                with open(manifest_path, "r") as f:
+                    manifest = json.load(f)
+                self.log(f"📋 File manifest received from {hostname}")
+                self._show_file_selection_dialog(manifest, hostname,
+                                                  job_id, results_folder)
+            except Exception as e:
+                self.log(f"⚠ Error reading manifest: {e}")
+                logger.error(f"Manifest read error: {e}")
+        else:
+            # Keep polling every 5 seconds (up to 5 minutes)
+            if not hasattr(self, "_manifest_poll_count"):
+                self._manifest_poll_count = 0
+            self._manifest_poll_count += 1
+
+            if self._manifest_poll_count < 60:  # 60 * 5s = 5 min
+                self.context.root.after(
+                    5000,
+                    lambda: self._poll_for_manifest(
+                        hostname, job_id, results_base
+                    )
+                )
+            else:
+                self.log("⏱ Manifest poll timeout — watcher will use "
+                         "required-only fallback")
+                self._manifest_poll_count = 0
+
+    def _show_file_selection_dialog(self, manifest: dict, hostname: str,
+                                     job_id: str, results_folder: str):
+        """
+        Show a Toplevel dialog listing available files from the manifest.
+        User checks which optional files to collect; required files are
+        always selected and greyed out.
+
+        Args:
+            manifest       : parsed manifest JSON dict
+            hostname       : tester hostname
+            job_id         : JIRA key
+            results_folder : path to write selection JSON back to
+        """
+        dlg = tk.Toplevel(self)
+        dlg.title(f"Select Files to Collect — {hostname}")
+        dlg.geometry("550x420")
+        dlg.resizable(True, True)
+        dlg.transient(self.winfo_toplevel())
+        dlg.grab_set()
+
+        # Header
+        ttk.Label(
+            dlg,
+            text=f"Files available on {hostname} ({job_id})",
+            font=("Segoe UI", 10, "bold"),
+        ).pack(padx=10, pady=(10, 5), anchor="w")
+
+        ttk.Label(
+            dlg,
+            text="Required files are always collected. "
+                 "Select optional files below:",
+            foreground="gray",
+        ).pack(padx=10, pady=(0, 10), anchor="w")
+
+        # Scrollable frame for checkboxes
+        canvas_frame = ttk.Frame(dlg)
+        canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10)
+
+        canvas = tk.Canvas(canvas_frame, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical",
+                                   command=canvas.yview)
+        inner = ttk.Frame(canvas)
+
+        inner.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Build checkboxes from manifest
+        check_vars: Dict[str, tk.BooleanVar] = {}
+        files_info = manifest.get("files", [])
+
+        for i, file_entry in enumerate(files_info):
+            key      = file_entry.get("key", "")
+            desc     = file_entry.get("desc", key)
+            required = file_entry.get("required", False)
+            found    = file_entry.get("found", False)
+            count    = file_entry.get("count", 0)
+            sizes    = file_entry.get("sizes", [])
+            names    = file_entry.get("names", [])
+
+            var = tk.BooleanVar(value=required or found)
+            check_vars[key] = var
+
+            row_frame = ttk.Frame(inner)
+            row_frame.pack(fill=tk.X, pady=2)
+
+            cb = ttk.Checkbutton(row_frame, variable=var)
+            cb.pack(side=tk.LEFT)
+
+            # Required files: always checked, disabled
+            if required:
+                var.set(True)
+                cb.config(state="disabled")
+
+            # Not found: unchecked, disabled
+            if not found:
+                var.set(False)
+                cb.config(state="disabled")
+
+            # Label with description
+            size_str = ""
+            if sizes:
+                total = sum(sizes)
+                if total > 1024 * 1024:
+                    size_str = f" ({total / (1024*1024):.1f} MB)"
+                elif total > 1024:
+                    size_str = f" ({total / 1024:.1f} KB)"
+                else:
+                    size_str = f" ({total} B)"
+
+            status_icon = "✅" if found else "❌"
+            req_tag     = " [REQUIRED]" if required else ""
+            name_str    = ""
+            if names:
+                name_str = " — " + ", ".join(names[:3])
+                if len(names) > 3:
+                    name_str += f" (+{len(names)-3} more)"
+
+            label_text = (
+                f"{status_icon} {desc}{req_tag}{size_str}{name_str}"
+            )
+            lbl = ttk.Label(row_frame, text=label_text, wraplength=450)
+            lbl.pack(side=tk.LEFT, padx=(5, 0))
+
+        # Buttons
+        btn_frame = ttk.Frame(dlg)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        def _on_confirm():
+            selected = [k for k, v in check_vars.items() if v.get()]
+            self._write_file_selection(
+                selected, hostname, job_id, results_folder
+            )
+            dlg.destroy()
+
+        def _on_select_all():
+            for key, var in check_vars.items():
+                entry = next(
+                    (f for f in files_info if f.get("key") == key), {}
+                )
+                if entry.get("found", False):
+                    var.set(True)
+
+        def _on_cancel():
+            # Cancel = only required files
+            required_keys = [
+                f.get("key", "") for f in files_info
+                if f.get("required", False)
+            ]
+            self._write_file_selection(
+                required_keys, hostname, job_id, results_folder
+            )
+            dlg.destroy()
+
+        ttk.Button(
+            btn_frame, text="Select All", command=_on_select_all
+        ).pack(side=tk.LEFT, padx=(0, 5))
+
+        ttk.Button(
+            btn_frame, text="Collect Selected", command=_on_confirm,
+            style="Accent.TButton" if "Accent.TButton" in
+            ttk.Style().theme_names() else "TButton",
+        ).pack(side=tk.RIGHT, padx=(5, 0))
+
+        ttk.Button(
+            btn_frame, text="Required Only", command=_on_cancel
+        ).pack(side=tk.RIGHT, padx=(5, 0))
+
+    def _write_file_selection(self, selected_keys: list, hostname: str,
+                               job_id: str, results_folder: str):
+        """
+        Write the user's file selection JSON back to the shared folder
+        so the watcher can read it and copy the selected files.
+
+        Args:
+            selected_keys  : list of file key strings chosen by user
+            hostname       : tester hostname
+            job_id         : JIRA key
+            results_folder : path to write selection JSON
+        """
+        selection = {
+            "job_id":        job_id,
+            "hostname":      hostname,
+            "selected_keys": selected_keys,
+            "timestamp":     datetime.now().isoformat(),
+        }
+
+        selection_name = f"file_selection_{hostname}_{job_id}.json"
+        selection_path = os.path.join(results_folder, selection_name)
+
+        try:
+            os.makedirs(results_folder, exist_ok=True)
+            with open(selection_path, "w") as f:
+                json.dump(selection, f, indent=2)
+            self.log(
+                f"📝 File selection written: {len(selected_keys)} file(s) "
+                f"selected for {hostname}"
+            )
+            logger.info(f"File selection written: {selection_path}")
+        except Exception as e:
+            self.log(f"⚠ Failed to write file selection: {e}")
+            logger.error(f"File selection write error: {e}")
