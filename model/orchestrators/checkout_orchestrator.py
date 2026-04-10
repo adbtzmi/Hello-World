@@ -680,20 +680,24 @@ def generate_slate_xml(
                     )
             if mismatches:
                 mismatch_msg = (
-                    f"⚠ CRITICAL ATTRIBUTE MISMATCH for lot '{lot_prefix}'!\n"
+                    f"CRITICAL ATTRIBUTE MISMATCH for lot '{lot_prefix}'!\n"
                     f"The lot's MAM attributes do NOT match the CFGPN specification.\n"
                     f"This WILL cause 'Failed to Create Lot Cache' on the tester.\n"
                     + "\n".join(mismatches) + "\n"
                     f"FIX: Use a different dummy lot whose MAM attributes match "
-                    f"CFGPN '{cfgpn}', or update this lot's MAM attributes."
+                    f"CFGPN '{cfgpn}', or update this lot's MAM attributes.\n"
+                    f"ABORTING checkout — will NOT send mismatched profile to tester."
                 )
                 _log(logger, mismatch_msg, log_callback, "error")
                 logger.error("PREFLIGHT: Critical attribute mismatch detected — "
-                             "recipe_selection.py will reject this lot. Mismatches:\n%s",
+                             "ABORTING. recipe_selection.py would reject this lot. "
+                             "Mismatches:\n%s",
                              "\n".join(mismatches))
-                # Do NOT abort — log the warning prominently but let the user
-                # decide. The tester's recipe_selection.py is the final authority.
-                # Some lots may have been intentionally re-assigned.
+                # ABORT: Do not proceed with XML generation.
+                # Sending a mismatched profile to the tester wastes 30+ minutes
+                # only to get "Failed to Create Lot Cache" from SLATE.
+                # The user must fix the lot/CFGPN mismatch before retrying.
+                return None
 
         # ── Optional: Generate tmptravl for recipe selection ─────────
         tmptravl_path = ""
@@ -727,12 +731,20 @@ def generate_slate_xml(
                 if mam_attrs is None:
                     mam_attrs = {}
 
-                # Inject critical attributes from CFGPN into MAM
+                # Inject critical attributes from CFGPN into MAM (gap-fill only)
                 for cfgpn_key, mam_key in CFGPN_TO_MAM_CRITICAL_MAPPING.items():
                     if cfgpn_attrs.get(cfgpn_key):
-                        mam_attrs.setdefault(mam_key, cfgpn_attrs[cfgpn_key])
-                        logger.info("DIAG: Cross-populated MAM[%s] = CFGPN[%s] = %s",
-                                    mam_key, cfgpn_key, cfgpn_attrs[cfgpn_key])
+                        existing = mam_attrs.get(mam_key)
+                        if existing:
+                            logger.info("DIAG: MAM[%s] already has '%s' — "
+                                        "NOT overwriting with CFGPN[%s]='%s'",
+                                        mam_key, existing, cfgpn_key,
+                                        cfgpn_attrs[cfgpn_key])
+                        else:
+                            mam_attrs[mam_key] = cfgpn_attrs[cfgpn_key]
+                            logger.info("DIAG: Gap-filled MAM[%s] = CFGPN[%s] = %s "
+                                        "(MAM had no value)",
+                                        mam_key, cfgpn_key, cfgpn_attrs[cfgpn_key])
 
                 # Inject MARKET_SEGMENT and MODULE_FORM_FACTOR from sap_constant_dict
                 # so they appear in the [MAM] section of the tmptravl file.
