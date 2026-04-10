@@ -624,6 +624,12 @@ def _click_slate_button(win, auto_id, label, wait_after, required=False):
         return False
 
 
+# Sentinel: holds the last fatal popup text captured by _dismiss_slate_popups.
+# slate_gui_trigger() checks this after Create Playground to detect failures
+# like "Failed to Create Lot Cache" (Critical Attribute mismatch).
+_last_fatal_popup_text = ""
+
+
 def _dismiss_slate_popups(win):
     """
     Scan all open windows and dismiss any blocking popup/dialog
@@ -632,7 +638,11 @@ def _dismiss_slate_popups(win):
     Dismissible popup title keywords:
       "Error", "Warning", "Confirm", "Overwrite", "Exist",
       "Replace", "Alert", "Question", "Notice",
-      "Profile Finished", "Loaded DUT", "Success", "Information"
+      "Profile Finished", "Loaded DUT", "Success", "Information",
+      "Fail", "Failed"
+
+    Fatal popup keywords (logged as errors, captured for caller inspection):
+      "Fail", "Failed", "Fatal", "Error", "Exception", "Abort"
 
     Dismiss button priority order:
       "Yes" > "OK" > "Overwrite" > "Replace" > "Continue" > "Close"
@@ -640,13 +650,24 @@ def _dismiss_slate_popups(win):
     Safety: Never dismisses the main SLATE window itself.
     Uses Desktop(backend="win32") to catch dialogs that are
     children of SLATE's process but separate top-level windows.
+
+    Returns
+    -------
+    str or None
+        If a fatal popup was dismissed, returns the full error text
+        (title + body). Otherwise returns None.
     """
+    global _last_fatal_popup_text
     time.sleep(T_POPUP_SETTLE)
 
     dismiss_title_keywords = [
         "Error", "Warning", "Confirm", "Overwrite",
         "Exist", "Replace", "Alert", "Question", "Notice",
         "Profile Finished", "Loaded DUT", "Success", "Information",
+        "Fail", "Failed",
+    ]
+    fatal_title_keywords = [
+        "Fail", "Fatal", "Error", "Exception", "Abort",
     ]
     dismiss_btn_order = [
         "Yes", "OK", "Overwrite", "Replace", "Continue", "Close",
@@ -672,7 +693,70 @@ def _dismiss_slate_popups(win):
                            for kw in dismiss_title_keywords):
                     continue
 
-                log.warning("    \u26a0\ufe0f Popup detected: '" + title + "' — dismissing")
+                # Capture popup body text from Static controls (error details)
+                body_text = ""
+                try:
+                    for c in w.children():
+                        if c.class_name() == "Static":
+                            txt = c.window_text()
+                            if txt:
+                                body_text += txt + "\n"
+                except Exception:
+                    pass
+
+                full_text = title
+                if body_text.strip():
+                    full_text += " — " + body_text.strip()
+
+                # Check if this is a FATAL popup (not just informational)
+                is_fatal = any(
+                    kw.lower() in title.lower() for kw in fatal_title_keywords
+                )
+
+                # Special case: "Profile Finished Successfully" with
+                # "Loaded DUT:" but NO actual DUT locations listed.
+                # This means the profile loaded but no DUTs were assigned —
+                # the playground was NOT actually created.  Treat as fatal.
+                if ("profile finished" in title.lower()
+                        or "loaded dut" in title.lower()):
+                    # Extract text after "Loaded DUT:" and check if any
+                    # DUT locations are listed (e.g. "R0_P0_D0", "1-1", etc.)
+                    loaded_dut_content = ""
+                    for line in body_text.splitlines():
+                        stripped = line.strip()
+                        if stripped.lower().startswith("loaded dut"):
+                            # Get everything after "Loaded DUT:"
+                            parts = stripped.split(":", 1)
+                            if len(parts) > 1:
+                                loaded_dut_content = parts[1].strip()
+                            break
+                    if not loaded_dut_content:
+                        is_fatal = True
+                        full_text = (
+                            title + " — NO DUTs loaded! "
+                            "Profile finished but no DUT locations were "
+                            "assigned. Playground was NOT created."
+                        )
+                        log.error(
+                            "    \u274c 'Loaded DUT:' is EMPTY — "
+                            "no DUTs were loaded into the playground. "
+                            "This means the profile/lot failed to load."
+                        )
+
+                if is_fatal:
+                    log.error(
+                        "    \u274c FATAL popup detected: '" + title + "'"
+                    )
+                    if body_text.strip():
+                        log.error(
+                            "    \u274c Popup details:\n" + body_text.strip()
+                        )
+                    _last_fatal_popup_text = full_text
+                else:
+                    log.warning(
+                        "    \u26a0\ufe0f Popup detected: '" + title
+                        + "' — dismissing"
+                    )
 
                 for btn_text in dismiss_btn_order:
                     try:
@@ -689,7 +773,9 @@ def _dismiss_slate_popups(win):
                                 "    \u2705 Dismissed '" + title
                                 + "' with '" + btn_text + "'"
                             )
-                            return   # one popup at a time
+                            if is_fatal:
+                                return full_text
+                            return None   # one popup at a time
                     except Exception:
                         continue
 
@@ -698,6 +784,8 @@ def _dismiss_slate_popups(win):
 
     except Exception as e:
         log.debug("    _dismiss_slate_popups scan error: " + str(e))
+
+    return None
 
 
 def _ensure_slate_tab_active(win):
@@ -1156,6 +1244,11 @@ def slate_gui_trigger(xml_path, timeout=60):
 
     # ── Step 4: Create Playground (REQUIRED — FINAL STEP) ─────────────────
     log.info("  \u2500\u2500 Step 4/4: Create Playground  [REQUIRED — FINAL STEP]")
+
+    # Clear any previous fatal popup text before clicking Create Playground
+    global _last_fatal_popup_text
+    _last_fatal_popup_text = ""
+
     if not _click_slate_button(
         win,
         auto_id    = "btnCreatePlayground",
@@ -1165,7 +1258,27 @@ def slate_gui_trigger(xml_path, timeout=60):
     ):
         log.error("  \u274c Create Playground FAILED — aborting workflow")
         return False
-    _dismiss_slate_popups(win)
+
+    # Check for fatal popups AFTER Create Playground — this catches
+    # "Failed to Create Lot Cache" (Critical Attribute mismatch) and
+    # similar errors that SLATE shows as modal dialogs.
+    fatal_text = _dismiss_slate_popups(win)
+    if fatal_text:
+        log.error(
+            "  \u274c FATAL popup after Create Playground — "
+            "playground was NOT created!\n"
+            "  Error: " + fatal_text
+        )
+        return False
+
+    # Also check the global sentinel in case the popup was caught
+    # by a concurrent dismiss call or appeared slightly delayed
+    if _last_fatal_popup_text:
+        log.error(
+            "  \u274c FATAL popup detected during Create Playground:\n"
+            "  " + _last_fatal_popup_text
+        )
+        return False
 
     # ════════════════════════════════════════════════════════
     # CHECKOUT ENDS HERE — no Load Recipe / Run Test.
@@ -1508,6 +1621,10 @@ def process_checkout_xml(xml_path, env, logger):
     if not _is_xml_valid(xml_path, logger):
         write_status(xml_path, "failed", "Invalid XML - cannot parse")
         logger.error("[FAIL] Invalid XML: " + fname)
+        logger.info(
+            "[<<] Checkout FAILED for " + fname
+            + " — returning to poll loop for next XML"
+        )
         return
 
     # Step 2: Write in_progress
@@ -1519,6 +1636,10 @@ def process_checkout_xml(xml_path, env, logger):
         write_status(
             xml_path, "failed",
             "Cannot copy XML to " + SLATE_HOT_FOLDER
+        )
+        logger.info(
+            "[<<] Checkout FAILED for " + fname
+            + " — returning to poll loop for next XML"
         )
         return
 
@@ -1534,6 +1655,10 @@ def process_checkout_xml(xml_path, env, logger):
             "GUI automation cannot run. Install with: pip install pywinauto"
         )
         write_status(xml_path, "failed", "pywinauto not installed")
+        logger.info(
+            "[<<] Checkout FAILED for " + fname
+            + " — returning to poll loop for next XML"
+        )
         return
 
     MAX_GUI_ATTEMPTS = 3
@@ -1574,14 +1699,21 @@ def process_checkout_xml(xml_path, env, logger):
             time.sleep(10)
 
     if not gui_success:
-        logger.error(
-            "\u274c slate_gui_trigger failed after "
-            + str(MAX_GUI_ATTEMPTS) + " attempts — marking as failed"
-        )
-        write_status(
-            xml_path, "failed",
+        # Include fatal popup text if available — gives the user
+        # actionable context (e.g. "Failed to Create Lot Cache —
+        # Critical Attribute check failed: PCB_DESIGN_ID ...")
+        fail_detail = _last_fatal_popup_text or ""
+        fail_msg = (
             "slate_gui_trigger failed after "
             + str(MAX_GUI_ATTEMPTS) + " attempts"
+        )
+        if fail_detail:
+            fail_msg += " — " + fail_detail[:500]  # cap length for status file
+        logger.error("\u274c " + fail_msg)
+        write_status(xml_path, "failed", fail_msg)
+        logger.info(
+            "[<<] Checkout FAILED for " + fname
+            + " — returning to poll loop for next XML"
         )
         return
     # ════════════════════════════════════════════════════════════════════
@@ -1603,6 +1735,10 @@ def process_checkout_xml(xml_path, env, logger):
             "(method=" + monitor.completion_method + ")"
         )
         logger.error("[FAIL] Playground creation failed/timed out: " + fname)
+        logger.info(
+            "[<<] Checkout FAILED for " + fname
+            + " — returning to poll loop for next XML"
+        )
         return
 
     logger.info(
@@ -1617,6 +1753,10 @@ def process_checkout_xml(xml_path, env, logger):
         + monitor.completion_method + ")"
     )
     logger.info("[OK] Status written: success - " + fname)
+    logger.info(
+        "[<<] Checkout COMPLETE for " + fname
+        + " — returning to poll loop for next XML"
+    )
 
 
 def _cleanup_all_checkout_locks_on_startup(logger):

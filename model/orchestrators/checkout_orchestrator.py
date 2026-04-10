@@ -633,6 +633,48 @@ def generate_slate_xml(
             logger.info("DIAG: Injected PRODUCT_GROUP into mcto_attrs from cfgpn_attrs: %s",
                         cfgpn_attrs["PRODUCT_GROUP"])
 
+        # ── Pre-flight: MAM vs CFGPN critical attribute validation ────
+        # The production recipe_selection.py (eval_rules, line 361) compares
+        # MAM attributes against CFGPN attributes and raises a fatal
+        # "Critical Attribute check failed" exception if they don't match.
+        # This causes SLATE to show "Failed to Create Lot Cache" popup.
+        # We check EARLY so the user gets a clear error in the BENTO GUI
+        # instead of a cryptic popup on the tester 30 minutes later.
+        CFGPN_TO_MAM_CRITICAL_MAPPING = {
+            # CFGPN key           → MAM key (where names differ)
+            "PCB_DESIGN_ID":       "PCB_DESIGN_ID",
+            "COMP1_DESIGN_ID":     "DESIGN_ID",
+            "COMP2_DESIGN_ID":     "DIE2_DESIGN_ID",
+            "PCB_ARTWORK_REV":     "PCB_ARTWORK_REV",
+            "PRODUCT_GROUP":       "PRODUCT_GROUP",
+        }
+
+        if mam_attrs and cfgpn_attrs:
+            mismatches = []
+            for cfgpn_key, mam_key in CFGPN_TO_MAM_CRITICAL_MAPPING.items():
+                cfgpn_val = cfgpn_attrs.get(cfgpn_key, "")
+                mam_val = mam_attrs.get(mam_key, "")
+                if cfgpn_val and mam_val and cfgpn_val != mam_val:
+                    mismatches.append(
+                        f"  {cfgpn_key}: CFGPN='{cfgpn_val}' vs MAM({mam_key})='{mam_val}'"
+                    )
+            if mismatches:
+                mismatch_msg = (
+                    f"⚠ CRITICAL ATTRIBUTE MISMATCH for lot '{lot_prefix}'!\n"
+                    f"The lot's MAM attributes do NOT match the CFGPN specification.\n"
+                    f"This WILL cause 'Failed to Create Lot Cache' on the tester.\n"
+                    + "\n".join(mismatches) + "\n"
+                    f"FIX: Use a different dummy lot whose MAM attributes match "
+                    f"CFGPN '{cfgpn}', or update this lot's MAM attributes."
+                )
+                _log(logger, mismatch_msg, log_callback, "error")
+                logger.error("PREFLIGHT: Critical attribute mismatch detected — "
+                             "recipe_selection.py will reject this lot. Mismatches:\n%s",
+                             "\n".join(mismatches))
+                # Do NOT abort — log the warning prominently but let the user
+                # decide. The tester's recipe_selection.py is the final authority.
+                # Some lots may have been intentionally re-assigned.
+
         # ── Optional: Generate tmptravl for recipe selection ─────────
         tmptravl_path = ""
         if generate_tmptravl:
@@ -659,14 +701,6 @@ def generate_slate_xml(
                 # recipe_selection.py eval_rules() compares MAM vs CFGPN values;
                 # without these keys in the [MAM] section, critical attribute checks fail.
                 # setdefault() ensures real MAM values take precedence when available.
-                CFGPN_TO_MAM_CRITICAL_MAPPING = {
-                    # CFGPN key           → MAM key (where names differ)
-                    "PCB_DESIGN_ID":       "PCB_DESIGN_ID",
-                    "COMP1_DESIGN_ID":     "DESIGN_ID",
-                    "COMP2_DESIGN_ID":     "DIE2_DESIGN_ID",
-                    "PCB_ARTWORK_REV":     "PCB_ARTWORK_REV",
-                    "PRODUCT_GROUP":       "PRODUCT_GROUP",
-                }
 
                 if mam_attrs is None:
                     mam_attrs = {}
