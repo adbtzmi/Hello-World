@@ -84,6 +84,7 @@ _PLATFORM_CHECK_RULES = [
     'PASS_MFG_STATUS_CHECK',
     'PROG_RECIPE_CHECK',
     'STYLUS_CHECK',
+    'EXPECT_DIB_TYPE',
 ]
 
 # Suffix patterns for platform-specific check rules.
@@ -91,6 +92,12 @@ _PLATFORM_CHECK_RULES = [
 # and can be safely skipped.  This future-proofs against new *_CHECK rules
 # being added to the rule tables that BENTO doesn't have data for.
 _PLATFORM_CHECK_SUFFIXES = ['_CHECK', '_CHECKING']
+
+# Prefix patterns for platform-specific validation rules.
+# Rules starting with these prefixes are expectation/validation rules that
+# verify tester equipment data (DIB_TYPE, machine model, etc.) which BENTO
+# does not have.  These run AFTER recipe selection in production CAT.
+_PLATFORM_CHECK_PREFIXES = ['EXPECT_']
 
 # Broader pattern fragments for future-proofing site rules
 _SITE_RULE_FRAGMENTS = ['_PROGRAM_RECIPE', '_JOBPATH']
@@ -129,6 +136,11 @@ def _is_skippable_rule(rule_name):
     # Platform checks by suffix pattern (future-proofing)
     for suffix in _PLATFORM_CHECK_SUFFIXES:
         if rule_name.endswith(suffix):
+            return True
+
+    # Platform checks by prefix pattern (EXPECT_DIB_TYPE, etc.)
+    for prefix in _PLATFORM_CHECK_PREFIXES:
+        if rule_name.startswith(prefix):
             return True
 
     # Check if it's a site-specific rule
@@ -344,7 +356,67 @@ def main():
                 "RECIPE_WRAPPER_INFO: Skipped %d non-critical rule(s): %s\n"
                 % (len(_skipped_rules), ", ".join(sorted(_skipped_rules)))
             )
-        sys.stderr.write("RECIPE_WRAPPER_ERROR: %s\n" % str(e))
+
+        error_msg = str(e)
+
+        # ── Handle "Error values in results" from recipe_selection.py ──
+        # recipe_selection.py raises ValueError when any result == 'ERROR':
+        #   ValueError("Error values in results: \n('KEY1', 'VAL1')\n('KEY2', 'ERROR')")
+        # The rule table may have literal 'ERROR' for unsupported tester/site
+        # combos (e.g., TEST_PROGRAM_PATH for Stylus at PENANG), but other
+        # results like PROGRAM_RECIPE may be perfectly valid.
+        # We parse the key-value pairs, emit RECIPE_SEL_* lines for valid
+        # values, and exit 0 if we got at least PROGRAM_RECIPE.
+        if isinstance(e, ValueError) and 'Error values in results' in error_msg:
+            sys.stderr.write(
+                "RECIPE_WRAPPER_INFO: Caught 'Error values in results' — "
+                "extracting valid results\n"
+            )
+            import re as _re
+            # Parse ('KEY', 'VALUE') tuples from the error message
+            # Python 2 dict.iteritems() produces: ('KEY', 'VALUE')
+            pairs = _re.findall(
+                r"\('([^']+)',\s*'([^']*)'\)", error_msg
+            )
+            valid_results = {}
+            error_keys = []
+            for key, value in pairs:
+                if value in ('ERROR', 'N/A', ''):
+                    error_keys.append(key)
+                    sys.stderr.write(
+                        "RECIPE_WRAPPER_INFO: Skipping %s=%s (invalid)\n"
+                        % (key, value)
+                    )
+                else:
+                    valid_results[key] = value
+
+            # Emit RECIPE_SEL_* lines to stdout for valid results
+            # This is the format expected by RecipeSelector._extract()
+            for key in sorted(valid_results.keys()):
+                line = "RECIPE_SEL_%s:%s" % (key, valid_results[key])
+                sys.stdout.write(line + "\n")
+                sys.stderr.write(
+                    "RECIPE_WRAPPER_INFO: Emitted %s\n" % line
+                )
+
+            if 'PROGRAM_RECIPE' in valid_results:
+                sys.stderr.write(
+                    "RECIPE_WRAPPER_INFO: Successfully recovered "
+                    "PROGRAM_RECIPE=%s despite %d ERROR value(s): %s\n"
+                    % (valid_results['PROGRAM_RECIPE'],
+                       len(error_keys),
+                       ", ".join(error_keys))
+                )
+                sys.exit(0)
+            else:
+                sys.stderr.write(
+                    "RECIPE_WRAPPER_ERROR: No valid PROGRAM_RECIPE in "
+                    "results — cannot recover\n"
+                )
+                sys.exit(1)
+
+        # All other exceptions — report and exit with error
+        sys.stderr.write("RECIPE_WRAPPER_ERROR: %s\n" % error_msg)
         traceback.print_exc(file=sys.stderr)
         sys.exit(1)
 
