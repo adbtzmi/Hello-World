@@ -11,10 +11,10 @@ Wiring order:
   5. Create BentoController(config)  — no context yet
   6. Create BentoApp(root, controller, config, ...) — builds all tabs
   7. controller.set_view(app)         — wires context into all controllers
-  8. Inject CheckoutTab into impl_notebook
-  9. root.mainloop()
+  8. root.mainloop()
 
 gui/app.py (SimpleGUI) is no longer launched.
+Compilation and Checkout tabs are now main-level tabs (no injection needed).
 """
 
 import sys
@@ -123,19 +123,8 @@ def main():
         import traceback
         traceback.print_exc()
 
-    # ── Step 8: Inject CheckoutTab into Implementation sub-notebook ─────────
-    try:
-        from view.tabs.checkout_tab import CheckoutTab
-        impl_notebook = app.impl_notebook          # exposed by BentoApp._build_tabs()
-        checkout_tab  = CheckoutTab(impl_notebook, app.context)
-        # Store reference so BentoApp callbacks can reach it
-        app.checkout_tab = checkout_tab
-    except Exception as e:
-        logger.error(f"CheckoutTab injection failed: {e}")
-        import traceback
-        traceback.print_exc()
-
-    # ── Step 9: Enter Tk event loop ─────────────────────────────────────────
+    # ── Step 8: Enter Tk event loop ─────────────────────────────────────────
+    # Note: Compilation and Checkout tabs are now created directly in BentoApp._build_tabs()
     root.mainloop()
 
 

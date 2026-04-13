@@ -113,6 +113,9 @@ class CheckoutTab(BaseTab):
         ("Step",                 80),
         ("MID",                 120),
         ("Tester",              120),
+        ("DIB_TYPE",            100),
+        ("MACHINE_MODEL",       120),
+        ("MACHINE_VENDOR",      120),
         ("Primitive",           100),
         ("Dut",                  60),
         ("ATTR_OVERWRITE",      200),
@@ -122,7 +125,8 @@ class CheckoutTab(BaseTab):
 
     _EDITABLE_COLS = {
         "Form_Factor", "Material_Desc", "CFGPN", "MCTO_#1", "Dummy_Lot",
-        "Step", "MID", "Tester", "Primitive", "Dut", "ATTR_OVERWRITE",
+        "Step", "MID", "Tester", "DIB_TYPE", "MACHINE_MODEL", "MACHINE_VENDOR",
+        "Primitive", "Dut", "ATTR_OVERWRITE",
     }
 
     _CRT_TO_PROFILE_MAP = {
@@ -142,6 +146,15 @@ class CheckoutTab(BaseTab):
         "Step":                  "Step",
         "MID":                   "MID",
         "Tester":                "Tester",
+        "DIB_TYPE":              "DIB_TYPE",
+        "DIB TYPE":              "DIB_TYPE",
+        "Dib_Type":              "DIB_TYPE",
+        "MACHINE_MODEL":         "MACHINE_MODEL",
+        "MACHINE MODEL":         "MACHINE_MODEL",
+        "Machine_Model":         "MACHINE_MODEL",
+        "MACHINE_VENDOR":        "MACHINE_VENDOR",
+        "MACHINE VENDOR":        "MACHINE_VENDOR",
+        "Machine_Vendor":        "MACHINE_VENDOR",
         "Primitive":             "Primitive",
         "Dut":                   "Dut",
         "DUT":                   "Dut",
@@ -613,7 +626,8 @@ class CheckoutTab(BaseTab):
         row_data = {
             "Form_Factor": "", "Material_Desc": "", "CFGPN": "",
             "MCTO_#1": "", "Dummy_Lot": "None", "Step": "",
-            "MID": "", "Tester": "", "Primitive": "", "Dut": "",
+            "MID": "", "Tester": "", "DIB_TYPE": "", "MACHINE_MODEL": "",
+            "MACHINE_VENDOR": "", "Primitive": "", "Dut": "",
             "ATTR_OVERWRITE": "",
         }
         self._profile_data.append(row_data)
@@ -623,7 +637,8 @@ class CheckoutTab(BaseTab):
         row_data = {
             "Form_Factor": "", "Material_Desc": "", "CFGPN": "",
             "MCTO_#1": "", "Dummy_Lot": "", "Step": "",
-            "MID": "", "Tester": "", "Primitive": "", "Dut": "",
+            "MID": "", "Tester": "", "DIB_TYPE": "", "MACHINE_MODEL": "",
+            "MACHINE_VENDOR": "", "Primitive": "", "Dut": "",
             "ATTR_OVERWRITE": "",
         }
         self._profile_data.append(row_data)
@@ -653,10 +668,26 @@ class CheckoutTab(BaseTab):
         sel = self._profile_grid.selection()
         sel_idx = self._profile_grid.index(sel[0]) if sel else -1
 
+        # Auto-populate hardware configuration based on Step and Form_Factor
+        from model.hardware_config import HardwareConfig
+        hw_config = HardwareConfig()
+        
         for row in self._profile_grid.get_children():
             self._profile_grid.delete(row)
         cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
         for row_dict in self._profile_data:
+            # Auto-populate hardware config if Step and Form_Factor are present
+            step = row_dict.get("Step", "").strip()
+            form_factor = row_dict.get("Form_Factor", "").strip()
+            if step and form_factor:
+                # Only auto-populate if the fields are empty
+                if not row_dict.get("DIB_TYPE", "").strip():
+                    row_dict["DIB_TYPE"] = hw_config.get_dib_type(step, form_factor)
+                if not row_dict.get("MACHINE_MODEL", "").strip():
+                    row_dict["MACHINE_MODEL"] = hw_config.get_machine_model(step)
+                if not row_dict.get("MACHINE_VENDOR", "").strip():
+                    row_dict["MACHINE_VENDOR"] = hw_config.get_machine_vendor(step)
+            
             values = [str(row_dict.get(col, "")) for col in cols]
             self._profile_grid.insert("", tk.END, values=values)
         self._profile_row_count_label.configure(
@@ -1226,6 +1257,9 @@ class CheckoutTab(BaseTab):
                 step=row.get("Step", row.get("STEP", "ABIT")),
                 form_factor=row.get("Form_Factor", row.get("FORM_FACTOR", "")) or form_factor,
                 tester=row.get("Tester", row.get("TESTER", "")),
+                dib_type=row.get("DIB_TYPE", ""),
+                machine_model=row.get("MACHINE_MODEL", ""),
+                machine_vendor=row.get("MACHINE_VENDOR", ""),
                 primitive=row.get("Primitive", row.get("PRIMITIVE", "")),
                 dut=row.get("Dut", row.get("DUT", "")),
                 attr_overwrites=overwrites,
@@ -1328,6 +1362,7 @@ class CheckoutTab(BaseTab):
                 "Dummy_Lot":      str(row_dict.get("Dummy_Lot",
                                                    material_desc or "None")).strip(),
                 "Step": "", "MID": "", "Tester": "",
+                "DIB_TYPE": "", "MACHINE_MODEL": "", "MACHINE_VENDOR": "",
                 "Primitive": "", "Dut": "", "ATTR_OVERWRITE": "",
             })
         if not self._profile_data:
@@ -1482,6 +1517,9 @@ class CheckoutTab(BaseTab):
                     "Step":           env,
                     "MID":            mrow.get("mid", ""),
                     "Tester":         "",
+                    "DIB_TYPE":       "",
+                    "MACHINE_MODEL":  "",
+                    "MACHINE_VENDOR": "",
                     "Primitive":      mrow.get("primitive", ""),
                     "Dut":            mrow.get("dut", ""),
                     "ATTR_OVERWRITE": attr_overwrite,

@@ -11,9 +11,10 @@ Tab order:
   4. 📦 Repository          (view/tabs/repository_tab.py)
   5. 💻 Implementation      (view/tabs/implementation_tab.py)  ← Phase 3C
   6. 🧪 Test Scenarios      (view/tabs/test_scenarios_tab.py)
-  7. 📋 Validation & Risk   (view/tabs/validation_tab.py)
+  7. ⚙️ Compile & Checkout  (view/tabs/compile_checkout_tab.py) ← Combined tab with sub-tabs
+  8. 📋 Validation & Risk   (view/tabs/validation_tab.py)
 
-Checkout lives inside the Implementation sub-notebook (injected by main.py).
+Compile & Checkout is a combined tab containing TP Compilation and Checkout as sub-tabs.
 Result collection (Task 2) is embedded as Section 6 inside CheckoutTab.
 """
 
@@ -29,6 +30,7 @@ from view.tabs.analyze_jira_tab import AnalyzeJiraTab
 from view.tabs.repository_tab import RepositoryTab
 from view.tabs.implementation_tab import ImplementationTab
 from view.tabs.test_scenarios_tab import TestScenariosTab
+from view.tabs.compile_checkout_tab import CompileCheckoutTab
 from view.tabs.validation_tab import ValidationTab
 from context import AppContext
 
@@ -51,17 +53,16 @@ class BentoApp:
     log_text:        scrolledtext.ScrolledText
     debug_indicator: ttk.Label
     debug_var:       tk.BooleanVar
-    impl_notebook:   ttk.Notebook
 
     # Tab references
-    home_tab:           HomeTab
-    fetch_issue_tab:    FetchIssueTab
-    analyze_jira_tab:   AnalyzeJiraTab
-    repository_tab:     RepositoryTab
-    implementation_tab: ImplementationTab
-    test_scenarios_tab: TestScenariosTab
-    validation_tab:     ValidationTab
-    checkout_tab:       Any  # injected by main.py after BentoApp is built
+    home_tab:              HomeTab
+    fetch_issue_tab:       FetchIssueTab
+    analyze_jira_tab:      AnalyzeJiraTab
+    repository_tab:        RepositoryTab
+    implementation_tab:    ImplementationTab
+    test_scenarios_tab:    TestScenariosTab
+    compile_checkout_tab:  CompileCheckoutTab
+    validation_tab:        ValidationTab
 
     # ──────────────────────────────────────────────────────────────────────
     def __init__(self, root, controller, config, app_title, app_version):
@@ -175,21 +176,21 @@ class BentoApp:
     def _build_tabs(self):
         """Instantiate and add all tab views to the notebook (Phase 3C/3D order)."""
         # 1. Home
-        self.home_tab           = HomeTab(self.notebook, self.context)
+        self.home_tab              = HomeTab(self.notebook, self.context)
         # 2. Fetch Issue
-        self.fetch_issue_tab    = FetchIssueTab(self.notebook, self.context)
+        self.fetch_issue_tab       = FetchIssueTab(self.notebook, self.context)
         # 3. Analyze JIRA
-        self.analyze_jira_tab   = AnalyzeJiraTab(self.notebook, self.context)
+        self.analyze_jira_tab      = AnalyzeJiraTab(self.notebook, self.context)
         # 4. Repository
-        self.repository_tab     = RepositoryTab(self.notebook, self.context)
-        # 5. Implementation (Phase 3C — contains nested Checkout sub-tab)
-        self.implementation_tab = ImplementationTab(self.notebook, self.context)
-        # Expose impl_notebook so main.py can inject CheckoutTab
-        self.impl_notebook      = self.implementation_tab.impl_notebook
+        self.repository_tab        = RepositoryTab(self.notebook, self.context)
+        # 5. Implementation (Phase 3C — now simplified, no sub-notebook)
+        self.implementation_tab    = ImplementationTab(self.notebook, self.context)
         # 6. Test Scenarios
-        self.test_scenarios_tab = TestScenariosTab(self.notebook, self.context)
-        # 7. Validation & Risk (Phase 3B)
-        self.validation_tab     = ValidationTab(self.notebook, self.context)
+        self.test_scenarios_tab    = TestScenariosTab(self.notebook, self.context)
+        # 7. Compile & Checkout (Combined tab with TP Compilation and Checkout as sub-tabs)
+        self.compile_checkout_tab  = CompileCheckoutTab(self.notebook, self.context)
+        # 8. Validation & Risk (Phase 3B)
+        self.validation_tab        = ValidationTab(self.notebook, self.context)
 
     # ──────────────────────────────────────────────────────────────────────
     # LOG PANEL
@@ -221,8 +222,8 @@ class BentoApp:
     def compile_started(self, hostname: str, env: str):
         """Called by CompileController when a compile job begins."""
         self._log_message(f"⚙ Compile started → {hostname} ({env})")
-        if hasattr(self, "implementation_tab"):
-            self.implementation_tab.on_compile_started(hostname, env)
+        if hasattr(self, "compile_checkout_tab"):
+            self.compile_checkout_tab.on_compile_started(hostname, env)
 
     def compile_completed(self, hostname: str, env: str, result: dict):
         """Called by CompileController when a compile job finishes."""
@@ -232,8 +233,8 @@ class BentoApp:
         self._log_message(
             f"{'✓' if status == 'SUCCESS' else '✗'} "
             f"Compile {status} → {hostname} ({env}): {detail}")
-        if hasattr(self, "implementation_tab"):
-            self.implementation_tab.on_compile_completed(hostname, env, result)
+        if hasattr(self, "compile_checkout_tab"):
+            self.compile_checkout_tab.on_compile_completed(hostname, env, result)
 
         # ── Show popup notification for compilation result ────────────
         def _show_popup():
@@ -254,10 +255,9 @@ class BentoApp:
     def checkout_started(self, hostname: str):
         """Called by CheckoutController when checkout automation begins."""
         self._log_message(f"🚀 Checkout started → {hostname}")
-        # Checkout tab lives inside impl_notebook — relay via the tab itself
-        checkout_tab = getattr(self, "checkout_tab", None)
-        if checkout_tab:
-            checkout_tab.on_checkout_started(hostname)
+        # Checkout is a sub-tab within compile_checkout_tab
+        if hasattr(self, "compile_checkout_tab"):
+            self.compile_checkout_tab.on_checkout_started(hostname)
 
     def checkout_completed(self, hostname: str, result: dict):
         """Called by CheckoutController when checkout automation finishes."""
@@ -271,9 +271,8 @@ class BentoApp:
             f"{'✓' if status == 'SUCCESS' else '✗'} "
             f"Checkout {status} → {hostname}: {detail}")
 
-        checkout_tab = getattr(self, "checkout_tab", None)
-        if checkout_tab:
-            checkout_tab.on_checkout_completed(hostname, result)
+        if hasattr(self, "compile_checkout_tab"):
+            self.compile_checkout_tab.on_checkout_completed(hostname, result)
 
         # ── Show popup notification for checkout result ────────────────
         def _show_popup():
@@ -333,9 +332,8 @@ class BentoApp:
                     if not output_folder:
                         output_folder = os.path.dirname(xml_path)
 
-        checkout_tab = getattr(self, "checkout_tab", None)
-        if checkout_tab:
-            checkout_tab.on_xml_generation_completed(hostname, result)
+        if hasattr(self, "compile_checkout_tab"):
+            self.compile_checkout_tab.on_xml_generation_completed(hostname, result)
 
         # ── Show popup notification for XML generation result ──────────
         def _show_popup():
@@ -368,9 +366,8 @@ class BentoApp:
     def checkout_progress(self, hostname: str, phase: str):
         """Called by CheckoutController to relay mid-run phase updates."""
         self._log_message(f"   ↳ [{hostname}] {phase}")
-        checkout_tab = getattr(self, "checkout_tab", None)
-        if checkout_tab:
-            checkout_tab.on_checkout_progress(hostname, phase)
+        if hasattr(self, "compile_checkout_tab"):
+            self.compile_checkout_tab.on_checkout_progress(hostname, phase)
 
     def jira_analysis_completed(self, result: dict):
         """Called by JiraController when ticket analysis finishes."""
