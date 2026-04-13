@@ -381,6 +381,10 @@ def main():
             valid_results = {}
             error_keys = []
             for key, value in pairs:
+                # Unescape backslashes: Python 2's str() on tuples escapes
+                # backslashes, so '\\server\share' becomes '\\\\server\\share'
+                # in the error message string.  We need to decode them back.
+                value = value.replace('\\\\', '\\')
                 if value in ('ERROR', 'N/A', ''):
                     error_keys.append(key)
                     sys.stderr.write(
