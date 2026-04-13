@@ -59,16 +59,16 @@ class HardwareConfig:
         """Create default hardware config (mirrors CAT unit test values)."""
         return {
             "DIB_TYPE": {
-                "ABIT": {"U.2": "MS0022", "U.3": "", "E3.S": "MS0032", "E1.S": "MS0028", "E1.L": "", "M.2": ""},
-                "SFN2": {"U.2": "MS0050", "U.3": "", "E3.S": "MS0049", "E1.S": "MS0083", "E1.L": "", "M.2": ""},
+                "ABIT": {"U.2": "MS0022", "U.3": "MS0028", "E3.S": "MS0032", "E1.S": "MS0028", "E1.L": "", "M.2": ""},
+                "SFN2": {"U.2": "MS0050", "U.3": "MS0028", "E3.S": "MS0049", "E1.S": "MS0083", "E1.L": "", "M.2": ""},
                 "SCHP": {"U.2": "MS0055", "U.3": "", "E3.S": "MS0053", "E1.S": "MS0054", "E1.L": "", "M.2": ""},
             },
             "MACHINE_MODEL": {"ABIT": "IBIR", "SFN2": "MPT3000HVM3", "SCHP": "FX7"},
             "MACHINE_VENDOR": {"ABIT": "NEOS", "SFN2": "ADVT", "SCHP": "NEOSEM"},
             "STEP_NAME": {
-                "ABIT": ["ABIT", "AMB BI TEST"],
-                "SFN2": ["SFN2", "SSD FIN TEST2"],
-                "SCHP": ["SCHP", "SSD CHAMBER PERF"],
+                "ABIT": ["ABIT", "AMB_BI_TEST"],
+                "SFN2": ["SFN2", "SSD_FIN_TEST2"],
+                "SCHP": ["SCHP", "SSD_CHAMBER_PERF"],
             },
         }
 

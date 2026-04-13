@@ -10,7 +10,7 @@
         },
         "SFN2": {
             "U.2": "MS0050",
-            "U.3": "",
+            "U.3": "MS0028",
             "E3.S": "MS0049",
             "E1.S": "MS0083",
             "E1.L": "",
@@ -36,8 +36,17 @@
         "SCHP": "NEOSEM"
     },
     "STEP_NAME": {
-        "ABIT": ["ABIT", "AMB BI TEST"],
-        "SFN2": ["SFN2", "SSD FIN TEST2"],
-        "SCHP": ["SCHP", "SSD CHAMBER PERF"]
+        "ABIT": [
+            "ABIT",
+            "AMB_BI_TEST"
+        ],
+        "SFN2": [
+            "SFN2",
+            "SSD_FIN_TEST2"
+        ],
+        "SCHP": [
+            "SCHP",
+            "SSD_CHAMBER_PERF"
+        ]
     }
 }

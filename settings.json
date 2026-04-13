@@ -17,7 +17,7 @@
     "last_tgz_label": ""
   },
   "notifications": {
-    "teams_webhook_url": "",
+    "teams_webhook_url": "https://defaultf38a5ecd28134862b11bac1d563c80.6f.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/4d273654292f45569dacd2ba73a77084/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=S28HxlHzv-NjlpVwCOl_eAJFNzUCg7HILCe9eke74Fs",
     "notify_on_complete": true,
     "notify_on_failure": true
   },

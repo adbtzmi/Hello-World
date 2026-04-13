@@ -2,12 +2,14 @@
 """MAM (Material Attribute Management) Communicator.
 
 Adapted from CAT ProfileDump/CATCall/CATCALL.py MAMCommunicator class.
-Provides lot attribute query/set operations via PyMIPC.
+Provides lot attribute query/set operations via PyMIPC (native MIPC DLL).
 Also supports MIPC SOAP web service queries via zeep (from blockrun_lot_checker).
 Gracefully degrades when PyMIPC and/or zeep are not installed.
 """
 
 import os
+import sys
+import collections
 import socket
 import logging
 import xml.etree.ElementTree as ET
@@ -15,13 +17,41 @@ from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
-# Try to import PyMIPC — not available in all environments
+# Try to import PyMIPC — the native MIPC DLL wrapper.
+# First try the system-installed PyMIPC, then fall back to CAT's bundled copy.
+HAS_PYMIPC = False
+_PyMIPC = None  # module reference
+
 try:
-    from PyMIPC import clsMIPC
+    import PyMIPC as _PyMIPC
     HAS_PYMIPC = True
+    logger.info("PyMIPC loaded from system path")
 except ImportError:
-    HAS_PYMIPC = False
-    logger.info("PyMIPC not available — MAM queries via PyMIPC will be disabled")
+    # Try to find CAT's PyMIPC at known locations
+    _PYMIPC_SEARCH_PATHS = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "CATCall"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                     "crt_automation_tools", "ProfileDump", "CATCall"),
+        # Common CAT install location
+        r"C:\CAT\ProfileDump\CATCall",
+    ]
+    for _search_path in _PYMIPC_SEARCH_PATHS:
+        _search_path = os.path.normpath(_search_path)
+        _pymipc_file = os.path.join(_search_path, "PyMIPC.py")
+        if os.path.isfile(_pymipc_file):
+            if _search_path not in sys.path:
+                sys.path.insert(0, _search_path)
+            try:
+                import PyMIPC as _PyMIPC
+                HAS_PYMIPC = True
+                logger.info("PyMIPC loaded from %s", _search_path)
+                break
+            except Exception as e:
+                logger.debug("PyMIPC found at %s but failed to import: %s",
+                             _search_path, e)
+    if not HAS_PYMIPC:
+        logger.info("PyMIPC not available — MAM queries via native MIPC will be disabled")
 
 # Try to import zeep — SOAP client for MIPC web gateway
 try:
@@ -36,7 +66,82 @@ except ImportError:
     logger.info("zeep not available — MAM SOAP queries will be disabled")
 
 
-# Per-site MAM server configurations (from CAT CATCALL.py)
+# Per-site MAM MIPC query settings — mirrors CAT CATCALL.py mamQuerySettings.
+# Each site has TEST and MODULES sub-configs with MIPC destination addresses.
+MAM_QUERY_SETTINGS: Dict[str, Dict[str, Dict[str, str]]] = {
+    "SINGAPORE": {
+        "TEST": {
+            "EXECUTION_FACILITY": "TEST-MSA",
+            "SERVER": "/SINGAPORE/MTI/MFG/MAM/PROD/MAMSRV/TST_XML",
+        },
+        "MODULES": {
+            "APP": "MODSI",
+            "ACTION": "REPORT",
+            "FORMAT": "XML",
+            "USERID": "MODULETESTOBJECT",
+            "REPORTID": "",
+            "CRITERIA": "",
+            "EXECUTION_FACILITY": "MODULE-MSA",
+            "SERVER": "/SINGAPORE/MTI/MFG/MAM/PROD/MAMSRV/MODSI_XML",
+            "REPORT_SERVER": "/SINGAPORE/MTI/MFG/MAM/PROD/MAMRPTSRV/MODSI_XML",
+        },
+    },
+    "PENANG": {
+        "TEST": {
+            "EXECUTION_FACILITY": "TEST-MMP",
+            "SERVER": "/PENANG/MTI/MFG/MAM/PROD/MAMSRV/TSTPG_XML",
+        },
+        "MODULES": {
+            "APP": "MODPG",
+            "ACTION": "REPORT",
+            "FORMAT": "XML",
+            "USERID": "MODULETESTOBJECT",
+            "REPORTID": "",
+            "CRITERIA": "",
+            "EXECUTION_FACILITY": "MODULE-MMP",
+            "SERVER": "/PENANG/MTI/MFG/MAM/PROD/MAMSRV/MODPG_XML",
+            "REPORT_SERVER": "/PENANG/MTI/MFG/MAM/PROD/MAMRPTSRV/MODPG_XML",
+        },
+    },
+    "BOISE": {
+        "TEST": {
+            "EXECUTION_FACILITY": "TEST",
+            "SERVER": "/BOISE_2/MTI/MFG/MAM/PROD/MAMSRV/TST_XML",
+        },
+        "MODULES": {
+            "APP": "MODASM",
+            "ACTION": "REPORT",
+            "FORMAT": "XML",
+            "USERID": "MODULETESTOBJECT",
+            "REPORTID": "",
+            "CRITERIA": "",
+            "EXECUTION_FACILITY": "MODULE ASSEMBLY",
+            "SERVER": "/BOISE_2/MTI/MFG/MAM/PROD/MAMSRV/MOD_XML",
+            "REPORT_SERVER": "/BOISE_2/MTI/MFG/MAM/PROD/MAMRPTSRV/MOD_XML",
+        },
+    },
+    "XIAN": {
+        "TEST": {
+            "EXECUTION_FACILITY": "TEST-XIAN",
+            "SERVER": "/XIAN/MTI/MFG/MAM/PROD/MAMSRV/TST_XML",
+        },
+        "MODULES": {
+            "APP": "MODXA",
+            "ACTION": "REPORT",
+            "FORMAT": "XML",
+            "USERID": "MODULETESTOBJECT",
+            "REPORTID": "",
+            "CRITERIA": "",
+            "EXECUTION_FACILITY": "MODULE-XIAN",
+            "SERVER": "/XIAN/MTI/MFG/MAM/PROD/MAMSRV/MODXA_XML",
+            "REPORT_SERVER": "/XIAN/MTI/MFG/MAM/PROD/MAMRPTSRV/MODXA_XML",
+        },
+    },
+}
+# MXA alias
+MAM_QUERY_SETTINGS["MXA"] = MAM_QUERY_SETTINGS["XIAN"]
+
+# Legacy config kept for SOAP-based queries (zeep fallback)
 MAM_SERVER_CONFIGS: Dict[str, Dict[str, Any]] = {
     "SINGAPORE": {
         "mamServer": "intsvr2695.amr.corp.intel.com",
@@ -73,7 +178,7 @@ MAM_SERVER_CONFIGS: Dict[str, Dict[str, Any]] = {
 }
 
 # Default site fallback
-DEFAULT_SITE = "SINGAPORE"
+DEFAULT_SITE = "PENANG"
 
 
 class MAMResult:
@@ -96,8 +201,10 @@ class MAMResult:
 class MAMCommunicator:
     """Communicates with MAM server to query/set lot attributes.
 
-    Adapted from CAT's MAMCommunicator. Requires PyMIPC library.
-    When PyMIPC is not available, all operations return failure gracefully.
+    Uses the native PyMIPC DLL (same approach as CAT's CATCALL.py
+    MAMCommunicator) for direct MIPC communication.  When PyMIPC is not
+    available, all operations return failure gracefully so the caller can
+    fall back to the SOAP web gateway.
 
     Parameters
     ----------
@@ -107,7 +214,8 @@ class MAMCommunicator:
 
     def __init__(self, site: str = ""):
         self.site = (site or DEFAULT_SITE).upper()
-        self._config = MAM_SERVER_CONFIGS.get(self.site, MAM_SERVER_CONFIGS[DEFAULT_SITE])
+        self._mam_values = MAM_QUERY_SETTINGS.get(
+            self.site, MAM_QUERY_SETTINGS[DEFAULT_SITE])
         self._hostname = socket.gethostname()
 
     @property
@@ -115,17 +223,27 @@ class MAMCommunicator:
         """Check if PyMIPC is available for MAM operations."""
         return HAS_PYMIPC
 
-    def get_lot_attributes(self, lot: str, attributes: Optional[List[str]] = None) -> MAMResult:
-        """Query lot attributes from MAM.
+    # ------------------------------------------------------------------
+    # GetLotAttributes — mirrors CAT CATCALL.py MAMCommunicator.GetLotAttributes
+    # ------------------------------------------------------------------
+    def get_lot_attributes(self, lot: str,
+                           attributes: Optional[List[str]] = None,
+                           tsums_format: bool = True) -> MAMResult:
+        """Query lot attributes from MAM via native MIPC.
 
-        Mirrors CAT MAMCommunicator.GetLotAttributes().
+        Mirrors CAT ``MAMCommunicator.GetLotAttributes()``.  Sends a
+        ``GetMAInfo`` SOAP envelope through the MIPC DLL and parses the
+        XML response into a dict.
 
         Parameters
         ----------
         lot : str
             Lot ID to query.
         attributes : list of str, optional
-            Specific attributes to query. If None, queries all available.
+            Ignored (queries all attributes).  Kept for API compat.
+        tsums_format : bool
+            If True, replace spaces with underscores in keys/values
+            (matches CAT's ``tsumsFormat=True``).
 
         Returns
         -------
@@ -146,44 +264,76 @@ class MAMCommunicator:
             return result
 
         try:
-            mipc = clsMIPC.MIPC()
-            mipc.set("mamServer", self._config["mamServer"])
-            mipc.set("mamPort", str(self._config["mamPort"]))
-            mipc.set("mamProtocol", self._config["mamProtocol"])
-            mipc.set("mamFormat", self._config["mamFormat"])
-            mipc.set("mamFacility", self._config["mamFacility"])
-            mipc.set("mamArea", self._config["mamArea"])
-            mipc.set("mamHostName", self._hostname)
+            sFrom = "/%s/SIG/%s" % (self.site, self._hostname)
+            server = self._mam_values["MODULES"]["SERVER"]
+            exec_facility = self._mam_values["MODULES"]["EXECUTION_FACILITY"]
 
-            mipc.set("mamLot", lot)
-            mipc.set("mamOperation", "GetLotAttributes")
+            msg = (
+                "<SOAP-ENV:Envelope xmlns:SOAP-ENV="
+                "'http://schemas.xmlsoap.org/soap/envelope'>"
+                "<SOAP-ENV:Header>"
+                "<MTXMLMsg MsgType='CMD' />"
+                "<Delivery>"
+                "<Dest>{dest}</Dest>"
+                "<Src>{src}</Src>"
+                "<Reply>{src}</Reply>"
+                "<TransportType>MIPC</TransportType>"
+                "</Delivery>"
+                "</SOAP-ENV:Header>"
+                "<SOAP-ENV:Body>"
+                "<GetMAInfo>"
+                "<MAId>{lot}</MAId>"
+                "<MAType>MODULE LOT</MAType>"
+                "<ExecutionFacility>{facility}</ExecutionFacility>"
+                "<MAAttrAll />"
+                "<Authorization>"
+                "<ClientId>MODULETESTOBJECT</ClientId>"
+                "</Authorization>"
+                "</GetMAInfo>"
+                "</SOAP-ENV:Body>"
+                "</SOAP-ENV:Envelope>"
+            ).format(dest=server, src=sFrom, lot=lot, facility=exec_facility)
 
-            rc = mipc.execute()
-            if rc != 0:
-                result.error = f"MAM query failed with rc={rc}"
+            mipc = _PyMIPC.MIPC()
+            status, xml_result = mipc.SendReceive(server, msg)
+
+            if status <= 0:
+                err_detail = ""
+                if hasattr(xml_result, 'value'):
+                    err_detail = xml_result.value.decode('utf-8', errors='replace')
+                elif isinstance(xml_result, bytes):
+                    err_detail = xml_result.decode('utf-8', errors='replace')
+                result.error = (f"MIPC call failed with status={status}. "
+                                f"Error: {err_detail}")
                 logger.error(result.error)
                 return result
 
-            # Parse response attributes
-            xml_attrs = mipc.get("mamAttributes")
-            if xml_attrs:
-                result.attributes = self._parse_attrs(xml_attrs)
-                result.success = True
-                logger.info(f"MAM query for lot {lot}: {len(result.attributes)} attributes")
+            # Decode bytes response
+            if isinstance(xml_result, bytes):
+                xml_str = xml_result.decode('utf-8', errors='replace')
+            elif hasattr(xml_result, 'value'):
+                xml_str = xml_result.value.decode('utf-8', errors='replace')
             else:
-                result.error = "No attributes returned from MAM"
-                logger.warning(result.error)
+                xml_str = str(xml_result)
+
+            result.attributes = self._parse_attrs(xml_str, tsums_format)
+            result.success = True
+            logger.info("MAM PyMIPC query for lot %s: %d attributes",
+                        lot, len(result.attributes))
 
         except Exception as e:
-            result.error = f"MAM query exception: {e}"
+            result.error = f"MAM PyMIPC query exception: {e}"
             logger.exception(result.error)
 
         return result
 
+    # ------------------------------------------------------------------
+    # SetLotAttributes — mirrors CAT CATCALL.py MAMCommunicator.SetLotAttributes
+    # ------------------------------------------------------------------
     def set_lot_attributes(self, lot: str, attrs: Dict[str, str]) -> MAMResult:
-        """Set lot attributes in MAM.
+        """Set lot attributes in MAM via native MIPC.
 
-        Mirrors CAT MAMCommunicator.SetLotAttributes().
+        Mirrors CAT ``MAMCommunicator.SetLotAttributes()``.
 
         Parameters
         ----------
@@ -211,81 +361,129 @@ class MAMCommunicator:
             return result
 
         try:
-            mipc = clsMIPC.MIPC()
-            mipc.set("mamServer", self._config["mamServer"])
-            mipc.set("mamPort", str(self._config["mamPort"]))
-            mipc.set("mamProtocol", self._config["mamProtocol"])
-            mipc.set("mamFormat", self._config["mamFormat"])
-            mipc.set("mamFacility", self._config["mamFacility"])
-            mipc.set("mamArea", self._config["mamArea"])
-            mipc.set("mamHostName", self._hostname)
+            sFrom = "/%s/SIG/%s" % (self.site, self._hostname)
+            server = self._mam_values["MODULES"]["SERVER"]
+            exec_facility = self._mam_values["MODULES"]["EXECUTION_FACILITY"]
 
-            mipc.set("mamLot", lot)
-            mipc.set("mamOperation", "SetLotAttributes")
-
-            # Build attribute XML
-            attr_xml = ""
+            # Build <Attr> elements
+            sb_attrs = ""
             for key, value in attrs.items():
-                attr_xml += f'<Attribute name="{key}" value="{value}"/>'
-            mipc.set("mamAttributes", attr_xml)
+                sb_attrs += (
+                    "<Attr><Action>ASSIGN ATTRIBUTE</Action>"
+                    "<Id>{k}</Id><Val>{v}</Val></Attr>"
+                ).format(k=key, v=value)
 
-            rc = mipc.execute()
-            if rc != 0:
-                result.error = f"MAM set failed with rc={rc}"
+            msg = (
+                "<SOAP-ENV:Envelope xmlns:SOAP-ENV="
+                "'http://schemas.xmlsoap.org/soap/envelope/' "
+                "xmlns:MIPC='http://midsysprog.micron.com'>"
+                "<SOAP-ENV:Header>"
+                "<Delivery>"
+                "<Src>{src}</Src>"
+                "<Dest>{dest}</Dest>"
+                "<Reply>{src}</Reply>"
+                "<TransportType>MIPC</TransportType>"
+                "</Delivery>"
+                "<MTXMLMsg MsgType='CMD'>"
+                "<MessageId>1025</MessageId>"
+                "</MTXMLMsg>"
+                "</SOAP-ENV:Header>"
+                "<SOAP-ENV:Body>"
+                "<TrackItem>"
+                "<Authorization>"
+                "<ClientId>MODULETESTOBJECT</ClientId>"
+                "</Authorization>"
+                "<Keyword>PLUSAMR-MODTESTATTRS</Keyword>"
+                "<ExecutionFacility>{facility}</ExecutionFacility>"
+                "<MAType>MODULE LOT</MAType>"
+                "<MAId>{lot}</MAId>"
+                "<MAAttrList>{attrs}</MAAttrList>"
+                "</TrackItem>"
+                "</SOAP-ENV:Body>"
+                "</SOAP-ENV:Envelope>"
+            ).format(src=sFrom, dest=server, facility=exec_facility,
+                     lot=lot, attrs=sb_attrs)
+
+            mipc = _PyMIPC.MIPC()
+            status, reply = mipc.Send(sFrom, server, sFrom, msg)
+
+            if status <= 0:
+                err_detail = ""
+                if hasattr(reply, 'value'):
+                    err_detail = reply.value.decode('utf-8', errors='replace')
+                elif isinstance(reply, bytes):
+                    err_detail = reply.decode('utf-8', errors='replace')
+                result.error = (f"MIPC set failed with status={status}. "
+                                f"Error: {err_detail}")
                 logger.error(result.error)
                 return result
 
             result.success = True
             result.attributes = attrs
-            logger.info(f"MAM set for lot {lot}: {list(attrs.keys())}")
+            logger.info("MAM PyMIPC set for lot %s: %s", lot, list(attrs.keys()))
 
         except Exception as e:
-            result.error = f"MAM set exception: {e}"
+            result.error = f"MAM PyMIPC set exception: {e}"
             logger.exception(result.error)
 
         return result
 
-    def _parse_attrs(self, xml_attrs: str) -> Dict[str, str]:
+    # ------------------------------------------------------------------
+    # _parse_attrs — mirrors CAT CATCALL.py MAMCommunicator._parseAttrs
+    # ------------------------------------------------------------------
+    def _parse_attrs(self, xml_attrs: str,
+                     tsums_format: bool = True) -> Dict[str, str]:
         """Parse MAM XML attribute response into a dict.
 
-        Mirrors CAT MAMCommunicator._parseAttrs().
+        Mirrors CAT ``MAMCommunicator._parseAttrs()``.  The MAM response
+        contains ``<Attr><Id>…</Id><Val>…</Val></Attr>`` elements.
 
         Parameters
         ----------
         xml_attrs : str
-            XML string containing attribute elements.
+            Full SOAP XML response string from MAM.
+        tsums_format : bool
+            If True, replace spaces with underscores in keys and values
+            (matches CAT's ``tsumsFormat=True``).
 
         Returns
         -------
         dict
-            Parsed attribute key-value pairs.
+            Parsed attribute key-value pairs, sorted alphabetically.
         """
-        attrs = {}
+        attrs: Dict[str, str] = {}
         try:
-            import xml.etree.ElementTree as ET
-            # Wrap in root element if needed
-            if not xml_attrs.strip().startswith("<?xml") and not xml_attrs.strip().startswith("<root"):
-                xml_attrs = f"<root>{xml_attrs}</root>"
             root = ET.fromstring(xml_attrs)
-            for elem in root.iter("Attribute"):
-                name = elem.get("name", "")
-                value = elem.get("value", "")
-                if name:
-                    attrs[name] = value
+            for attr_elem in root.iter("Attr"):
+                id_node = attr_elem.find("Id")
+                val_node = attr_elem.find("Val")
+                if id_node is not None and id_node.text and \
+                   val_node is not None and val_node.text:
+                    key = id_node.text.strip()
+                    value = val_node.text.strip()
+                    if tsums_format:
+                        key = key.replace(" ", "_")
+                        value = value.replace(" ", "_")
+                    attrs[key] = value
         except Exception as e:
-            logger.warning(f"Failed to parse MAM attributes: {e}")
-            # Try simple line-based parsing as fallback
-            for line in xml_attrs.splitlines():
-                line = line.strip()
-                if 'name="' in line and 'value="' in line:
-                    try:
-                        name = line.split('name="')[1].split('"')[0]
-                        value = line.split('value="')[1].split('"')[0]
-                        if name:
-                            attrs[name] = value
-                    except (IndexError, ValueError):
-                        pass
-        return attrs
+            logger.warning("Failed to parse MAM attributes: %s", e)
+            # Fallback: try <Attribute name="..." value="..."/> format
+            try:
+                if not xml_attrs.strip().startswith("<?xml") and \
+                   not xml_attrs.strip().startswith("<"):
+                    xml_attrs = f"<root>{xml_attrs}</root>"
+                root2 = ET.fromstring(xml_attrs)
+                for elem in root2.iter("Attribute"):
+                    name = elem.get("name", "")
+                    value = elem.get("value", "")
+                    if name:
+                        if tsums_format:
+                            name = name.replace(" ", "_")
+                            value = value.replace(" ", "_")
+                        attrs[name] = value
+            except Exception:
+                pass
+        return collections.OrderedDict(sorted(attrs.items()))
 
     def get_cfgpn_mcto(self, lot: str) -> Dict[str, str]:
         """Convenience method to get CFGPN and MCTO for a lot.
@@ -302,8 +500,8 @@ class MAMCommunicator:
         """
         result = self.get_lot_attributes(lot)
         return {
-            "cfgpn": result.get("CFGPN", ""),
-            "mcto": result.get("MCTO", ""),
+            "cfgpn": result.get("BASE_CFGPN", result.get("CFGPN", "")),
+            "mcto": result.get("MODULE_FGPN", result.get("MCTO", "")),
         }
 
 
