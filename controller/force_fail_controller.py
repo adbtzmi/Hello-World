@@ -172,9 +172,9 @@ class ForceFailController:
     def _open_review_chat(self, issue_key, display_text, callback):
         """Open interactive chat for user to review force-fail diffs."""
         if self.chat:
-            self.chat.open_interactive_chat(
+            self.chat.create_interactive_chat(
                 issue_key=issue_key,
-                step_name="Force Fail Cases",
+                title="Force Fail Cases",
                 initial_content=display_text,
                 finalize_callback=lambda: self._on_cases_approved(issue_key, callback),
             )

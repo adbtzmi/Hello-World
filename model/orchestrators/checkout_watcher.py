@@ -276,6 +276,59 @@ def launch_slate_via_hot_folder(xml_path, logger):
 
 import re as _re
 
+
+def _safe_desktop_windows(backend="win32"):
+    """
+    Safely enumerate all top-level desktop windows.
+
+    Desktop(backend=...).windows() can throw
+        "Handle XXXXX is not a valid window handle"
+    when a window is destroyed between Win32 EnumWindows and pywinauto's
+    wrapper creation.  This helper retries up to 3 times, then falls back
+    to ctypes EnumWindows + individual HwndWrapper wrapping so that a
+    single stale handle doesn't abort the entire scan.
+
+    Returns a list of pywinauto window wrapper objects (may be empty).
+    """
+    # Fast path: try Desktop().windows() up to 3 times
+    for _attempt in range(3):
+        try:
+            return Desktop(backend=backend).windows()  # type: ignore[operator]
+        except Exception:
+            import time as _t
+            _t.sleep(0.3)
+
+    # Fallback: enumerate handles via ctypes, wrap individually
+    import ctypes
+    import ctypes.wintypes
+
+    _handles = []
+
+    @ctypes.WINFUNCTYPE(
+        ctypes.wintypes.BOOL,
+        ctypes.wintypes.HWND,
+        ctypes.wintypes.LPARAM,
+    )
+    def _enum_cb(hwnd, _lparam):
+        _handles.append(hwnd)
+        return True
+
+    ctypes.windll.user32.EnumWindows(_enum_cb, 0)
+
+    result = []
+    _IsWindow = ctypes.windll.user32.IsWindow
+    for hwnd in _handles:
+        if not _IsWindow(hwnd):
+            continue
+        try:
+            from pywinauto.controls.hwndwrapper import HwndWrapper  # type: ignore[import]
+            result.append(HwndWrapper(hwnd))
+        except Exception:
+            continue  # stale handle — skip silently
+
+    return result
+
+
 def _find_slate_handle(title_re, backend, logger=None):
     """
     Enumerate all top-level windows and return the handle of the FIRST
@@ -299,7 +352,7 @@ def _find_slate_handle(title_re, backend, logger=None):
     _l = logger if logger is not None else log
     pattern = _re.compile(title_re)
     try:
-        windows = Desktop(backend=backend).windows()  # type: ignore[operator]
+        windows = _safe_desktop_windows(backend=backend)
         for w in windows:
             try:
                 title = w.window_text()
@@ -675,7 +728,7 @@ def _dismiss_slate_popups(win):
     slate_title = win.window_text()
 
     try:
-        all_windows = Desktop(backend="win32").windows()  # type: ignore[operator]
+        all_windows = _safe_desktop_windows(backend="win32")
         for w in all_windows:
             try:
                 title = w.window_text().strip()
@@ -849,7 +902,7 @@ def _log_all_visible_windows(logger=None):
         return
     _l.error("  \u2500\u2500 Visible top-level windows (win32 backend) \u2500\u2500")
     try:
-        windows = Desktop(backend="win32").windows()  # type: ignore[operator]
+        windows = _safe_desktop_windows(backend="win32")
         found = 0
         for w in windows:
             try:
@@ -1469,7 +1522,7 @@ class PlaygroundCompletionMonitor(object):
 
         while not self._complete_event.is_set():
             try:
-                all_windows = Desktop(backend="win32").windows()  # type: ignore[operator]
+                all_windows = _safe_desktop_windows(backend="win32")
                 for w in all_windows:
                     try:
                         title = w.window_text().strip()

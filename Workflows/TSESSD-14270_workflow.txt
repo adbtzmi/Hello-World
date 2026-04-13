@@ -1,5 +1,5 @@
 JIRA WORKFLOW STATE FILE
-Generated: 2026-03-05 11:19:57
+Generated: 2026-04-13 08:03:38
 ================================================================================
 
 === REPOSITORY_PATH ===
@@ -11,4 +11,166 @@ Base branch: develop
 Feature branch: feature/TSESSD-14270
 Local path: Repos\TSESSD-14270_adv_ibir_master
 
+=== ISSUE_KEY ===
+TSESSD-14270
+
+=== JIRA_ISSUE_DATA ===
+==================================================
+JIRA ISSUE: TSESSD-14270
+==================================================
+
+SUMMARY:
+[7500] Stop phase 0 PFOM sampling for 7500
+
+──────────────────────────────────────────────────
+WORK TYPE:
+Change Request
+
+──────────────────────────────────────────────────
+REPORTER:
+Wan Chien Tan
+
+──────────────────────────────────────────────────
+ASSIGNEE:
+Dominic, Wei Ren Lim
+
+──────────────────────────────────────────────────
+DESCRIPTION:
+Expected Impact and Justification for Request
+Based on the phase0 PFOM BB comparison so far, both 7500 and 9550 collected sufficient sample for DOE - (all failing mode included erase, program and read failures).
+~60 FIDs with mismatched BIBB out of > 1.6M FIDs tested with PFOM phase0 comparison
+
+Request Details
+since we have enough sample to work on,and to avoid rejecting good drives (compareBB failure are good drives), we would like to stop Phase0 comparison
+Current newer reject will be on hold (requested site to update the dispo) for next TP (phase0 stop BB comparison)
+
+──────────────────────────────────────────────────
+COMPONENTS:
+7500
+
+──────────────────────────────────────────────────
+ACCEPTANCE CRITERIA:
+To stop Phase0 comparison.
+Acceptance Criteria Reference 
+SSD Validation Plan Guidelines: 
+http://edc.micron.com/mti/BCT003/_layouts/15/WopiFrame2.aspx?sourcedoc=%7b0A275C33-21E5-41A7-B164-D8E7A2163A6E%7d&file=Global%20SSD%20TE%20-%20SSD%20Change%20Items%20Checklist.docx&action=default&DefaultItemOpen=1
+
+──────────────────────────────────────────────────
+CHANGE CATEGORY:
+OTHER
+
+──────────────────────────────────────────────────
+ISSUE LINKS:
+3 linked issue(s)
+
+──────────────────────────────────────────────────
+ATTACHMENTS:
+1 file(s)
+
+──────────────────────────────────────────────────
+RECENT COMMENTS (with roles):
+- **Dominic, Wei Ren Lim [Assignee]**: Control Methodology:
+SendGearmanRequest.py
+Implement new Phase 1 in addition to Phase 0 and Phase 2 for PFOM Phase evaluation (code implementation for phase 1 is similar to phase 0 and phase 2)
+Default phase is still set to 0 as some tests used by other PFOM product does not implement phase 1 skipping.
+Default phase set to 1 instead as we dun expect PFOM data collection or TTR to be executed if something goes wrong.
+If self.phase is set to 1,  skip the test by adding test result CODE_PRIME in te
+- **Dominic, Wei Ren Lim [Assignee]**: Hi  ,
+Please help to review the validation document for this JIRA: 
+CC:  ,  , ,
+- **Wan Chien Tan [Reporter]**: the data looks good. THanks.
+- **Wan Chien Tan [Reporter]**: approved
+- **Wan Chien Tan [Reporter]**: Approve Data Review
+Wan Chien Tan
+Approval Notes:
+approved
+
+==================================================
+
+=== JIRA_ANALYSIS ===
+Excellent. Here is a detailed analysis of the JIRA Change Request, structured for a test engineering audience.
+
+***
+
+### **JIRA Change Request Analysis: TSESSD-14270**
+
+#### **1. Change Objective**
+
+The primary goal is to **disable the 'Phase 0' Bad Block (BB) comparison step within the Product Failure Outlier Model (PFOM) test flow**.
+
+The justification is that sufficient data (~1.6M FIDs tested) has been collected for the Design of Experiments (DOE) model. Continuing the Phase 0 comparison results in false failures (~60 FIDs with mismatched BBs), causing unnecessary yield loss by rejecting functionally good drives.
+
+#### **2. Request Details**
+
+*   **Action:** Stop the Phase 0 PFOM BB comparison test.
+*   **Implementation Method:**
+    *   Introduce a new 'Phase 1' into the PFOM test logic within `SendGearmanRequest.py`.
+    *   Change the default execution phase from `0` to `1`.
+    *   When the test logic encounters `phase == 1`, it must skip the comparison test and log the result `CODE_PRIME` in the test executive.
+*   **Disposition of Current Rejects:** Drives that have recently failed this step are to be put on hold, pending the rollout of this new test program (TP).
+
+#### **3. Missing Information Check**
+
+The request lacks critical details required for a complete impact assessment and validation plan. Clarification is required on the following:
+
+*   **[CRITICAL] Product Scope:** The component is listed as **7500**, but the description mentions **9550** and a linked issue (TSESSD-14539) covers **6550**.
+    *   **Question:** Is this change request intended to cover the implementation for **7500 only**, or does it also cover **9550**? Please confirm the full list of product families this change applies to.
+*   **[CRITICAL] Test Step:** The specific test step (e.g., ABIT, SFN2, CNFG) that calls the PFOM logic is not specified.
+    *   **Question:** From which test step(s) is this PFOM comparison initiated?
+*   **[CRITICAL] Product Configurations:** No specific densities, form factors, or MPNs are mentioned.
+    *   **Question:** Please specify the exact densities (e.g., 1.92TB, 7.68TB) and form factors (e.g., U.2, E1.S) for the 7500/9550/6550 product lines that this change must be validated against.
+*   **Drive Condition / Firmware:** No details are provided on drive state or firmware.
+    *   **Question:** Does this validation need to cover specific firmware versions (e.g., `FW_WAVE_ID`), customer-specific builds, or drive states (e.g., FIPS, Non-FIPS, Secure Erase state)?
+*   **Cross-Product Dependency:** The assignee's comment mentions *"some tests used by other PFOM product does not implement phase 1 skipping."* This was a risk that was seemingly overridden by setting the default to phase 1.
+    *   **Question:** Can you confirm which "other PFOM products" use this module? We must verify they are not negatively impacted by the default phase change.
+
+#### **4. Impact Analysis**
+
+*   **Affected Products/Components:**
+    *   **Explicitly:** 7500 product family.
+    *   **Implicitly:** 9550 and 6550 product families.
+    *   **Potentially:** Any other product that utilizes the common `SendGearmanRequest.py` PFOM module.
+*   **Impact on Yield & Test Time:**
+    *   **Yield:** Positive. This change is expected to **increase yield** by eliminating a known source of false failures.
+    *   **Test Time:** Positive. Skipping a test step will result in a minor **reduction in overall test time**.
+*   **Breaking Changes / Risks:**
+    *   **High Risk:** The change of the default phase from `0` to `1` is a **potential breaking change**. Any other product's test flow that calls this PFOM module and relies on the default `phase=0` behavior will now be skipped. This could lead to missed data collection or invalid test passes on other product lines. This risk must be a primary focus of the validation plan.
+
+#### **5. Detailed Code Implementation Plan**
+
+Based on the assignee's comments, the implementation will be focused on `SendGearmanRequest.py` (or a similar central PFOM script).
+
+*   **Files/Modules to Modify:**
+    *   `SendGearmanRequest.py` (or equivalent PFOM execution script).
+*   **Specific Code Changes:**
+    1.  Locate the phase initialization logic (e.g., `self.phase = ...`). Change the default value from `0` to `1`.
+    2.  Add a new conditional block: `if self.phase == 1:`.
+    3.  Within this block, add logic to bypass the main test execution.
+    4.  Log a skip result to the test executive (e.g., `te.add_result(CODE_PRIME, 'PFOM Phase 0 comparison skipped by request')`).
+    5.  Ensure the script exits gracefully after logging the skip.
+
+#### **6. Validation Plan for Impacted Products**
+
+1.  **Primary Validation (7500, 9550, 6550):**
+    *   For each product family, select a representative sample of densities and form factors.
+    *   Execute the full test program containing the modified PFOM step.
+    *   **PASS Criteria:**
+        *   Verify the test log shows the PFOM comparison step was **skipped** with a `CODE_PRIME` result.
+        *   Verify the drive successfully **passes** the entire test sequence.
+        *   Confirm the expected minor reduction in test time for that step.
+
+2.  **Cross-Product Dependency Validation (CRITICAL):**
+    *   Identify all other products/test flows that call this same PFOM module.
+    *   Execute the existing test programs for these "unrelated" products.
+    *   **PASS Criteria:**
+        *   Confirm that these products either continue to execute the PFOM comparison as expected (if their test flow explicitly calls for `phase=0`) OR that they are also intended to be skipped.
+        *   **If any unrelated product flow breaks or incorrectly skips the step, this change must be rejected or revised.** A potential revision would be to keep the default as `phase=0` and have the 7500/9550/6550 flows explicitly request `phase=1`.
+
+3.  **Configuration-Specific Validation:**
+    *   Once the specific densities/form factors are identified (from Section 3), ensure the validation matrix covers these configurations. Pay special attention to high-volume runners.
+
+#### **7. Dependencies**
+
+*   **TSESSD-14539:** This change is functionally related to the same change for the **6550** product, indicating a broad, multi-product initiative.
+*   **TSESSD-15015 / TSESSD-15308:** This change is scheduled for deployment as part of the **VERSION_185 Test Program Release**. Any delays in validating this change could impact the release schedule.
 
