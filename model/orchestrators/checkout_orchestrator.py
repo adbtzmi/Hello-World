@@ -985,12 +985,19 @@ def generate_slate_xml(
         a.set("attr",    "DIB_TYPE_NAME")
         a.set("value",   dib_type)
 
-        # 7. RECIPE_SELECTION attribute — from recipe selection output
-        if recipe_result.success and recipe_result.test_program_path:
+        # 7. RECIPE_SELECTION attribute — user-selected TGZ takes priority
+        # Priority mirrors TestJobArchive: 1) user tgz_path  2) recipe result
+        _recipe_sel_tgz = ""
+        if tgz_path and tgz_path.strip():
+            _recipe_sel_tgz = _normalize_tester_path(tgz_path)
+        elif recipe_result.success and recipe_result.test_program_path:
+            _recipe_sel_tgz = recipe_result.test_program_path  # Already uppercased
+        if _recipe_sel_tgz:
             a = ET.SubElement(tt, "Attribute")
             a.set("section", "RECIPE_SELECTION")
             a.set("attr",    "RECIPE_SEL_TEST_PROGRAM_PATH")
-            a.set("value",   recipe_result.test_program_path)  # Already uppercased
+            a.set("value",   _recipe_sel_tgz)
+            logger.info("DIAG: RECIPE_SEL_TEST_PROGRAM_PATH = %s", _recipe_sel_tgz)
 
         # 8. Remaining non-standard attributes (e.g. MOD_TST_SWR_NUMBER)
         for sect, name, val in after_recipe_attrs:
