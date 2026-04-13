@@ -404,6 +404,22 @@ class ForceFailGenerator:
 
         prompt = f"""You are generating force-fail code changes for SSD test program validation.
 
+## ⚠️ MANDATORY FILE CONSTRAINT — READ THIS FIRST ⚠️
+The "file" field in every patch MUST use an EXACT path from the file listing below.
+Files mentioned in the JIRA analysis (e.g. SendGearmanRequest.py) may NOT exist in this local repository clone.
+**If a file mentioned in the JIRA analysis is NOT in the listing below, you MUST choose a different file from the listing that is functionally related.**
+Any patch referencing a file not in this listing will be REJECTED and the case will be disabled.
+
+### Complete Repository File Listing (ONLY these files exist):
+```
+{repo_file_listing}
+```
+
+### Affected File Contents (use these for original_lines matching):
+{affected_files_content}
+
+---
+
 **JIRA Change Request Analysis:**
 {jira_analysis}
 
@@ -412,14 +428,6 @@ class ForceFailGenerator:
 
 **Repository Structure:**
 {repo_summary}
-
-**IMPORTANT — Complete Repository File Listing (ONLY these files exist):**
-```
-{repo_file_listing}
-```
-
-**Affected File Contents:**
-{affected_files_content}
 
 **Common Force-Fail Patterns for SSD Test Programs:**
 - Limit violations: Change threshold values to trigger out-of-range failures
@@ -435,11 +443,12 @@ class ForceFailGenerator:
 2. Each change must be reversible and clearly documented
 3. Only modify files directly related to the test scenario — NEVER modify framework/infrastructure code
 4. Ensure changes will cause a DETECTABLE failure (not a silent one)
-5. The original_lines MUST exactly match what exists in the file (including whitespace)
+5. The original_lines MUST exactly match what exists in the "Affected File Contents" section above (including whitespace)
 6. Keep modifications small and targeted — prefer changing values over restructuring code
 7. Maximum {self._max_patches} patches per force-fail case
-8. **ONLY reference files from the "Complete Repository File Listing" above. Do NOT invent or guess file names. If a file is not in the listing, it does not exist. Using non-existent files will cause validation failure.**
-9. The "file" field in each patch MUST be an exact relative path from the listing above
+8. **ONLY use files from the "Complete Repository File Listing". Do NOT use file names from the JIRA analysis if they are not in the listing. Cross-check EVERY "file" field against the listing before outputting.**
+9. The "file" field MUST be a verbatim path from the listing — no guessing, no inventing
+10. If the JIRA mentions a file that doesn't exist in the listing, find the closest matching file in the listing and use that instead
 
 **Output Format:**
 Return ONLY a valid JSON object with this exact structure (no markdown fences, no extra text):
