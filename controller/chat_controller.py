@@ -135,7 +135,21 @@ class ChatController:
         input_text.bind("<Control-Return>", lambda e: send_message())
         
         logger.info(f"Created interactive chat window: {title}")
-    
+
+    def open_interactive_chat(self, issue_key, step_name, initial_content, finalize_callback):
+        """Backward-compatible alias for create_interactive_chat.
+
+        Maps the legacy parameter ``step_name`` to ``title`` so that all
+        existing view code (analyze_jira_tab, test_scenarios_tab, etc.)
+        continues to work without modification.
+        """
+        return self.create_interactive_chat(
+            issue_key=issue_key,
+            title=step_name,
+            initial_content=initial_content,
+            finalize_callback=finalize_callback,
+        )
+
     def send_chat_message(self, user_message, chat_display):
         """
         Send a message to AI for refinement.
