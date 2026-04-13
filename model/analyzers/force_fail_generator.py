@@ -460,6 +460,7 @@ Return ONLY a valid JSON object with this exact structure (no markdown fences, n
         """
         Parse the AI response into ForceFailCase objects.
         Handles both clean JSON and JSON embedded in markdown code fences.
+        Resilient to common AI variations in key names and structure.
         """
         # Try to extract JSON from the response
         json_str = response.strip()
@@ -478,21 +479,160 @@ Return ONLY a valid JSON object with this exact structure (no markdown fences, n
             data = json.loads(json_str)
         except json.JSONDecodeError as e:
             self._log(f"⚠ Failed to parse AI response as JSON: {e}", "warning")
-            self._log(f"  Response preview: {response[:200]}...", "debug")
+            self._log(f"  Response preview: {response[:500]}...", "debug")
             return []
 
+        # --- Flexible top-level key detection ---
+        case_list: list = []
+        if isinstance(data, list):
+            # AI returned a bare list instead of wrapping in an object
+            case_list = data
+            self._log("  ℹ AI returned a bare JSON list (no wrapper key)", "debug")
+        elif isinstance(data, dict):
+            # Try known key names in priority order
+            for key in ("force_fail_cases", "cases", "test_cases",
+                        "force_fail", "forcefail_cases"):
+                if key in data and isinstance(data[key], list):
+                    case_list = data[key]
+                    if key != "force_fail_cases":
+                        self._log(f"  ℹ AI used top-level key '{key}' instead of 'force_fail_cases'", "debug")
+                    break
+            else:
+                # Last resort: if there's exactly one key whose value is a list, use it
+                list_keys = [k for k, v in data.items() if isinstance(v, list)]
+                if len(list_keys) == 1:
+                    case_list = data[list_keys[0]]
+                    self._log(f"  ℹ Using only list key '{list_keys[0]}' as case list", "debug")
+                else:
+                    self._log(f"⚠ Could not find case list in AI response. Keys: {list(data.keys())}", "warning")
+                    self._log(f"  Response preview: {response[:500]}", "debug")
+                    return []
+
+        if not case_list:
+            self._log("⚠ AI returned an empty case list", "warning")
+            return []
+
+        self._log(f"  ℹ Parsing {len(case_list)} raw case(s) from AI response")
+
         cases = []
-        for case_data in data.get("force_fail_cases", []):
+        for idx, case_data in enumerate(case_list):
+            if not isinstance(case_data, dict):
+                self._log(f"⚠ Case #{idx+1}: not a dict, skipping", "warning")
+                continue
             try:
-                case = ForceFailCase.from_dict(case_data)
+                # --- Normalize case-level keys ---
+                normalized = self._normalize_case_keys(case_data, idx + 1)
+                case = ForceFailCase.from_dict(normalized)
                 if case.test_id and case.patches:
                     cases.append(case)
                 else:
-                    self._log(f"⚠ Skipping case with missing test_id or patches", "warning")
+                    missing = []
+                    if not case.test_id:
+                        missing.append("test_id")
+                    if not case.patches:
+                        missing.append("patches")
+                    self._log(
+                        f"⚠ Case #{idx+1}: skipped — missing {', '.join(missing)}. "
+                        f"Keys in raw data: {list(case_data.keys())}",
+                        "warning",
+                    )
             except Exception as e:
-                self._log(f"⚠ Failed to parse force-fail case: {e}", "warning")
+                self._log(f"⚠ Case #{idx+1}: parse error — {e}", "warning")
 
         return cases
+
+    @staticmethod
+    def _normalize_case_keys(raw: dict, case_num: int) -> dict:
+        """
+        Map common AI key-name variations to the canonical schema.
+        Returns a new dict with canonical keys.
+        """
+        # --- test_id ---
+        test_id = (
+            raw.get("test_id")
+            or raw.get("id")
+            or raw.get("case_id")
+            or raw.get("testId")
+            or raw.get("name")
+            or f"FF-{case_num:03d}"
+        )
+
+        # --- description ---
+        description = (
+            raw.get("description")
+            or raw.get("desc")
+            or raw.get("summary")
+            or raw.get("title")
+            or ""
+        )
+
+        # --- rationale ---
+        rationale = (
+            raw.get("rationale")
+            or raw.get("reason")
+            or raw.get("justification")
+            or raw.get("explanation")
+            or ""
+        )
+
+        # --- patches ---
+        raw_patches = (
+            raw.get("patches")
+            or raw.get("changes")
+            or raw.get("modifications")
+            or raw.get("diffs")
+            or raw.get("file_changes")
+            or []
+        )
+
+        # Normalize each patch
+        normalized_patches = []
+        for p in raw_patches:
+            if not isinstance(p, dict):
+                continue
+            normalized_patches.append({
+                "file": (
+                    p.get("file")
+                    or p.get("file_path")
+                    or p.get("filepath")
+                    or p.get("path")
+                    or p.get("filename")
+                    or ""
+                ),
+                "original_lines": (
+                    p.get("original_lines")
+                    or p.get("original")
+                    or p.get("before")
+                    or p.get("search")
+                    or p.get("old_lines")
+                    or p.get("find")
+                    or []
+                ),
+                "modified_lines": (
+                    p.get("modified_lines")
+                    or p.get("modified")
+                    or p.get("after")
+                    or p.get("replace")
+                    or p.get("new_lines")
+                    or p.get("replacement")
+                    or []
+                ),
+                "line_number": (
+                    p.get("line_number")
+                    or p.get("line")
+                    or p.get("start_line")
+                    or p.get("lineno")
+                    or 0
+                ),
+            })
+
+        return {
+            "test_id": test_id,
+            "description": description,
+            "rationale": rationale,
+            "patches": normalized_patches,
+            "enabled": raw.get("enabled", True),
+        }
 
     # ──────────────────────────────────────────────────────────────────────
     # STEP 2: VALIDATION
