@@ -108,11 +108,8 @@ class HomeTab(BaseTab):
                                            show='*', width=70)
         self.jira_token_entry.grid(row=1, column=1, pady=2, sticky=tk.W)
         ttk.Button(cred_frame, text="👁", width=3,
-                   command=lambda: self._toggle_password_visibility(self.jira_token_entry)).grid(
-            row=1, column=2, padx=(2, 0), pady=2)
-        ttk.Button(cred_frame, text="Get Token", width=10,
                    command=lambda: self._open_url("https://id.atlassian.com/manage-profile/security/api-tokens")).grid(
-            row=1, column=3, padx=(5, 0), pady=2)
+            row=1, column=2, padx=(2, 0), pady=2)
 
         # Bitbucket Token with show/hide button
         ttk.Label(cred_frame, text="Bitbucket Token:").grid(row=2, column=0, sticky=tk.W, pady=2)
@@ -122,11 +119,8 @@ class HomeTab(BaseTab):
                                          show='*', width=70)
         self.bb_token_entry.grid(row=2, column=1, pady=2, sticky=tk.W)
         ttk.Button(cred_frame, text="👁", width=3,
-                   command=lambda: self._toggle_password_visibility(self.bb_token_entry)).grid(
-            row=2, column=2, padx=(2, 0), pady=2)
-        ttk.Button(cred_frame, text="Get Token", width=10,
                    command=lambda: self._open_url("https://bitbucket.micron.com/bbdc/plugins/servlet/access-tokens/manage")).grid(
-            row=2, column=3, padx=(5, 0), pady=2)
+            row=2, column=2, padx=(2, 0), pady=2)
 
         # Model API Key with show/hide button
         ttk.Label(cred_frame, text="Model API Key:").grid(row=3, column=0, sticky=tk.W, pady=2)
@@ -136,11 +130,8 @@ class HomeTab(BaseTab):
                                           show='*', width=70)
         self.model_key_entry.grid(row=3, column=1, pady=2, sticky=tk.W)
         ttk.Button(cred_frame, text="👁", width=3,
-                   command=lambda: self._toggle_password_visibility(self.model_key_entry)).grid(
-            row=3, column=2, padx=(2, 0), pady=2)
-        ttk.Button(cred_frame, text="Get Key", width=10,
                    command=lambda: self._open_url("https://model-gateway.gcldgenaigw.gc.micron.com/")).grid(
-            row=3, column=3, padx=(5, 0), pady=2)
+            row=3, column=2, padx=(2, 0), pady=2)
 
         # Credential buttons
         cred_btn_frame = ttk.Frame(cred_frame)
