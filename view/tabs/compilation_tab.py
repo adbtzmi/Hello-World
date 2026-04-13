@@ -47,9 +47,47 @@ class CompilationTab(BaseTab):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
-        # Main container frame
-        main_frame = ttk.Frame(self, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        # Create scrollable canvas (same pattern as checkout_tab)
+        canvas = tk.Canvas(self, highlightthickness=0, bd=0)
+        v_scroll = ttk.Scrollbar(self, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=v_scroll.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        v_scroll.grid(row=0, column=1, sticky="ns")
+
+        # Inner frame that will be scrollable
+        self._inner = ttk.Frame(canvas, padding=(8, 6, 8, 12))
+        self._inner.columnconfigure(0, weight=1)
+        _win = canvas.create_window((0, 0), window=self._inner, anchor="nw")
+
+        def _on_inner_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _on_canvas_configure(event):
+            canvas.itemconfig(_win, width=event.width)
+            # Ensure inner frame is at least as tall as the canvas
+            inner_h = self._inner.winfo_reqheight()
+            if inner_h < event.height:
+                canvas.itemconfig(_win, height=event.height)
+            else:
+                canvas.itemconfig(_win, height=inner_h)
+
+        self._inner.bind("<Configure>", _on_inner_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        def _bind_mousewheel(event):
+            canvas.bind_all("<MouseWheel>", _mousewheel)
+
+        def _unbind_mousewheel(event):
+            canvas.unbind_all("<MouseWheel>")
+
+        canvas.bind("<Enter>", _bind_mousewheel)
+        canvas.bind("<Leave>", _unbind_mousewheel)
+
+        # Use _inner as the main container instead of main_frame
+        main_frame = self._inner
         
         # 1. Compile TP Package (Top)
         compile_frame = ttk.LabelFrame(main_frame, text="Compile TP Package", padding="6")
