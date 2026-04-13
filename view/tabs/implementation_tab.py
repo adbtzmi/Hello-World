@@ -1145,8 +1145,14 @@ class ImplementationTab(BaseTab):
                 files = glob.glob(pattern, recursive=True)
                 files.sort(key=os.path.getmtime, reverse=True)
                 self.root.after(0, lambda: self._populate_history(files))
+            except RuntimeError:
+                # Main loop not ready yet (race condition during startup) — ignore
+                pass
             except Exception as e:
-                self.log(f"✗ Failed to load history: {e}")
+                try:
+                    self.log(f"✗ Failed to load history: {e}")
+                except RuntimeError:
+                    pass  # Main loop not ready
 
         threading.Thread(target=_fetch, daemon=True).start()
 
