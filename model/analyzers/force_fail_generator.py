@@ -191,12 +191,16 @@ class ForceFailGenerator:
         # Read contents of potentially affected files
         affected_files_content = self._read_affected_files(repo_path, repo_index)
 
+        # Build explicit file listing to ground the AI (RAG approach)
+        repo_file_listing = self._get_repo_file_listing(repo_path)
+
         # Build the prompt
         prompt = self._build_generation_prompt(
             jira_analysis=jira_analysis,
             force_fail_scenarios=ff_scenarios,
             repo_index=repo_index,
             affected_files_content=affected_files_content,
+            repo_file_listing=repo_file_listing,
         )
 
         # Call AI
@@ -225,6 +229,9 @@ class ForceFailGenerator:
             self._log(f"✓ AI generated {len(cases)} force-fail case(s)")
             for case in cases:
                 self._log(f"  • {case.test_id}: {case.description} ({len(case.patches)} patch(es))")
+
+            # Post-generation validation: auto-disable cases with non-existent files
+            cases = self._auto_disable_invalid_cases(cases, repo_path)
         else:
             self._log("⚠ AI response did not contain parseable force-fail cases")
 
@@ -257,6 +264,68 @@ class ForceFailGenerator:
                     ff_lines.append(line)
 
         return "\n".join(ff_lines) if ff_lines else ""
+
+    def _get_repo_file_listing(self, repo_path: str, max_files: int = 500) -> str:
+        """
+        Build an explicit listing of all files in the repository.
+        This grounds the AI so it can only reference files that actually exist,
+        eliminating hallucinated file paths (RAG approach).
+        """
+        if not os.path.isdir(repo_path):
+            return "(Repository path not accessible)"
+
+        all_files = []
+        excluded_dirs = {".git", "__pycache__", "node_modules", "release",
+                         ".venv", "build", "dist", ".tox"}
+        excluded_exts = {".pyc", ".pyo", ".o", ".d", ".a", ".map", ".elf",
+                         ".tgz", ".gz", ".zip", ".tar", ".bin", ".dat"}
+
+        for root, dirs, files in os.walk(repo_path):
+            dirs[:] = [d for d in dirs if d not in excluded_dirs]
+            for fname in files:
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in excluded_exts:
+                    continue
+                rel_path = os.path.relpath(
+                    os.path.join(root, fname), repo_path
+                ).replace("\\", "/")
+                all_files.append(rel_path)
+
+        all_files.sort()
+        if len(all_files) > max_files:
+            all_files = all_files[:max_files]
+            all_files.append(f"... ({len(all_files)} files shown, more exist)")
+
+        return "\n".join(all_files) if all_files else "(Empty repository)"
+
+    def _auto_disable_invalid_cases(
+        self, cases: List[ForceFailCase], repo_path: str
+    ) -> List[ForceFailCase]:
+        """
+        Post-generation validation: auto-disable cases that reference
+        files not found in the repository. Logs warnings for transparency.
+        """
+        disabled_count = 0
+        for case in cases:
+            has_invalid = False
+            for patch in case.patches:
+                file_path = os.path.join(repo_path, patch.file)
+                if not os.path.isfile(file_path):
+                    self._log(
+                        f"  ⚠ [{case.test_id}] File not found: {patch.file} "
+                        f"— auto-disabling case", "warning"
+                    )
+                    has_invalid = True
+                    break
+            if has_invalid and case.enabled:
+                case.enabled = False
+                disabled_count += 1
+
+        if disabled_count:
+            self._log(
+                f"⚠ Auto-disabled {disabled_count} case(s) with invalid file paths"
+            )
+        return cases
 
     def _read_affected_files(
         self, repo_path: str, repo_index: Optional[Dict]
@@ -321,6 +390,7 @@ class ForceFailGenerator:
         force_fail_scenarios: str,
         repo_index: Optional[Dict],
         affected_files_content: str,
+        repo_file_listing: str = "",
     ) -> str:
         """Build the prompt for AI force-fail generation."""
         # Build repo summary
@@ -334,6 +404,22 @@ class ForceFailGenerator:
 
         prompt = f"""You are generating force-fail code changes for SSD test program validation.
 
+## ⚠️ MANDATORY FILE CONSTRAINT — READ THIS FIRST ⚠️
+The "file" field in every patch MUST use an EXACT path from the file listing below.
+Files mentioned in the JIRA analysis (e.g. SendGearmanRequest.py) may NOT exist in this local repository clone.
+**If a file mentioned in the JIRA analysis is NOT in the listing below, you MUST choose a different file from the listing that is functionally related.**
+Any patch referencing a file not in this listing will be REJECTED and the case will be disabled.
+
+### Complete Repository File Listing (ONLY these files exist):
+```
+{repo_file_listing}
+```
+
+### Affected File Contents (use these for original_lines matching):
+{affected_files_content}
+
+---
+
 **JIRA Change Request Analysis:**
 {jira_analysis}
 
@@ -342,9 +428,6 @@ class ForceFailGenerator:
 
 **Repository Structure:**
 {repo_summary}
-
-**Affected File Contents:**
-{affected_files_content}
 
 **Common Force-Fail Patterns for SSD Test Programs:**
 - Limit violations: Change threshold values to trigger out-of-range failures
@@ -355,14 +438,17 @@ class ForceFailGenerator:
 - Boundary violations: Set values just outside acceptable ranges
 - Return code changes: Change pass return codes to fail codes
 
-**Instructions:**
+**CRITICAL RULES:**
 1. For each force-fail test case, generate the MINIMAL code changes needed to cause a specific, detectable failure
 2. Each change must be reversible and clearly documented
 3. Only modify files directly related to the test scenario — NEVER modify framework/infrastructure code
 4. Ensure changes will cause a DETECTABLE failure (not a silent one)
-5. The original_lines MUST exactly match what exists in the file (including whitespace)
+5. The original_lines MUST exactly match what exists in the "Affected File Contents" section above (including whitespace)
 6. Keep modifications small and targeted — prefer changing values over restructuring code
 7. Maximum {self._max_patches} patches per force-fail case
+8. **ONLY use files from the "Complete Repository File Listing". Do NOT use file names from the JIRA analysis if they are not in the listing. Cross-check EVERY "file" field against the listing before outputting.**
+9. The "file" field MUST be a verbatim path from the listing — no guessing, no inventing
+10. If the JIRA mentions a file that doesn't exist in the listing, find the closest matching file in the listing and use that instead
 
 **Output Format:**
 Return ONLY a valid JSON object with this exact structure (no markdown fences, no extra text):

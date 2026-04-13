@@ -452,7 +452,7 @@ class ImplementationTab(BaseTab):
         self._ff_tree.delete(*self._ff_tree.get_children())
         for case in cases:
             status = "✓" if case.enabled else "○"
-            files = ", ".join(p.file_path for p in case.patches)
+            files = ", ".join(p.file for p in case.patches)
             tag = "enabled" if case.enabled else "disabled"
             self._ff_tree.insert("", tk.END, iid=case.test_id, values=(
                 status, case.test_id, case.description, files
