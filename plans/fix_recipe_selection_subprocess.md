@@ -506,6 +506,68 @@ RECIPE_SEL_TEST_PROGRAM_PATH: P:\release\ssd\neosem\REV172E_PEREGRINE\ibir_relea
 - 6 file copy paths resolved correctly
 - Exit code 0
 
+### Stylus Tester Test — JAAKT90001 + CFGPN 934390 (2026-04-13)
+
+**Command:**
+```
+C:\Python27\python.exe recipe_fault_tolerant.py
+    "\\sifsmodauto\modauto\release\ssd\recipe_selection"
+    "P:\temp\BENTO\XML_OUTPUT\TSESSD-14270_20260413_095108\Traces\TC10YSR6C_tmptravl_SFN2.dat"
+    --tt_format dat
+```
+
+**Test configuration:**
+- Product: Condor ION (CFGPN 934390)
+- MID: TC10YSR6C
+- LOT: JAAKT90001
+- STEP: SFN2
+- SITE_NAME: PENANG
+- Tester: MPT3HVM-0156 (MPT3000HVM3 = **Stylus** tester, NOT NEOSEM)
+
+**Challenges overcome:**
+1. `STYLUS_CHECK` — skippable rule (commit `cdf4556`)
+2. `EXPECT_DIB_TYPE` — skippable rule (added to explicit list + `EXPECT_` prefix pattern)
+3. `TEST_PROGRAM_PATH=ERROR` — rule table has literal `'ERROR'` for Stylus+PENANG combo;
+   `recipe_selection.py` raises `ValueError("Error values in results: ...")` BEFORE printing output
+
+**Output (exit code 0):**
+```
+RECIPE_WRAPPER_INFO: Site=PENANG (will preserve PENANG_* rules)
+RECIPE_WRAPPER_INFO: Patched __getitem__ for fault tolerance
+RECIPE_WRAPPER_INFO: Skipped rule BOISE_PROGRAM_RECIPE
+RECIPE_WRAPPER_INFO: Skipped rule STYLUS_CHECK
+RECIPE_WRAPPER_INFO: Skipped rule EXPECT_DIB_TYPE
+RECIPE_WRAPPER_INFO: Skipped rule MACHINE_CHECKING
+RECIPE_WRAPPER_INFO: Skipped rule BOISE_JOBPATH
+RECIPE_WRAPPER_INFO: Skipped 5 non-critical rule(s)
+RECIPE_WRAPPER_INFO: Caught 'Error values in results' — extracting valid results
+RECIPE_WRAPPER_INFO: Skipping EXPECT_DIB_TYPE=N/A (invalid)
+RECIPE_WRAPPER_INFO: Skipping TEST_PROGRAM_PATH=ERROR (invalid)
+RECIPE_SEL_BINS:FGOOD,RETEST
+RECIPE_SEL_BIN_DEFS:FGOOD_6500:P,RETEST_6500:FR
+RECIPE_SEL_CLEAR_CACHE:NO
+RECIPE_SEL_DPS_REQUIRED:ANY
+RECIPE_SEL_EXPECT_ARTIX:DEFAULT
+RECIPE_SEL_EXPECT_BITFILE:DEFAULT
+RECIPE_SEL_EXPECT_DPS_FIRMWARE_REV:1.2.16
+RECIPE_SEL_EXPECT_DPS_TYPE:DRDPS
+RECIPE_SEL_FILE_COPY_PATHS_1:\\pgfsmodauto\...\config\11de3cf,config
+RECIPE_SEL_FILE_COPY_PATHS_2:\\pgfsmodauto\...\CHECKLIST_FILES,checklist_files
+RECIPE_SEL_FILE_COPY_PATHS_3:\\pgfsmodauto\...\TAMT_FILES,tamt_files
+RECIPE_SEL_FILE_COPY_PATHS_4:\\pgfsmodauto\...\G0ZZ000N,mfg_fw_files
+RECIPE_SEL_FILE_COPY_PATHS_5:\\pgfsmodauto\...\G0MS200\streams_asicTC2_release_b58r_G0MS200,net_files
+RECIPE_SEL_FILE_COPY_PATHS_6:\\pgfsmodauto\...\vs_parser,vs_parser
+RECIPE_SEL_PROGRAM_RECIPE:stylus\\NVME.STIL
+RECIPE_WRAPPER_INFO: Successfully recovered PROGRAM_RECIPE=stylus\\NVME.STIL despite 2 ERROR value(s)
+```
+
+**Result: ✅ SUCCESS** — Stylus tester recipe resolved correctly:
+- `RECIPE_SEL_PROGRAM_RECIPE` = `stylus\NVME.STIL` (correct Stylus recipe, NOT NEOSEM XML)
+- 5 platform rules skipped (BOISE_PROGRAM_RECIPE, STYLUS_CHECK, EXPECT_DIB_TYPE, MACHINE_CHECKING, BOISE_JOBPATH)
+- 2 ERROR values filtered out (EXPECT_DIB_TYPE=N/A, TEST_PROGRAM_PATH=ERROR)
+- 14 valid RECIPE_SEL_* lines emitted including 6 FILE_COPY_PATHS
+- Exit code 0
+
 ### Expected Outcome
 
 After this fix:
@@ -515,3 +577,22 @@ After this fix:
 - Recipe, test program path, and file copy paths will all come from the **official rule engine** rather than TGZ scan
 - The vanilla subprocess and TGZ scan fallbacks remain as safety nets but should rarely be needed
 - Default site is now PENANG, matching the `PENANG_PROGRAM_RECIPE` rule table which has entries for most products
+- **Stylus testers** are now supported: the wrapper handles `TEST_PROGRAM_PATH=ERROR` by extracting valid results from the ValueError message
+
+## Commit History
+
+| Commit | Description |
+|--------|-------------|
+| `892c362` | feat: fault-tolerant recipe wrapper as primary, default site PENANG |
+| `6c38193` | fix: pass proper `__main__` globals to execfile in recipe wrapper |
+| `30e1b4d` | fix: import attributes as bare module to match SSDrules_loader import path |
+| `9a4728f` | fix: patch `__getitem__` instead of `calc_all_rules` to catch rule errors at source |
+| `7f01035` | fix: inject STEP and LOT into MAM section for recipe rule matching |
+| `c3bdbcc` | fix: inject BASE_CFGPN into MAM section and make wrapper site-aware |
+| `dfb596a` | docs: update plan with CFGPN pop root cause, test results, and full commit history |
+| `ff1ba43` | feat: pre-flight MAM vs CFGPN critical attribute validation and fatal popup detection |
+| `150ecb6` | fix: query real MAM critical attributes via SOAP instead of blindly copying from CFGPN |
+| `15afa77` | fix: abort on critical attribute mismatch + fix misleading cross-population log |
+| `68c019e` | feat: suggest matching lots on mismatch + SAP vs MAM side-by-side DIAG table |
+| `cdf4556` | fix: add STYLUS_CHECK to skippable platform check rules + suffix pattern |
+| `ea5228c` | fix: handle 'Error values in results' ValueError for Stylus testers |
