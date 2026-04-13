@@ -83,7 +83,14 @@ _PLATFORM_CHECK_RULES = [
     'MACHINE_CHECKING',
     'PASS_MFG_STATUS_CHECK',
     'PROG_RECIPE_CHECK',
+    'STYLUS_CHECK',
 ]
+
+# Suffix patterns for platform-specific check rules.
+# Any rule ending with one of these suffixes is treated as a platform check
+# and can be safely skipped.  This future-proofs against new *_CHECK rules
+# being added to the rule tables that BENTO doesn't have data for.
+_PLATFORM_CHECK_SUFFIXES = ['_CHECK', '_CHECKING']
 
 # Broader pattern fragments for future-proofing site rules
 _SITE_RULE_FRAGMENTS = ['_PROGRAM_RECIPE', '_JOBPATH']
@@ -115,9 +122,14 @@ def _is_skippable_rule(rule_name):
     - It's a platform-specific check (VERSION_CHECK, etc.)
     - It's a site-specific rule for a DIFFERENT site than the current one
     """
-    # Platform checks are always skippable
+    # Platform checks are always skippable (explicit list)
     if rule_name in _PLATFORM_CHECK_RULES:
         return True
+
+    # Platform checks by suffix pattern (future-proofing)
+    for suffix in _PLATFORM_CHECK_SUFFIXES:
+        if rule_name.endswith(suffix):
+            return True
 
     # Check if it's a site-specific rule
     is_site_rule = rule_name in _ALL_SITE_RULES
