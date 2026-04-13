@@ -254,7 +254,6 @@ class CheckoutTab(BaseTab):
         self._build_paths_section(f, row=1)
         self._build_detection_tester_section(f, row=2)
         self._build_action_buttons(f, row=3)
-        self._build_results_section(f, row=4)
         self._build_test_progress_section(f, row=5)
 
         # ── Keyboard shortcuts ───────────────────────────────────────────
@@ -299,6 +298,20 @@ class CheckoutTab(BaseTab):
         hw_btn.pack(side=tk.LEFT, padx=(0, 0))
         _tip(hw_btn, "View and edit hardware configuration (DIB_TYPE, MACHINE_MODEL,\n"
              "MACHINE_VENDOR) used for profile generation and tmptravl creation.")
+
+        self.gen_btn = ttk.Button(toolbar, text="Generate Profile",
+                   command=self._generate_xml_only)
+        self.gen_btn.pack(side=tk.LEFT, padx=(6, 3))
+        self.context.lockable_buttons.append(self.gen_btn)
+        _tip(self.gen_btn, "Build SLATE XML profile(s) and save to XML_OUTPUT folder.\n"
+                      "Does NOT trigger checkout. Inspect XML, then copy to\n"
+                      "CHECKOUT_QUEUE manually when ready.\n"
+                      "Shortcut: Ctrl+Enter (Start)  |  Ctrl+I (Import XML)")
+
+        imp_btn = ttk.Button(toolbar, text="📥 Import Profile",
+                   command=self._import_xml)
+        imp_btn.pack(side=tk.LEFT, padx=(0, 3))
+        _tip(imp_btn, "Load an existing SLATE XML profile and auto-fill TGZ path from it.")
 
         # ── CRT Source row ────────────────────────────────────────────────
         src_row = ttk.Frame(frm)
@@ -542,42 +555,11 @@ class CheckoutTab(BaseTab):
         side_frame = ttk.Frame(parent)
         side_frame.grid(row=row, column=0, sticky="we", pady=(0, 14))
         side_frame.columnconfigure(0, weight=1)
-        side_frame.columnconfigure(1, weight=2)
-
-        # ── SLATE Detection ───────────────────────────────────────────────
-        detect_frame = ttk.LabelFrame(side_frame, text="  SLATE Detection  ",
-                                      padding=(8, 6, 8, 8))
-        detect_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        detect_frame.columnconfigure(1, weight=1)
-
-        ttk.Label(detect_frame, text="Method:").grid(
-            row=0, column=0, sticky=tk.W, pady=(0, 4))
-        method_cb = ttk.Combobox(detect_frame,
-                     textvariable=self.context.get_var('checkout_detect_method'),
-                     values=["AUTO", "LOG", "FOLDER", "CPU", "TIMEOUT"],
-                     state="readonly", width=10)
-        method_cb.grid(row=0, column=1, columnspan=2, sticky=tk.W,
-                       padx=(6, 0), pady=(0, 4))
-        _tip(method_cb,
-             "How BENTO detects SLATE completion:\n"
-             "  AUTO    – tries LOG → FOLDER → CPU\n"
-             "  LOG     – watches SLATE log file\n"
-             "  FOLDER  – watches output folder\n"
-             "  CPU     – monitors CPU idle\n"
-             "  TIMEOUT – waits fixed duration")
-
-        ttk.Label(detect_frame, text="Time (min):").grid(
-            row=1, column=0, sticky=tk.W, pady=(0, 4))
-        timeout_spin = ttk.Spinbox(detect_frame,
-                    textvariable=self.context.get_var('checkout_timeout_min'),
-                    from_=5, to=480, width=6)
-        timeout_spin.grid(row=1, column=1, sticky=tk.W, padx=(6, 0), pady=(0, 4))
-        _tip(timeout_spin, "Maximum wait time per tester (minutes). Range: 5–480.")
 
         # ── Tester Selection ──────────────────────────────────────────────
         tester_outer = ttk.LabelFrame(side_frame, text="  Tester Selection  ",
                                       padding=(8, 6, 8, 8))
-        tester_outer.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        tester_outer.grid(row=0, column=0, sticky="nsew", padx=(0, 0))
         tester_outer.columnconfigure(0, weight=1)
 
         # Header bar
@@ -622,82 +604,6 @@ class CheckoutTab(BaseTab):
         self.stop_btn.pack(side=tk.LEFT, padx=(0, 10))
         self.stop_btn.state(["disabled"])
         _tip(self.stop_btn, "Abort the running checkout on all testers.")
-
-        ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(
-            side=tk.LEFT, fill=tk.Y, padx=(0, 10), pady=4)
-
-        self.gen_btn = ttk.Button(btn_frame, text="Generate XML Only", width=18,
-                   command=self._generate_xml_only)
-        self.gen_btn.pack(side=tk.LEFT, padx=(0, 3))
-        self.context.lockable_buttons.append(self.gen_btn)
-        _tip(self.gen_btn, "Build SLATE XML profile(s) and save to XML_OUTPUT folder.\n"
-                      "Does NOT trigger checkout. Inspect XML, then copy to\n"
-                      "CHECKOUT_QUEUE manually when ready.\n"
-                      "Shortcut: Ctrl+Enter (Start)  |  Ctrl+I (Import XML)")
-
-        imp_btn = ttk.Button(btn_frame, text="📥 Import XML", width=14,
-                   command=self._import_xml)
-        imp_btn.pack(side=tk.LEFT, padx=(0, 3))
-        _tip(imp_btn, "Load an existing SLATE XML profile and auto-fill TGZ path from it.")
-
-        ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(
-            side=tk.LEFT, fill=tk.Y, padx=(4, 10), pady=4)
-
-        sel_btn = ttk.Button(btn_frame, text="Select All", width=10,
-                   command=self._select_all)
-        sel_btn.pack(side=tk.LEFT, padx=(0, 3))
-        _tip(sel_btn, "Select all testers.")
-
-        desel_btn = ttk.Button(btn_frame, text="Deselect All", width=12,
-                   command=self._deselect_all)
-        desel_btn.pack(side=tk.LEFT, padx=(0, 3))
-        _tip(desel_btn, "Deselect all testers.")
-
-        ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(
-            side=tk.LEFT, fill=tk.Y, padx=(4, 10), pady=4)
-
-        queue_btn = ttk.Button(btn_frame, text="📂 Queue Folder", width=15,
-                   command=self._open_queue_folder)
-        queue_btn.pack(side=tk.LEFT)
-        _tip(queue_btn, "Open the BENTO checkout queue folder in Windows Explorer.")
-
-    # ──────────────────────────────────────────────────────────────────────
-    # SECTION 5 — Checkout Results
-    # ──────────────────────────────────────────────────────────────────────
-
-    def _build_results_section(self, parent, row):
-        frm = ttk.LabelFrame(parent, text="  Checkout Results  ",
-                             padding=(8, 6, 8, 8))
-        frm.grid(row=row, column=0, sticky="we", pady=(0, 14))
-        frm.columnconfigure(0, weight=1)
-
-        # Toolbar
-        toolbar = ttk.Frame(frm)
-        toolbar.grid(row=0, column=0, sticky="we", pady=(0, 4))
-        ttk.Label(toolbar, text="Live output from checkout runs:",
-                  font=("Segoe UI", 8)).pack(side=tk.LEFT)
-        clear_btn = ttk.Button(toolbar, text="Clear", width=6,
-                    command=self._clear_results)
-        clear_btn.pack(side=tk.RIGHT)
-        _tip(clear_btn, "Clear the results log.")
-
-        # Text area
-        result_container = ttk.Frame(frm)
-        result_container.grid(row=1, column=0, sticky="nsew")
-        result_container.columnconfigure(0, weight=1)
-
-        self.results_text = tk.Text(
-            result_container,
-            height=5,
-            state=tk.DISABLED,
-            font=("Consolas", 9),
-            wrap=tk.WORD,
-        )
-        results_scroll = ttk.Scrollbar(result_container, orient=tk.VERTICAL,
-                                        command=self.results_text.yview)
-        self.results_text.configure(yscrollcommand=results_scroll.set)
-        self.results_text.grid(row=0, column=0, sticky="nsew")
-        results_scroll.grid(row=0, column=1, sticky="ns")
 
     # ──────────────────────────────────────────────────────────────────────
     # PROFILE TABLE — DATA MANAGEMENT
@@ -1383,16 +1289,7 @@ class CheckoutTab(BaseTab):
             lbl.configure(text=phase)
 
     def _clear_results(self):
-        # Guard: don't clear if there's content without confirmation
-        content = self.results_text.get("1.0", tk.END).strip()
-        if content:
-            if not messagebox.askyesno(
-                    "Clear Results",
-                    "Clear all checkout results?\nThis cannot be undone."):
-                return
-        self.results_text.configure(state=tk.NORMAL)
-        self.results_text.delete("1.0", tk.END)
-        self.results_text.configure(state=tk.DISABLED)
+        pass
 
     def _open_queue_folder(self):
         queue_path = r"P:\temp\BENTO\CHECKOUT_QUEUE"
@@ -1404,10 +1301,7 @@ class CheckoutTab(BaseTab):
                             "Ensure P: drive is mapped.")
 
     def _append_result(self, text: str):
-        self.results_text.configure(state=tk.NORMAL)
-        self.results_text.insert(tk.END, text + "\n")
-        self.results_text.see(tk.END)
-        self.results_text.configure(state=tk.DISABLED)
+        self.log(text)
 
     # ──────────────────────────────────────────────────────────────────────
     # VIEW CALLBACKS
