@@ -549,10 +549,9 @@ def generate_slate_xml(
         hw_config = get_hardware_config()
         step = env.upper()
         mam_step, cfgpn_step_id = hw_config.get_step_names(step)
-        # form_factor defaults to empty — will use fallback DIB
-        # In future, form_factor will come from profile_table row
+        # form_factor: caller-provided takes priority; otherwise resolved
+        # from MAM MODULE_FORM_FACTOR after the MAM query below.
         _form_factor = form_factor
-        dib_type = hw_config.get_dib_type(step, _form_factor) if _form_factor else hw_config.get_dib_type(step, "U.2")
 
         # ── MAM attribute query (PyMIPC) ─────────────────────────────
         mam_attrs = {}
@@ -564,6 +563,10 @@ def generate_slate_xml(
                     _log(logger, f"Using CFGPN from MAM: {cfgpn}", log_callback)
                 if mam_attrs.get("MCTO"):
                     _log(logger, f"MAM MCTO: {mam_attrs['MCTO']}", log_callback)
+                # Auto-detect form factor from MAM if caller didn't provide one
+                if not _form_factor and mam_attrs.get("MODULE_FORM_FACTOR"):
+                    _form_factor = mam_attrs["MODULE_FORM_FACTOR"]
+                    _log(logger, f"Form factor from MAM: {_form_factor}", log_callback)
 
         # ── Dummy lot → CFGPN/MCTO lookup via MIPC SOAP ─────────────
         # If we have a dummy lot but still no CFGPN (PyMIPC unavailable
@@ -611,6 +614,15 @@ def generate_slate_xml(
                 _log(logger,
                      f"⚠ Dummy lot lookup failed: {lot_result.get('error', 'unknown')}",
                      log_callback, "warning")
+
+        # ── Resolve form factor from SOAP if PyMIPC didn't provide it ─
+        if not _form_factor and mam_attrs.get("MODULE_FORM_FACTOR"):
+            _form_factor = mam_attrs["MODULE_FORM_FACTOR"]
+            _log(logger, f"Form factor from SOAP: {_form_factor}", log_callback)
+
+        # ── Resolve DIB_TYPE now that form_factor is known ────────────
+        dib_type = hw_config.get_dib_type(step, _form_factor) if _form_factor else hw_config.get_dib_type(step, "U.2")
+        _log(logger, f"DIB_TYPE: {dib_type} (step={step}, form_factor={_form_factor or 'U.2 default'})", log_callback)
 
         # ── SAP attribute query (CFGPN + MCTO) ──────────────────────
         cfgpn_attrs = {}
@@ -902,21 +914,22 @@ def generate_slate_xml(
         ET.SubElement(profile, "RecipeFile").text = recipe.upper() if recipe else ""
 
         # ── TempTraveler — CAT-aligned attribute format ───────────────
-        # Attribute ordering MUST match working tester XML exactly:
+        # Attribute ordering MUST match CAT's working XML exactly:
         #   1. MAM/STEP
         #   2. MAM/NAND_OPTION  (from attr_overwrites)
-        #   3. CFGPN/STEP_ID    (spaces, not underscores — "AMB BI TEST")
-        #   4. CFGPN/SEC_PROCESS
-        #   5. EQUIPMENT/DIB_TYPE
-        #   6. EQUIPMENT/DIB_TYPE_NAME
-        #   7. RECIPE_SELECTION/RECIPE_SEL_TEST_PROGRAM_PATH
-        #   8. MAM/MOD_TST_SWR_NUMBER (from attr_overwrites)
+        #   3. CFGPN/STEP_ID    (underscores — "SSD_FIN_TEST2", matching CAT)
+        #   4. EQUIPMENT/DIB_TYPE
+        #   5. EQUIPMENT/DIB_TYPE_NAME
+        #   6. RECIPE_SELECTION/RECIPE_SEL_TEST_PROGRAM_PATH
+        #   7. MAM/MOD_TST_SWR_NUMBER (from attr_overwrites)
+        # NOTE: CAT does NOT include SEC_PROCESS — removed to match.
         tt = ET.SubElement(profile, "TempTraveler")
 
-        # STEP_ID: working tester XML uses spaces ("AMB BI TEST"), not
-        # underscores ("AMB_BI_TEST").  Replace underscores with spaces.
-        cfgpn_step_id_spaced = cfgpn_step_id.replace("_", " ")
-        sec_process_value = f"{step}_REQD"
+        # STEP_ID: CAT uses underscores ("SSD_FIN_TEST2"), NOT spaces.
+        # The STEP_NAME config stores them with underscores already.
+        # Previous code replaced underscores with spaces — WRONG.
+        # CAT's ProfileDump/main.py:873 uses "SSD_FIN_TEST2" (underscores).
+        cfgpn_step_id_underscored = cfgpn_step_id.replace(" ", "_")
 
         # Collect non-standard TempTraveler attributes from ATTR_OVERWRITE
         # Split into "before DIB" (NAND_OPTION) and "after RECIPE_SEL" (rest)
@@ -950,19 +963,17 @@ def generate_slate_xml(
             a.set("attr",    name)
             a.set("value",   val)
 
-        # 3. CFGPN/STEP_ID (with spaces)
+        # 3. CFGPN/STEP_ID (with underscores — matching CAT)
         a = ET.SubElement(tt, "Attribute")
         a.set("section", "CFGPN")
         a.set("attr",    "STEP_ID")
-        a.set("value",   cfgpn_step_id_spaced)
+        a.set("value",   cfgpn_step_id_underscored)
 
-        # 4. CFGPN/SEC_PROCESS
-        a = ET.SubElement(tt, "Attribute")
-        a.set("section", "CFGPN")
-        a.set("attr",    "SEC_PROCESS")
-        a.set("value",   sec_process_value)
+        # NOTE: SEC_PROCESS removed — CAT's working XML does NOT include it.
+        # Previously BENTO added CFGPN/SEC_PROCESS = "{step}_REQD" but this
+        # attribute is absent from CAT-generated XMLs that load successfully.
 
-        # 5. EQUIPMENT/DIB_TYPE
+        # 4. EQUIPMENT/DIB_TYPE
         a = ET.SubElement(tt, "Attribute")
         a.set("section", "EQUIPMENT")
         a.set("attr",    "DIB_TYPE")
