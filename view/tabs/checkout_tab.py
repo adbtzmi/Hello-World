@@ -359,9 +359,20 @@ class CheckoutTab(BaseTab):
         grid_container.columnconfigure(0, weight=1)
 
         cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
+        
+        # Configure style for gridlines
+        style = ttk.Style()
+        style.configure("ProfileGrid.Treeview", rowheight=25)
+        style.configure("ProfileGrid.Treeview.Heading", font=("Segoe UI", 9, "bold"))
+        
         self._profile_grid = ttk.Treeview(
             grid_container, columns=cols, show="headings",
-            height=5, selectmode="browse")
+            height=5, selectmode="browse", style="ProfileGrid.Treeview")
+        
+        # Configure row tags for alternating colors with borders
+        self._profile_grid.tag_configure("oddrow", background="#ffffff")
+        self._profile_grid.tag_configure("evenrow", background="#f5f5f5")
+        
         for col_name, col_width in self._PROFILE_GEN_COLUMNS:
             self._profile_grid.heading(col_name, text=col_name, anchor=tk.W)
             self._profile_grid.column(col_name, width=col_width, minwidth=40,
@@ -675,7 +686,7 @@ class CheckoutTab(BaseTab):
         for row in self._profile_grid.get_children():
             self._profile_grid.delete(row)
         cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
-        for row_dict in self._profile_data:
+        for idx, row_dict in enumerate(self._profile_data):
             # Auto-populate hardware config if Step and Form_Factor are present
             step = row_dict.get("Step", "").strip()
             form_factor = row_dict.get("Form_Factor", "").strip()
@@ -689,7 +700,9 @@ class CheckoutTab(BaseTab):
                     row_dict["MACHINE_VENDOR"] = hw_config.get_machine_vendor(step)
             
             values = [str(row_dict.get(col, "")) for col in cols]
-            self._profile_grid.insert("", tk.END, values=values)
+            # Apply alternating row colors
+            tag = "evenrow" if idx % 2 == 0 else "oddrow"
+            self._profile_grid.insert("", tk.END, values=values, tags=(tag,))
         self._profile_row_count_label.configure(
             text=f"{len(self._profile_data)} row(s)")
 
