@@ -185,40 +185,6 @@ class CompileController:
             # Notify View: compile finished for this tester
             self._master.on_compile_completed(hostname, env, result)
 
-            # ── Teams notification for compilation result ──────────────
-            try:
-                from model.orchestrators.compilation_orchestrator import (
-                    send_compile_teams_notification,
-                )
-                notify_enabled = self._config.get(
-                    "notifications", {}
-                ).get("notify_on_complete", True)
-                notify_on_fail = self._config.get(
-                    "notifications", {}
-                ).get("notify_on_failure", True)
-
-                should_notify = (
-                    (result.get("status") == "success" and notify_enabled)
-                    or (result.get("status") != "success" and notify_on_fail)
-                )
-                if should_notify:
-                    send_compile_teams_notification(
-                        jira_key    = jira_key,
-                        hostname    = hostname,
-                        env         = env,
-                        status      = result.get("status", "unknown"),
-                        detail      = result.get("detail", ""),
-                        elapsed     = result.get("elapsed", 0),
-                        tgz_file    = result.get("tgz_file", "") or "",
-                        webhook_url = webhook_url,
-                        log_callback = self._make_log_callback(hostname),
-                    )
-            except Exception as e:
-                logger.warning(
-                    f"CompileController: Teams notification failed "
-                    f"(non-fatal) [{hostname}]: {e}"
-                )
-
             return result
 
         try:
