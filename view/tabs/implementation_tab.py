@@ -1052,11 +1052,16 @@ class ImplementationTab(BaseTab):
         status = result.get("status", "failed").upper()
         elapsed = result.get("elapsed", 0)
         jira_key = self.context.get_var("issue_var").get().strip()
+        # Use tgz_file from result (actual filename), fall back to label var
+        tgz_file = result.get("tgz_file", "") or ""
         label = self.context.get_var("tgz_label_var").get().strip()
+        if not tgz_file:
+            tgz_file = f"{status} ({elapsed}s)"
 
         import datetime
         ts = datetime.datetime.now().strftime("%H:%M:%S")
-        self._history_tree.insert("", 0, values=(ts, jira_key, hostname, label, status, f"{elapsed}s"))
+        # Columns: ("Timestamp", "JIRA", "Tester", "ENV", "Label", "Output TGZ")
+        self._history_tree.insert("", 0, values=(ts, jira_key, hostname, env, label, tgz_file))
 
         self.unlock_gui()
         self.compile_status_var.set("")
