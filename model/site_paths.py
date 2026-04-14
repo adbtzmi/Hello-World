@@ -8,11 +8,12 @@ import os
 from typing import Dict, Optional
 
 # Site to base path mapping
+# Using mapped drive letters for better performance and reliability
 SITE_BASE_PATHS: Dict[str, str] = {
-    "SINGAPORE": r"\\sisfomodauto\modauto\temp",
-    "BOISE": r"\\bofsmodauto\modauto\temp",
-    "PENANG": r"P:\temp",  # MUST REMAIN UNCHANGED
-    "SANAND": r"\\snfsmodauto\modauto\temp",
+    "SINGAPORE": r"Q:\temp",  # Mapped from \\sisfomodauto\modauto
+    "BOISE": r"R:\temp",      # Mapped from \\bofsmodauto\modauto
+    "PENANG": r"P:\temp",     # Mapped from \\pgfsmodauto\modauto (MUST REMAIN UNCHANGED)
+    "SANAND": r"N:\temp",     # Mapped from \\snfsmodauto\modauto
 }
 
 # Available sites in display order
