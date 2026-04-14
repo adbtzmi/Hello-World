@@ -66,11 +66,32 @@ class HomeTab(BaseTab):
         ttk.Entry(config_frame, textvariable=self.context.get_var('model_url'), width=70).grid(
             row=3, column=1, columnspan=3, pady=2, sticky=tk.W)
 
-        # Debug toggle with trace to update indicator
+        # Webhook URL (right after Model Gateway)
+        ttk.Label(config_frame, text="Webhook URL:").grid(
+            row=4, column=0, sticky=tk.W, pady=2)
+        
+        # Initialise notification variables here (Home tab is built before Checkout tab)
+        if self.context.get_var('checkout_webhook_url') is None:
+            self.context.set_var('checkout_webhook_url', tk.StringVar(
+                value=self.context.config.get('notifications', {}).get('teams_webhook_url', '')))
+        
+        webhook_entry = ttk.Entry(config_frame,
+                                  textvariable=self.context.get_var('checkout_webhook_url'),
+                                  width=70)
+        webhook_entry.grid(row=4, column=1, columnspan=3, pady=2, sticky=tk.W)
+
+        # Checkboxes on separate rows
         self.context.get_var('debug_var').trace_add('write', self._toggle_debug_mode)
         ttk.Checkbutton(config_frame, text="Enable Debug Mode",
                         variable=self.context.get_var('debug_var')).grid(
-            row=4, column=0, columnspan=2, sticky=tk.W, pady=2)
+            row=5, column=0, columnspan=2, sticky=tk.W, pady=2)
+
+        if self.context.get_var('checkout_notify_teams') is None:
+            self.context.set_var('checkout_notify_teams', tk.BooleanVar(value=True))
+        
+        ttk.Checkbutton(config_frame, text="Enable Teams Notification",
+                        variable=self.context.get_var('checkout_notify_teams')).grid(
+            row=6, column=0, columnspan=2, sticky=tk.W, pady=2)
 
         # Hidden Model Variables for config saving
         modes_data = self.context.config.get('ai_modes', {})
@@ -80,7 +101,7 @@ class HomeTab(BaseTab):
 
         # Save Config and Test Config buttons
         config_btn_frame = ttk.Frame(config_frame)
-        config_btn_frame.grid(row=5, column=0, columnspan=4, pady=5)
+        config_btn_frame.grid(row=7, column=0, columnspan=4, pady=5)
         
         save_cfg_btn = ttk.Button(config_btn_frame, text="Save Config", command=self._save_config)
         save_cfg_btn.pack(side=tk.LEFT, padx=5)
@@ -144,29 +165,6 @@ class HomeTab(BaseTab):
         save_cred_btn = ttk.Button(cred_btn_frame, text="Save", command=self._save_credentials)
         save_cred_btn.pack(side=tk.LEFT, padx=2)
         self.context.lockable_buttons.append(save_cred_btn)
-
-        # ── Notifications Section ──────────────────────────────────────────
-        notif_frame = ttk.LabelFrame(self, text="Notifications", padding="10")
-        notif_frame.grid(row=3, column=0, columnspan=3, sticky="we", pady=5)
-        notif_frame.columnconfigure(1, weight=1)
-
-        # Initialise notification variables here (Home tab is built before Checkout tab)
-        if self.context.get_var('checkout_notify_teams') is None:
-            self.context.set_var('checkout_notify_teams', tk.BooleanVar(value=True))
-        if self.context.get_var('checkout_webhook_url') is None:
-            self.context.set_var('checkout_webhook_url', tk.StringVar(
-                value=self.context.config.get('notifications', {}).get('teams_webhook_url', '')))
-
-        ttk.Checkbutton(notif_frame, text="Enable Teams Notification",
-                        variable=self.context.get_var('checkout_notify_teams')).grid(
-            row=0, column=0, columnspan=2, sticky=tk.W, pady=2)
-
-        ttk.Label(notif_frame, text="Webhook URL:").grid(
-            row=1, column=0, sticky=tk.W, pady=2)
-        webhook_entry = ttk.Entry(notif_frame,
-                                  textvariable=self.context.get_var('checkout_webhook_url'),
-                                  width=70)
-        webhook_entry.grid(row=1, column=1, pady=2, sticky=tk.W)
 
         # ── Task / Workflow Section ────────────────────────────────────────
         task_frame = ttk.LabelFrame(self, text="Task Details - Full Workflow", padding="10")
