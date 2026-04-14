@@ -992,14 +992,20 @@ class CheckoutTab(BaseTab):
         ttk.Button(btn_frame, text="Cancel",     command=dialog.destroy).pack(side=tk.RIGHT, padx=(0, 3))
 
     def _on_profile_single_click(self, event):
-        """Handle single click to allow deselection by clicking the same row again."""
+        """Handle single click to allow deselection by clicking the same row or empty space."""
         # Get the item that was clicked
         region = self._profile_grid.identify_region(event.x, event.y)
-        if region != "cell":
-            return
-        
         item = self._profile_grid.identify_row(event.y)
-        if not item:
+        
+        # If clicked outside any row (empty space), deselect all
+        if not item or region not in ("cell", "tree"):
+            current_selection = self._profile_grid.selection()
+            if current_selection:
+                self._profile_grid.selection_remove(current_selection)
+                # Update status to show no selection
+                self._profile_status_label.configure(
+                    text="No row selected",
+                    foreground="#666666")
             return
         
         # If the clicked item is already selected, deselect it
