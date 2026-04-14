@@ -126,9 +126,29 @@ class BentoApp:
         title = ttk.Label(title_frame, text="BENTO - Build, Evaluate, Navigate, Test & Orchestrate", font=('Arial', 14, 'bold'))
         title.pack(side=tk.LEFT)
         
-        self.debug_indicator = ttk.Label(title_frame, text="🐛 DEBUG MODE", 
-                                       font=('Arial', 10, 'bold'), 
-                                       foreground='red', 
+        # Global Site Selection (right-aligned)
+        from model.site_paths import AVAILABLE_SITES, DEFAULT_SITE, get_site_resolver
+        
+        site_frame = ttk.Frame(title_frame)
+        site_frame.pack(side=tk.RIGHT, padx=(10, 0))
+        
+        ttk.Label(site_frame, text="Site:", font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.site_var = tk.StringVar(value=DEFAULT_SITE)
+        self.context.set_var('global_site_var', self.site_var)
+        
+        site_combo = ttk.Combobox(site_frame, textvariable=self.site_var,
+                                  values=AVAILABLE_SITES, state='readonly', width=12)
+        site_combo.pack(side=tk.LEFT)
+        site_combo.bind('<<ComboboxSelected>>', self._on_site_changed)
+        
+        # Initialize the global site resolver
+        resolver = get_site_resolver()
+        resolver.current_site = DEFAULT_SITE
+        
+        self.debug_indicator = ttk.Label(title_frame, text="🐛 DEBUG MODE",
+                                       font=('Arial', 10, 'bold'),
+                                       foreground='red',
                                        background='yellow',
                                        padding="5")
         # Do not pack initially
@@ -172,6 +192,30 @@ class BentoApp:
             self.debug_indicator.pack(side=tk.RIGHT, padx=10)
         else:
             self.debug_indicator.pack_forget()
+
+    def _on_site_changed(self, event=None):
+        """Handle global site selection change."""
+        from model.site_paths import get_site_resolver
+        
+        new_site = self.site_var.get()
+        resolver = get_site_resolver()
+        resolver.current_site = new_site
+        
+        # Update all path fields in compilation tab
+        if hasattr(self, 'compile_checkout_tab') and self.compile_checkout_tab:
+            if hasattr(self.compile_checkout_tab, 'compilation_tab'):
+                comp_tab = self.compile_checkout_tab.compilation_tab
+                if comp_tab:
+                    comp_tab.update_paths_from_site()
+        
+        # Update all path fields in checkout tab
+        if hasattr(self, 'compile_checkout_tab') and self.compile_checkout_tab:
+            if hasattr(self.compile_checkout_tab, 'checkout_tab'):
+                checkout_tab = self.compile_checkout_tab.checkout_tab
+                if checkout_tab:
+                    checkout_tab.update_paths_from_site()
+        
+        self._log_message(f"✓ Site changed to: {new_site}")
 
     def _build_tabs(self):
         """Instantiate and add all tab views to the notebook (Phase 3C/3D order)."""

@@ -147,15 +147,23 @@ class CompilationTab(BaseTab):
         ttk.Label(config_frame, text="RAW_ZIP:").grid(row=1, column=0, sticky=tk.W, pady=2, padx=(0, 5))
         raw_zip_frame = ttk.Frame(config_frame)
         raw_zip_frame.grid(row=1, column=1, columnspan=2, sticky="we", pady=2)
-        self.context.set_var("compile_raw_zip", tk.StringVar(value=r"P:\temp\BENTO\RAW_ZIP"))
-        ttk.Entry(raw_zip_frame, textvariable=self.context.get_var("compile_raw_zip"), width=28).pack(side=tk.LEFT)
+        
+        # Initialize paths from global site resolver
+        from model.site_paths import get_site_path
+        default_raw_zip = get_site_path("RAW_ZIP")
+        default_release_tgz = get_site_path("RELEASE_TGZ")
+        
+        self.context.set_var("compile_raw_zip", tk.StringVar(value=default_raw_zip))
+        self.raw_zip_entry = ttk.Entry(raw_zip_frame, textvariable=self.context.get_var("compile_raw_zip"), width=28)
+        self.raw_zip_entry.pack(side=tk.LEFT)
         ttk.Button(raw_zip_frame, text="📁", width=3, command=self._browse_raw_zip).pack(side=tk.LEFT, padx=(2, 0))
 
         ttk.Label(config_frame, text="RELEASE_TGZ:").grid(row=2, column=0, sticky=tk.W, pady=2, padx=(0, 5))
         release_tgz_frame = ttk.Frame(config_frame)
         release_tgz_frame.grid(row=2, column=1, columnspan=2, sticky="we", pady=2)
-        self.context.set_var("compile_release_tgz", tk.StringVar(value=r"P:\temp\BENTO\RELEASE_TGZ"))
-        ttk.Entry(release_tgz_frame, textvariable=self.context.get_var("compile_release_tgz"), width=28).pack(side=tk.LEFT)
+        self.context.set_var("compile_release_tgz", tk.StringVar(value=default_release_tgz))
+        self.release_tgz_entry = ttk.Entry(release_tgz_frame, textvariable=self.context.get_var("compile_release_tgz"), width=28)
+        self.release_tgz_entry.pack(side=tk.LEFT)
         ttk.Button(release_tgz_frame, text="📁", width=3, command=self._browse_release_tgz).pack(side=tk.LEFT, padx=(2, 0))
 
         # 3. Action Frame
@@ -597,6 +605,18 @@ class CompilationTab(BaseTab):
         path = filedialog.askdirectory(title="Select RELEASE_TGZ Folder")
         if path:
             self.context.get_var("compile_release_tgz").set(path)
+
+    def update_paths_from_site(self):
+        """Update all path fields based on the current global site selection."""
+        from model.site_paths import get_site_path
+        
+        # Update RAW_ZIP path
+        raw_zip_path = get_site_path("RAW_ZIP")
+        self.context.get_var("compile_raw_zip").set(raw_zip_path)
+        
+        # Update RELEASE_TGZ path
+        release_tgz_path = get_site_path("RELEASE_TGZ")
+        self.context.get_var("compile_release_tgz").set(release_tgz_path)
 
     def _refresh_testers(self):
         self._tester_listbox.delete(0, tk.END)

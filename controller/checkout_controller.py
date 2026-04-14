@@ -219,7 +219,7 @@ class CheckoutController(object):
                 if self._view:
                     self._view.root.after(
                         0,
-                        lambda: self._view.checkout_tab.on_crt_grid_loaded(
+                        lambda: self._view.compile_checkout_tab.checkout_tab.on_crt_grid_loaded(
                             crt_data
                         )
                     )
@@ -317,7 +317,7 @@ class CheckoutController(object):
                 if self._view:
                     self._view.root.after(
                         0,
-                        lambda: self._view.checkout_tab.on_profile_data_loaded(
+                        lambda: self._view.compile_checkout_tab.checkout_tab.on_profile_data_loaded(
                             profile_rows
                         )
                     )
@@ -366,7 +366,7 @@ class CheckoutController(object):
                 if self._view:
                     self._view.root.after(
                         0,
-                        lambda: self._view.checkout_tab.on_xml_imported(data)
+                        lambda: self._view.compile_checkout_tab.checkout_tab.on_xml_imported(data)
                     )
             except FileNotFoundError as e:
                 logger.warning("load_from_xml: " + str(e))
@@ -397,7 +397,7 @@ class CheckoutController(object):
                 if self._view:
                     self._view.root.after(
                         0,
-                        lambda: self._view.checkout_tab.on_autofill_completed(
+                        lambda: self._view.compile_checkout_tab.checkout_tab.on_autofill_completed(
                             mid, cfgpn, fw_ver
                         )
                     )
@@ -494,7 +494,7 @@ class CheckoutController(object):
                     if self._view:
                         self._view.root.after(
                             0,
-                            lambda: self._view.checkout_tab.on_lot_lookup_completed(
+                            lambda: self._view.compile_checkout_tab.checkout_tab.on_lot_lookup_completed(
                                 row_idx, cfgpn, mcto, form_factor, material_desc
                             )
                         )
@@ -567,7 +567,7 @@ class CheckoutController(object):
                 if self._view:
                     self._view.root.after(
                         0,
-                        lambda: self._view.checkout_tab.on_mid_verify_completed(
+                        lambda: self._view.compile_checkout_tab.checkout_tab.on_mid_verify_completed(
                             row_idx, result
                         )
                     )

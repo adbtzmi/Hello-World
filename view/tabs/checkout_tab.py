@@ -192,12 +192,13 @@ class CheckoutTab(BaseTab):
         _iv = lambda name, val=0: ctx.set_var(name, tk.IntVar(value=val)) \
               if ctx.get_var(name) is None else None
 
-        _sv('checkout_site', 'PENANG')
+        # Initialize hot folder from global site path
+        from model.site_paths import get_site_path
+        default_hot_folder = get_site_path("CHECKOUT_QUEUE")
+        
         _sv('checkout_tgz_path')
         _sv('checkout_recipe_override')
-        _sv('checkout_hot_folder',
-            ctx.config.get('checkout', {}).get(
-                'hot_folder', r'C:\test_program\playground_queue'))
+        _sv('checkout_hot_folder', default_hot_folder)
         _sv('checkout_detect_method', "AUTO")
         _sv('checkout_tc_passing_label', "passing")
         _sv('checkout_tc_fail_label', "force_fail_1")
@@ -306,11 +307,6 @@ class CheckoutTab(BaseTab):
         crt_btn.pack(side=tk.LEFT, padx=(0, 3))
         _tip(crt_btn, "Read the CRT Excel file and auto-populate Form_Factor, Material_Desc,\n"
              "CFGPN, MCTO_#1, Dummy_Lot. Editable columns (Step, MID, Tester…) remain blank.")
-
-        hw_btn = ttk.Button(toolbar, text="View/Edit Hardware", command=self._open_hardware_config)
-        hw_btn.pack(side=tk.LEFT, padx=(0, 0))
-        _tip(hw_btn, "View and edit hardware configuration (DIB_TYPE, MACHINE_MODEL,\n"
-             "MACHINE_VENDOR) used for profile generation and tmptravl creation.")
 
         self.gen_btn = ttk.Button(toolbar, text="Generate Profile",
                    command=self._generate_xml_only)
@@ -428,34 +424,12 @@ class CheckoutTab(BaseTab):
 
         cur_row = 0
 
-        # ── Row 0: Site, Form Factor, Generate TempTraveler, Auto Start ──
-        from model.site_config import _DEFAULT_SITES, _DEFAULT_FORM_FACTORS
-
-        ttk.Label(frm, text="Site:").grid(
-            row=cur_row, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
+        # ── Row 0: Form Factor, Generate TempTraveler, Auto Start ──
+        from model.site_config import _DEFAULT_FORM_FACTORS
 
         opts_row = ttk.Frame(frm)
-        opts_row.grid(row=cur_row, column=1, columnspan=2,
+        opts_row.grid(row=cur_row, column=0, columnspan=3,
                       sticky=tk.W, pady=(0, 6))
-
-        site_combo = ttk.Combobox(
-            opts_row, textvariable=self.context.get_var('checkout_site'),
-            values=list(_DEFAULT_SITES), state="readonly", width=15)
-        site_combo.pack(side=tk.LEFT, padx=(0, 16))
-        _tip(site_combo,
-             "Select the manufacturing site.\n"
-             "Routes MAM queries and other operations to the correct servers.")
-
-        ttk.Label(opts_row, text="Form Factor:").pack(
-            side=tk.LEFT, padx=(0, 4))
-        ff_combo = ttk.Combobox(
-            opts_row, textvariable=self.context.get_var('checkout_form_factor'),
-            values=[""] + list(_DEFAULT_FORM_FACTORS),
-            state="readonly", width=10)
-        ff_combo.pack(side=tk.LEFT, padx=(0, 16))
-        _tip(ff_combo,
-             "Default form factor for new profile rows.\n"
-             "Per-row Form_Factor in the profile table takes precedence.")
 
         gen_tt_cb = ttk.Checkbutton(
             opts_row, text="Generate TempTraveler",
@@ -632,6 +606,18 @@ class CheckoutTab(BaseTab):
         _tip(self.stop_btn, "Abort the running checkout on all testers.")
 
     # ──────────────────────────────────────────────────────────────────────
+    # SITE PATH UPDATE
+    # ──────────────────────────────────────────────────────────────────────
+
+    def update_paths_from_site(self):
+        """Update checkout paths when global site selection changes."""
+        from model.site_paths import get_site_path
+        
+        # Update hot folder path
+        checkout_queue_path = get_site_path("CHECKOUT_QUEUE")
+        self.context.get_var("checkout_hot_folder").set(checkout_queue_path)
+
+    # ──────────────────────────────────────────────────────────────────────
     # PROFILE TABLE — DATA MANAGEMENT
     # ──────────────────────────────────────────────────────────────────────
 
@@ -802,12 +788,6 @@ class CheckoutTab(BaseTab):
             self.log(f"✓ Profile table exported to {os.path.basename(path)}")
         except Exception as e:
             self.show_error("Export Error", f"Cannot export file:\n{path}\n\n{e}")
-
-    def _open_hardware_config(self):
-        """Open the View/Edit Hardware Configuration dialog."""
-        from view.dialogs.hardware_config_dialog import HardwareConfigDialog
-        parent: tk.Widget = self.winfo_toplevel()  # type: ignore[assignment]
-        HardwareConfigDialog(parent)
 
     def _profile_load_from_crt(self):
         excel_path = self.context.get_var('checkout_excel_path').get().strip()
@@ -1229,12 +1209,15 @@ class CheckoutTab(BaseTab):
         )
         from pydantic import ValidationError
 
+        # Get site from global site selection
+        from model.site_paths import get_site_resolver
+        site = get_site_resolver().current_site
+        
         tgz_path    = self.context.get_var('checkout_tgz_path').get().strip()
         hot_folder  = self.context.get_var('checkout_hot_folder').get().strip()
         method      = self.context.get_var('checkout_detect_method').get()
         timeout_m   = self.context.get_var('checkout_timeout_min').get()
         notify      = self.context.get_var('checkout_notify_teams').get()
-        site        = self.context.get_var('checkout_site').get().strip()
         form_factor = self.context.get_var('checkout_form_factor').get().strip()
         gen_tmptravl = self.context.get_var('checkout_gen_tmptravl').get()
         autostart   = self.context.get_var('checkout_autostart').get()
@@ -1428,7 +1411,9 @@ class CheckoutTab(BaseTab):
         """
         controller = self.context.controller
         if controller and hasattr(controller, 'checkout_controller'):
-            site = self.context.get_var('checkout_site').get().strip()
+            # Get site from global site selection
+            from model.site_paths import get_site_resolver
+            site = get_site_resolver().current_site
             controller.checkout_controller.lookup_lot_cfgpn_mcto(
                 lot, row_idx, site=site)
         else:
@@ -1949,7 +1934,8 @@ class CheckoutTab(BaseTab):
             return
 
         # ── Resolve parameters from context ───────────────────────────
-        site         = self.context.get_var('checkout_site').get().strip()
+        from model.site_paths import get_site_resolver
+        site         = get_site_resolver().current_site
         webhook_url  = self.context.get_var('checkout_webhook_url').get().strip()
         notify_teams = self.context.get_var('checkout_notify_teams').get()
 
