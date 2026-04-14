@@ -430,7 +430,7 @@ class CheckoutTab(BaseTab):
 
         self._profile_status_label = ttk.Label(
             status_bar,
-            text="No data \u2014 use 'Load from CRT' or 'Add Row' to populate",
+            text="No data \u2014 use 'Add Row' to populate",
             foreground="#cc6600", font=("Segoe UI", 8))
         self._profile_status_label.pack(side=tk.LEFT)
 
@@ -909,7 +909,7 @@ class CheckoutTab(BaseTab):
         count = len(self._profile_data)
         if count == 0:
             self._profile_status_label.configure(
-                text="No data — use 'Load from CRT' or 'Add Row' to populate",
+                text="No data \u2014 use 'Add Row' to populate",
                 foreground="#cc6600")
         else:
             self._profile_status_label.configure(
