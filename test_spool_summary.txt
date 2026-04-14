@@ -1,0 +1,205 @@
+================================================================================
+CHECKOUT TEST EXECUTION SUMMARY
+================================================================================
+
+METADATA:
+  JIRA Issue:      TSESSD-14270
+  Module ID (MID): ANSKR20285608083800-1-1
+  SKU:             IBIR-0383_ABIT
+  Generated:       2026-04-14 15:02:25
+
+TEST STATISTICS:
+  Total Tests:     376
+  Passed:          345
+  Failed:          31
+  Pass Rate:       91.76%
+
+TIMING INFORMATION:
+  Start Time:      2026-04-09 08:45:19.426000
+  End Time:        2026-04-09 15:05:34.645000
+  Duration:        6.34 hours (22815 seconds)
+
+FLOWS EXECUTED:
+  - masterflows/init_ibir.flow
+  - masterflows/Raven_neosem_ABIT_SEC.flow
+  - masterflows/wrapup.flow
+
+OVERALL RESULT:
+  [FAIL] 31 test(s) failed
+
+FAILED TESTS DETAIL:
+--------------------------------------------------------------------------------
+1. masterflows/Raven_neosem_ABIT_SEC.flow:test_13
+   Time:        2026-04-09 08:47:12.218000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.895498s
+
+2. masterflows/Raven_neosem_ABIT_SEC.flow:test_39
+   Time:        2026-04-09 08:54:24.826000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.912120s
+
+3. masterflows/Raven_neosem_ABIT_SEC.flow:test_45
+   Time:        2026-04-09 08:55:34.772000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.780676s
+
+4. masterflows/Raven_neosem_ABIT_SEC.flow:test_60
+   Time:        2026-04-09 09:04:28.188000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.761400s
+
+5. masterflows/Raven_neosem_ABIT_SEC.flow:test_81
+   Time:        2026-04-09 09:20:19.566000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.782740s
+
+6. masterflows/Raven_neosem_ABIT_SEC.flow:test_87
+   Time:        2026-04-09 09:25:25.756000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.779260s
+
+7. masterflows/Raven_neosem_ABIT_SEC.flow:test_93
+   Time:        2026-04-09 09:30:30.656000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.817827s
+
+8. masterflows/Raven_neosem_ABIT_SEC.flow:test_99
+   Time:        2026-04-09 09:35:37.923000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.770103s
+
+9. masterflows/Raven_neosem_ABIT_SEC.flow:test_105
+   Time:        2026-04-09 09:40:48.319000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.787220s
+
+10. masterflows/Raven_neosem_ABIT_SEC.flow:test_111
+   Time:        2026-04-09 09:46:05.265000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.762451s
+
+11. masterflows/Raven_neosem_ABIT_SEC.flow:test_117
+   Time:        2026-04-09 09:51:21.776000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.772128s
+
+12. masterflows/Raven_neosem_ABIT_SEC.flow:test_123
+   Time:        2026-04-09 09:56:42.776000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.821298s
+
+13. masterflows/Raven_neosem_ABIT_SEC.flow:test_129
+   Time:        2026-04-09 10:02:09.287000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.777987s
+
+14. masterflows/Raven_neosem_ABIT_SEC.flow:test_235
+   Time:        2026-04-09 11:23:42.519000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.783294s
+
+15. masterflows/Raven_neosem_ABIT_SEC.flow:test_262
+   Time:        2026-04-09 12:33:18.800000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.825084s
+
+16. masterflows/Raven_neosem_ABIT_SEC.flow:test_281
+   Time:        2026-04-09 12:57:11.594000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.787189s
+
+17. masterflows/Raven_neosem_ABIT_SEC.flow:test_282
+   Time:        2026-04-09 12:57:27.092000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.846840s
+
+18. masterflows/Raven_neosem_ABIT_SEC.flow:test_283
+   Time:        2026-04-09 12:57:43.682000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 0.833790s
+
+19. masterflows/Raven_neosem_ABIT_SEC.flow:test_287
+   Time:        2026-04-09 13:00:16.896000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.824598s
+
+20. masterflows/Raven_neosem_ABIT_SEC.flow:test_288
+   Time:        2026-04-09 13:00:31.301000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.800620s
+
+21. masterflows/Raven_neosem_ABIT_SEC.flow:test_289
+   Time:        2026-04-09 13:00:47.738000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 0.858123s
+
+22. masterflows/Raven_neosem_ABIT_SEC.flow:test_293
+   Time:        2026-04-09 13:03:23.252000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.886939s
+
+23. masterflows/Raven_neosem_ABIT_SEC.flow:test_294
+   Time:        2026-04-09 13:03:36.986000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.834870s
+
+24. masterflows/Raven_neosem_ABIT_SEC.flow:test_295
+   Time:        2026-04-09 13:03:53.628000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 0.818365s
+
+25. masterflows/Raven_neosem_ABIT_SEC.flow:test_299
+   Time:        2026-04-09 13:06:38.212000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.785855s
+
+26. masterflows/Raven_neosem_ABIT_SEC.flow:test_300
+   Time:        2026-04-09 13:06:52.644000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.779790s
+
+27. masterflows/Raven_neosem_ABIT_SEC.flow:test_301
+   Time:        2026-04-09 13:07:09.497000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 0.808754s
+
+28. masterflows/Raven_neosem_ABIT_SEC.flow:test_305
+   Time:        2026-04-09 13:09:47.142000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.823872s
+
+29. masterflows/Raven_neosem_ABIT_SEC.flow:test_325
+   Time:        2026-04-09 13:15:12.716000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.760912s
+
+30. masterflows/Raven_neosem_ABIT_SEC.flow:test_347
+   Time:        2026-04-09 14:14:58.656000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.758986s
+
+31. masterflows/Raven_neosem_ABIT_SEC.flow:test_358
+   Time:        2026-04-09 14:50:54.039000
+   Flow:        masterflows/Raven_neosem_ABIT_SEC.flow
+   Avg Cmd Time: 1.762134s
+
+--------------------------------------------------------------------------------
+
+PERFORMANCE METRICS:
+  Tests with metrics: 1
+  tPROG: 1 occurrences
+  CE: 1 occurrences
+  Channel: 1 occurrences
+  tBERS: 1 occurrences
+  tRSNAP: 1 occurrences
+  tREAD: 1 occurrences
+  LUN: 1 occurrences
+  tPBSY: 1 occurrences
+
+FILE REFERENCES:
+  Trace File:      P:\temp\BENTO\CHECKOUT_RESULTS\IBIR-0383_ABIT\TSESSD-14270\ANSKR20285608083800-1-1\DispatcherDebug2026_04_09_T08_45_19.txt
+
+================================================================================
+END OF SUMMARY
+================================================================================

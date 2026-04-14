@@ -32,6 +32,12 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Dict, List, Optional, Callable, Tuple, Any
 
+# Import auto-consolidator for automated result analysis
+try:
+    from model.analyzers.auto_consolidator import AutoConsolidator
+except ImportError:
+    AutoConsolidator = None  # Graceful degradation if module not available
+
 logger = logging.getLogger("bento_app")
 
 # ── Site-specific shared folder paths ─────────────────────────────────────────
@@ -753,6 +759,7 @@ class ResultCollector:
         poll_interval:       int   = DEFAULT_POLL_INTERVAL,
         auto_collect:        bool  = True,
         auto_spool:          bool  = False,
+        auto_consolidate:    bool  = True,   # Auto-consolidate checkout results
         additional_patterns: Optional[List[str]] = None,
         webhook_url:         str   = "",
         notify_teams:        bool  = True,
@@ -767,12 +774,21 @@ class ResultCollector:
         self.poll_interval       = poll_interval
         self.auto_collect        = auto_collect
         self.auto_spool          = auto_spool
+        self.auto_consolidate    = auto_consolidate
         self.additional_patterns = additional_patterns or []
         self.webhook_url         = webhook_url
         self.notify_teams        = notify_teams
         self.log_callback        = log_callback
         self.progress_callback   = progress_callback
         self.completion_callback = completion_callback
+        
+        # Initialize auto-consolidator if available
+        self._auto_consolidator = None
+        if auto_consolidate and AutoConsolidator is not None:
+            try:
+                self._auto_consolidator = AutoConsolidator()
+            except Exception as e:
+                logger.warning(f"Failed to initialize AutoConsolidator: {e}")
 
         # Resolve target path from site if not provided
         if target_path:
@@ -1054,6 +1070,54 @@ class ResultCollector:
                 except Exception as e:
                     _log(self.log_callback,
                          f"   ⚠ Could not update MIDs file: {e}")
+            
+            # Auto-consolidate results (analyze trace files, generate reports)
+            if self.auto_consolidate and self._auto_consolidator:
+                _log(self.log_callback, "\n📊 Auto-consolidating checkout results...")
+                for mid, entry in self._entries.items():
+                    if entry.collected and entry.workspace_path:
+                        # Find collection directory for this MID
+                        collection_dir = os.path.join(self.target_path, mid)
+                        if os.path.exists(collection_dir):
+                            try:
+                                # Find trace file in collection directory
+                                trace_files = []
+                                for root, dirs, files in os.walk(collection_dir):
+                                    for file in files:
+                                        if file.startswith("DispatcherDebug") and file.endswith(".txt"):
+                                            trace_files.append(os.path.join(root, file))
+                                
+                                if trace_files:
+                                    trace_file = trace_files[0]  # Use first trace file found
+                                    _log(self.log_callback, f"  >>> {mid}: Consolidating results...")
+                                    
+                                    # Run auto-consolidation
+                                    results = self._auto_consolidator.consolidate(
+                                        collection_dir=collection_dir,
+                                        trace_file_path=trace_file,
+                                        jira_key=None,  # Could be extracted from MIDs file if available
+                                        mid=mid,
+                                        sku=entry.name,
+                                        generate_validation_doc=True,
+                                        generate_spool_summary=True,
+                                        generate_manifest=True,
+                                        perform_risk_assessment=True
+                                    )
+                                    
+                                    if results.get("success"):
+                                        _log(self.log_callback, f"      ✓ Consolidation complete")
+                                        if "risk_assessment" in results:
+                                            risk_level = results["risk_assessment"].get("risk_level", "UNKNOWN")
+                                            risk_score = results["risk_assessment"].get("risk_score", 0)
+                                            _log(self.log_callback, f"      ✓ Risk: {risk_level} ({risk_score:.1f}/100)")
+                                    else:
+                                        errors = results.get("errors", [])
+                                        _log(self.log_callback, f"      ⚠ Consolidation had errors: {', '.join(errors)}")
+                                else:
+                                    _log(self.log_callback, f"  >>> {mid}: No trace file found, skipping consolidation")
+                            except Exception as e:
+                                _log(self.log_callback, f"  >>> {mid}: Consolidation failed: {e}")
+                                logger.exception(f"Auto-consolidation failed for {mid}")
 
         # Auto-spool summary
         if self.auto_spool:
