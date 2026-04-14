@@ -190,11 +190,16 @@ class CheckoutTab(BaseTab):
         self._tester_row               = 0
         self._profile_data: List[Dict] = []
 
+        # B18: Undo/Redo stack for profile table
+        self._undo_stack: List[List[Dict]] = []
+        self._redo_stack: List[List[Dict]] = []
+        self._max_undo = 30
+
         # ── Checkout State Machine ────────────────────────────────────
         self._checkout_state = CheckoutState.IDLE
 
         # ── Task 2: Result collection state ───────────────────────────
-        self._rc_checkout_results: Dict[str, dict] = {}   # hostname → result
+        self._rc_checkout_results: Dict[str, dict] = {}   # hostname -> result
         self._rc_checkout_hostnames: List[str]      = []   # testers used
         self._rc_mids_file: str                     = ""   # auto-generated MIDs.txt path
 
@@ -295,6 +300,9 @@ class CheckoutTab(BaseTab):
         # ── Keyboard shortcuts ───────────────────────────────────────────
         self.bind_all("<Control-Return>", lambda e: self._start_checkout())
         self.bind_all("<Control-i>",      lambda e: self._import_xml())
+        # B18: Undo/Redo keyboard shortcuts for profile table
+        self.bind_all("<Control-z>",      lambda e: self._profile_undo())
+        self.bind_all("<Control-y>",      lambda e: self._profile_redo())
 
     # ──────────────────────────────────────────────────────────────────────
     # SECTION 1 — Profile Generation
@@ -334,7 +342,7 @@ class CheckoutTab(BaseTab):
                       "CHECKOUT_QUEUE manually when ready.\n"
                       "Shortcut: Ctrl+Enter (Start)  |  Ctrl+I (Import XML)")
 
-        imp_btn = ttk.Button(toolbar, text="📥 Import Profile",
+        imp_btn = ttk.Button(toolbar, text="Import Profile",
                    command=self._import_xml)
         imp_btn.pack(side=tk.LEFT, padx=(0, 3))
         _tip(imp_btn, "Load an existing SLATE XML profile and auto-fill TGZ path from it.")
@@ -374,11 +382,12 @@ class CheckoutTab(BaseTab):
         for i, w in enumerate(col_widths):
             self._profile_grid.column_width(column=i, width=w)
 
-        # Enable cell editing and selection
+        # Enable cell editing and selection  (B4: column_width_resize + double_click_column_resize)
         self._profile_grid.enable_bindings(
             "single_select",
             "row_select",
             "column_width_resize",
+            "double_click_column_resize",
             "arrowkeys",
             "copy",
             "paste",
@@ -390,18 +399,38 @@ class CheckoutTab(BaseTab):
         self._profile_grid.extra_bindings("end_edit_cell", self._on_sheet_cell_edited)
         self._profile_grid.extra_bindings("cell_select", self._on_sheet_cell_select)
 
+        # B2: Right-click context menu
+        self._profile_grid.bind("<Button-3>", self._profile_context_menu)
+
+        # B12: Editable cell visual indicator — highlight editable column headers
+        # with a subtle blue tint so users know which columns are editable
+        editable_indices = [i for i, (c, _) in enumerate(self._PROFILE_GEN_COLUMNS)
+                           if c in self._EDITABLE_COLS]
+        for col_idx in editable_indices:
+            try:
+                self._profile_grid.highlight_columns(
+                    columns=col_idx, bg="#e8f0fe", fg="#000000")
+            except Exception:
+                pass  # tksheet version may not support highlight_columns
+
         _tip(self._profile_grid,
-             "Click to select a row.\n"
+             "Click to select a row.  Right-click for context menu.\n"
              "Double-click any cell to edit it inline.\n"
-             "Double-click ATTR_OVERWRITE to open the attribute editor dialog.")
+             "Double-click ATTR_OVERWRITE to open the attribute editor dialog.\n"
+             "Blue-tinted columns are editable.  Ctrl+Z/Y for undo/redo.")
+
+        # B16: Validation indicator label (shown below grid when issues found)
+        self._validation_indicator = ttk.Label(
+            frm, text="", foreground="#a80000", font=("Segoe UI", 8))
+        self._validation_indicator.grid(row=3, column=0, sticky="w", pady=(2, 0))
 
         # ── Status bar ────────────────────────────────────────────────────
         status_bar = ttk.Frame(frm)
-        status_bar.grid(row=3, column=0, sticky="we", pady=(4, 0))
+        status_bar.grid(row=4, column=0, sticky="we", pady=(2, 0))
 
         self._profile_status_label = ttk.Label(
             status_bar,
-            text="No data — use 'Load from CRT' or 'Add Row' to populate",
+            text="No data \u2014 use 'Load from CRT' or 'Add Row' to populate",
             foreground="#cc6600", font=("Segoe UI", 8))
         self._profile_status_label.pack(side=tk.LEFT)
 
@@ -485,7 +514,7 @@ class CheckoutTab(BaseTab):
         hdr.grid(row=0, column=0, sticky="we", pady=(0, 6))
         ttk.Label(hdr, text="Select testers to include in this checkout run:",
                   font=("Segoe UI", 8)).pack(side=tk.LEFT)
-        refresh_btn = ttk.Button(hdr, text="↻ Refresh",
+        refresh_btn = ttk.Button(hdr, text="\u21bb Refresh",
                     command=self._refresh_testers)
         refresh_btn.pack(side=tk.RIGHT)
         _tip(refresh_btn, "Reload the tester list from bento_testers.json.")
@@ -497,31 +526,58 @@ class CheckoutTab(BaseTab):
         self._tester_row   = 0
         self._refresh_testers()
 
+        # B7: Badge legend — show what each badge colour means
+        legend_frm = ttk.Frame(tester_outer)
+        legend_frm.grid(row=2, column=0, sticky="we", pady=(8, 0))
+        ttk.Label(legend_frm, text="Legend:", font=("Segoe UI", 7, "bold")).pack(
+            side=tk.LEFT, padx=(0, 6))
+        _legend_items = [
+            ("IDLE", "#888888"), ("PENDING", "#0078d4"),
+            ("RUNNING", "#005a9e"), ("COLLECTING", "#8764b8"),
+            ("SUCCESS", "#107c10"), ("FAILED", "#a80000"),
+            ("TIMEOUT", "#ca5010"),
+        ]
+        for lbl_text, bg_color in _legend_items:
+            tk.Label(legend_frm, text=f" {lbl_text} ", font=("Segoe UI", 7),
+                     bg=bg_color, fg="white", relief=tk.FLAT,
+                     padx=3, pady=1).pack(side=tk.LEFT, padx=1)
+
     # ──────────────────────────────────────────────────────────────────────
     # SECTION 4 — Action Buttons
     # ──────────────────────────────────────────────────────────────────────
 
     def _build_action_buttons(self, parent, row):
-        """Build the primary action button section."""
+        """Build the primary action button section.  B9: Single toggle Start/Stop button."""
         action_frame = ttk.Frame(parent)
         action_frame.grid(row=row, column=0, sticky="we", pady=(0, 14))
-        
-        # Center the button
+
+        # Center the buttons
         action_frame.columnconfigure(0, weight=1)
         action_frame.columnconfigure(1, weight=0)
-        action_frame.columnconfigure(2, weight=1)
-        
+        action_frame.columnconfigure(2, weight=0)
+        action_frame.columnconfigure(3, weight=1)
+
+        # B9: Start Checkout button (toggles to Stop when running)
         self.checkout_btn = ttk.Button(
-            action_frame, text="▶ Start Checkout",
+            action_frame, text="\u25b6 Start Checkout",
             style='Accent.TButton',
             command=self._start_checkout)
-        self.checkout_btn.grid(row=0, column=1)
+        self.checkout_btn.grid(row=0, column=1, padx=(0, 6))
         self.context.lockable_buttons.append(self.checkout_btn)
-        
-        _tip = _ToolTip
+
+        # B9: Stop button — hidden by default, shown when running
+        self.stop_btn = ttk.Button(
+            action_frame, text="\u25a0 Stop Checkout",
+            command=self._stop_checkout)
+        self.stop_btn.grid(row=0, column=2)
+        self.stop_btn.grid_remove()  # Hidden initially
+
         _tip(self.checkout_btn,
              "Generate XML profiles and start the checkout run on all selected testers.\n"
              "Only enabled when IDLE and preconditions are met.")
+        _tip(self.stop_btn,
+             "Stop the active checkout run on all testers.\n"
+             "Requires confirmation before stopping.")
 
     # ──────────────────────────────────────────────────────────────────────
     # SITE PATH UPDATE
@@ -554,6 +610,7 @@ class CheckoutTab(BaseTab):
     # ──────────────────────────────────────────────────────────────────────
 
     def _profile_add_default_row(self):
+        self._push_undo_snapshot()
         row_data = {
             "Form_Factor": "", "Material_Desc": "", "CFGPN": "",
             "MCTO_#1": "", "Dummy_Lot": "None", "Step": "",
@@ -563,8 +620,10 @@ class CheckoutTab(BaseTab):
         }
         self._profile_data.append(row_data)
         self._refresh_profile_grid()
+        self._validate_profile_realtime()
 
     def _profile_add_row(self):
+        self._push_undo_snapshot()
         row_data = {
             "Form_Factor": "", "Material_Desc": "", "CFGPN": "",
             "MCTO_#1": "", "Dummy_Lot": "", "Step": "",
@@ -575,6 +634,7 @@ class CheckoutTab(BaseTab):
         self._profile_data.append(row_data)
         self._refresh_profile_grid()
         self._update_profile_status()
+        self._validate_profile_realtime()
 
     def _has_duplicate_mid(self, mid: str) -> bool:
         """Check if a MID already exists in the profile table."""
@@ -585,30 +645,216 @@ class CheckoutTab(BaseTab):
 
     def _profile_remove_row(self):
         # tksheet selection: try multiple API patterns for compatibility
-        idx = -1
-        try:
-            selected = self._profile_grid.get_currently_selected()
-            if hasattr(selected, 'rows') and selected.rows:
-                idx = list(selected.rows)[0]
-            elif hasattr(selected, 'row') and selected.row is not None:
-                idx = selected.row
-        except Exception:
-            pass
-        # Fallback: try get_selected_rows()
-        if idx < 0:
-            try:
-                sel_rows = self._profile_grid.get_selected_rows()
-                if sel_rows:
-                    idx = min(sel_rows)
-            except Exception:
-                pass
+        idx = self._get_selected_row_idx()
         if idx < 0:
             self.show_error("No Selection", "Select a row to remove.")
             return
+        self._push_undo_snapshot()
         if 0 <= idx < len(self._profile_data):
             self._profile_data.pop(idx)
         self._refresh_profile_grid()
         self._update_profile_status()
+        self._validate_profile_realtime()
+
+    # ── B18: Undo / Redo helpers ──────────────────────────────────────────
+    def _push_undo_snapshot(self):
+        """Save a deep copy of the current profile data onto the undo stack."""
+        import copy
+        snapshot = copy.deepcopy(self._profile_data)
+        self._undo_stack.append(snapshot)
+        if len(self._undo_stack) > self._max_undo:
+            self._undo_stack.pop(0)
+        # Any new mutation clears the redo stack
+        self._redo_stack.clear()
+
+    def _profile_undo(self):
+        """Restore the previous profile table state."""
+        import copy
+        if not self._undo_stack:
+            return
+        # Push current state to redo before restoring
+        self._redo_stack.append(copy.deepcopy(self._profile_data))
+        self._profile_data = self._undo_stack.pop()
+        self._refresh_profile_grid()
+        self._update_profile_status()
+        self._validate_profile_realtime()
+
+    def _profile_redo(self):
+        """Re-apply the last undone change."""
+        import copy
+        if not self._redo_stack:
+            return
+        self._undo_stack.append(copy.deepcopy(self._profile_data))
+        self._profile_data = self._redo_stack.pop()
+        self._refresh_profile_grid()
+        self._update_profile_status()
+        self._validate_profile_realtime()
+
+    # ── B3: Move row up / down ────────────────────────────────────────────
+    def _get_selected_row_idx(self) -> int:
+        """Return the currently selected row index, or -1 if none."""
+        idx = -1
+        try:
+            selected = self._profile_grid.get_currently_selected()
+            if hasattr(selected, 'rows') and selected.rows:  # type: ignore[union-attr]
+                idx = int(list(selected.rows)[0])  # type: ignore[union-attr]
+            elif hasattr(selected, 'row') and selected.row is not None:  # type: ignore[union-attr]
+                idx = int(selected.row)  # type: ignore[union-attr]
+        except Exception:
+            pass
+        if idx < 0:
+            try:
+                sel_rows = self._profile_grid.get_selected_rows()
+                if sel_rows:
+                    idx = int(min(sel_rows))  # type: ignore[arg-type]
+            except Exception:
+                pass
+        return idx
+
+    def _profile_move_up(self):
+        """Swap the selected row with the one above it."""
+        idx = self._get_selected_row_idx()
+        if idx <= 0 or idx >= len(self._profile_data):
+            return
+        self._push_undo_snapshot()
+        self._profile_data[idx], self._profile_data[idx - 1] = (
+            self._profile_data[idx - 1], self._profile_data[idx]
+        )
+        self._refresh_profile_grid()
+        # Re-select the moved row
+        try:
+            self._profile_grid.select_row(idx - 1)
+        except Exception:
+            pass
+
+    def _profile_move_down(self):
+        """Swap the selected row with the one below it."""
+        idx = self._get_selected_row_idx()
+        if idx < 0 or idx >= len(self._profile_data) - 1:
+            return
+        self._push_undo_snapshot()
+        self._profile_data[idx], self._profile_data[idx + 1] = (
+            self._profile_data[idx + 1], self._profile_data[idx]
+        )
+        self._refresh_profile_grid()
+        try:
+            self._profile_grid.select_row(idx + 1)
+        except Exception:
+            pass
+
+    # ── B2: Right-click context menu ──────────────────────────────────────
+    def _profile_context_menu(self, event):
+        """Show a context menu on right-click in the profile grid."""
+        idx = self._get_selected_row_idx()
+        menu = tk.Menu(self, tearoff=0)
+
+        # Row operations (only if a row is selected)
+        has_row = 0 <= idx < len(self._profile_data)
+        menu.add_command(
+            label="✏️  Edit Cell",
+            command=lambda: self._profile_grid.open_cell(event) if has_row else None,
+            state="normal" if has_row else "disabled",
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="➕  Add Row Below",
+            command=self._profile_add_row,
+        )
+        menu.add_command(
+            label="📋  Duplicate Row",
+            command=lambda: self._profile_duplicate_row(idx),
+            state="normal" if has_row else "disabled",
+        )
+        menu.add_command(
+            label="🗑️  Delete Row",
+            command=self._profile_remove_row,
+            state="normal" if has_row else "disabled",
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="⬆️  Move Up",
+            command=self._profile_move_up,
+            state="normal" if has_row and idx > 0 else "disabled",
+        )
+        menu.add_command(
+            label="⬇️  Move Down",
+            command=self._profile_move_down,
+            state="normal" if has_row and idx < len(self._profile_data) - 1 else "disabled",
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="↩️  Undo  (Ctrl+Z)",
+            command=self._profile_undo,
+            state="normal" if self._undo_stack else "disabled",
+        )
+        menu.add_command(
+            label="↪️  Redo  (Ctrl+Y)",
+            command=self._profile_redo,
+            state="normal" if self._redo_stack else "disabled",
+        )
+
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _profile_duplicate_row(self, idx: int):
+        """Duplicate the row at the given index."""
+        import copy
+        if idx < 0 or idx >= len(self._profile_data):
+            return
+        self._push_undo_snapshot()
+        new_row = copy.deepcopy(self._profile_data[idx])
+        # Clear MID to avoid duplicate MID issues
+        new_row["MID"] = ""
+        self._profile_data.insert(idx + 1, new_row)
+        self._refresh_profile_grid()
+        self._update_profile_status()
+        self._validate_profile_realtime()
+
+    # ── B16: Real-time validation ─────────────────────────────────────────
+    def _validate_profile_realtime(self):
+        """Check profile data for common issues and update the indicator."""
+        if not self._profile_data:
+            self._validation_indicator.configure(text="")
+            return
+
+        issues: List[str] = []
+
+        # Check for empty MIDs
+        empty_mids = sum(1 for r in self._profile_data
+                         if not r.get("MID", "").strip())
+        if empty_mids:
+            issues.append(f"{empty_mids} row(s) missing MID")
+
+        # Check for duplicate MIDs
+        mids = [r.get("MID", "").strip().upper()
+                for r in self._profile_data if r.get("MID", "").strip()]
+        seen = set()
+        dupes = set()
+        for m in mids:
+            if m in seen:
+                dupes.add(m)
+            seen.add(m)
+        if dupes:
+            issues.append(f"Duplicate MID(s): {', '.join(sorted(dupes))}")
+
+        # Check for empty Steps
+        empty_steps = sum(1 for r in self._profile_data
+                          if not r.get("Step", "").strip())
+        if empty_steps:
+            issues.append(f"{empty_steps} row(s) missing Step")
+
+        if issues:
+            self._validation_indicator.configure(
+                text="⚠ " + " | ".join(issues),
+                foreground="#a80000",
+            )
+        else:
+            self._validation_indicator.configure(
+                text="✓ All rows valid",
+                foreground="#107c10",
+            )
 
     def _refresh_profile_grid(self):
         # Auto-populate hardware configuration based on Step and Form_Factor
@@ -633,10 +879,28 @@ class CheckoutTab(BaseTab):
             sheet_data.append(values)
 
         self._profile_grid.set_sheet_data(sheet_data, reset_col_positions=False)
+        # Re-enable bindings after set_sheet_data (some tksheet versions reset them)
+        self._profile_grid.enable_bindings(
+            "single_select", "row_select",
+            "column_width_resize", "double_click_column_resize",
+            "arrowkeys", "copy", "paste", "undo", "edit_cell",
+        )
+        # Re-bind extra bindings (cell edit callback + cell select callback)
+        self._profile_grid.extra_bindings("end_edit_cell", self._on_sheet_cell_edited)
+        self._profile_grid.extra_bindings("cell_select", self._on_sheet_cell_select)
         self._profile_grid.set_all_column_widths()
         # Re-apply column widths
         for i, (_, w) in enumerate(self._PROFILE_GEN_COLUMNS):
             self._profile_grid.column_width(column=i, width=w)
+        # Re-apply editable column highlighting
+        editable_indices = [i for i, (c, _) in enumerate(self._PROFILE_GEN_COLUMNS)
+                           if c in self._EDITABLE_COLS]
+        for col_idx in editable_indices:
+            try:
+                self._profile_grid.highlight_columns(
+                    columns=col_idx, bg="#e8f0fe", fg="#000000")
+            except Exception:
+                pass
         self._profile_grid.refresh()
         self._profile_row_count_label.configure(
             text=f"{len(self._profile_data)} row(s)")
@@ -665,6 +929,7 @@ class CheckoutTab(BaseTab):
             return
         # Update the Excel File path to the selected file
         self.context.get_var('checkout_excel_path').set(path)
+        self._push_undo_snapshot()
         try:
             import pandas as pd
             engine = "openpyxl" if path.endswith(".xlsx") else "xlrd"
@@ -741,10 +1006,20 @@ class CheckoutTab(BaseTab):
     # ──────────────────────────────────────────────────────────────────────
 
     def _on_sheet_cell_edited(self, event):
-        """Called by tksheet when a cell edit is completed."""
-        row_idx = event.row
-        col_idx = event.column
-        new_value = event.text if hasattr(event, 'text') else str(event.value if hasattr(event, 'value') else "")
+        """Called by tksheet when a cell edit is completed.
+
+        In tksheet 7.6.0 the event is an ``EventDataDict`` with:
+        - ``row`` / ``column`` — display row/col indices (int)
+        - ``value`` — the new cell value after editing
+        - ``text`` is NOT present; use ``value`` instead.
+        """
+        try:
+            row_idx = int(event.row) if event.row is not None else -1
+            col_idx = int(event.column) if event.column is not None else -1
+        except (TypeError, ValueError):
+            return
+        # In tksheet 7.x the new value is in event.value
+        new_value = str(event.value) if event.value is not None else ""
         cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
         if row_idx < 0 or row_idx >= len(self._profile_data):
             return
@@ -761,6 +1036,8 @@ class CheckoutTab(BaseTab):
             self.after(50, lambda: self._show_attr_overwrite_dialog(row_idx))
             return
 
+        # B18: Save undo snapshot before mutation
+        self._push_undo_snapshot()
         self._profile_data[row_idx][col_name] = new_value.strip()
         # Auto-lookup CFGPN/MCTO when Dummy_Lot is edited
         if col_name == "Dummy_Lot" and new_value.strip() and new_value.strip().upper() not in ("", "NONE"):
@@ -773,10 +1050,30 @@ class CheckoutTab(BaseTab):
                     "Duplicate MID",
                     f"MID '{new_value.strip()}' already exists in another row.\n"
                     f"Duplicate MIDs will generate conflicting profiles.")
+        # B16: Update validation indicator after edit
+        self._validate_profile_realtime()
 
     def _on_sheet_cell_select(self, event):
-        """Called by tksheet when a cell is selected — update status bar."""
-        row_idx = event.row if hasattr(event, 'row') else -1
+        """Called by tksheet when a cell is selected — update status bar.
+
+        In tksheet 7.6.0 the *cell_select* event does NOT populate
+        ``event.row`` / ``event.column`` (they are ``None``).  The
+        selected cell coordinates live in ``event.being_selected``
+        which is a ``Box_t(r1, c1, r2, c2, type)`` tuple, or an
+        empty tuple when nothing is selected.
+        """
+        try:
+            # Try being_selected first (tksheet 7.x)
+            bs = event.being_selected  # type: ignore[union-attr]
+            if bs and len(bs) >= 2:
+                row_idx = int(bs[0])
+            elif event.row is not None:
+                row_idx = int(event.row)
+            else:
+                row_idx = -1
+        except Exception:
+            row_idx = -1
+
         if row_idx < 0 or row_idx >= len(self._profile_data):
             self._profile_status_label.configure(
                 text="No row selected", foreground="#666666")
@@ -797,33 +1094,49 @@ class CheckoutTab(BaseTab):
 
         dialog = tk.Toplevel(self.winfo_toplevel())
         dialog.title("ATTR_OVERWRITE Editor")
-        dialog.geometry("620x460")
+        dialog.geometry("620x520")
         dialog.transient(self.winfo_toplevel())
         dialog.grab_set()
 
+        # B13: Help text explaining the ATTR_OVERWRITE format
+        help_frm = ttk.Frame(dialog)
+        help_frm.pack(fill=tk.X, padx=10, pady=(10, 4))
+        ttk.Label(help_frm,
+                  text="Override SLATE profile attributes.  Each entry is a "
+                       "Section;AttrName;AttrValue triplet.\n"
+                       "Example: EQUIPMENT;DIB_ID;DIB-1234  or  MAM;SITE;PG",
+                  foreground="#555555", font=("Segoe UI", 8),
+                  wraplength=580, justify=tk.LEFT).pack(anchor="w")
+
         # Input fields
         input_frame = ttk.LabelFrame(dialog, text="Add Attribute Override", padding="8")
-        input_frame.pack(fill=tk.X, padx=10, pady=(10, 4))
+        input_frame.pack(fill=tk.X, padx=10, pady=(4, 4))
         input_frame.columnconfigure(1, weight=1)
 
         ttk.Label(input_frame, text="Section:").grid(
             row=0, column=0, sticky=tk.W, padx=(0, 6), pady=2)
         section_var = tk.StringVar()
-        ttk.Combobox(input_frame, textvariable=section_var,
+        section_cb = ttk.Combobox(input_frame, textvariable=section_var,
                      values=["MAM", "MCTO", "CFGPN", "EQUIPMENT"],
-                     width=18).grid(row=0, column=1, sticky="we", pady=2)
+                     width=18)
+        section_cb.grid(row=0, column=1, sticky="we", pady=2)
+        section_cb.set("")
+        _tip(section_cb, "Select the SLATE profile section to override.\n"
+                         "Common: EQUIPMENT (hardware), MAM (lot data), CFGPN.")
 
         ttk.Label(input_frame, text="Attr Name:").grid(
             row=1, column=0, sticky=tk.W, padx=(0, 6), pady=2)
         attr_name_var = tk.StringVar()
-        ttk.Entry(input_frame, textvariable=attr_name_var).grid(
-            row=1, column=1, sticky="we", pady=2)
+        attr_name_entry = ttk.Entry(input_frame, textvariable=attr_name_var)
+        attr_name_entry.grid(row=1, column=1, sticky="we", pady=2)
+        _tip(attr_name_entry, "The attribute name to override (e.g. DIB_ID, SITE, TESTER_TYPE).")
 
         ttk.Label(input_frame, text="Attr Value:").grid(
             row=2, column=0, sticky=tk.W, padx=(0, 6), pady=2)
         attr_value_var = tk.StringVar()
-        ttk.Entry(input_frame, textvariable=attr_value_var).grid(
-            row=2, column=1, sticky="we", pady=2)
+        attr_value_entry = ttk.Entry(input_frame, textvariable=attr_value_var)
+        attr_value_entry.grid(row=2, column=1, sticky="we", pady=2)
+        _tip(attr_value_entry, "The new value for the attribute.")
 
         # Entries grid
         entries_frame = ttk.LabelFrame(dialog, text="Current Overrides", padding="8")
@@ -1020,6 +1333,22 @@ class CheckoutTab(BaseTab):
         params = self._collect_params()
         if params is None:
             return
+
+        # B8: Confirmation dialog before checkout start
+        hostnames = [h for h, v in self._tester_vars.items() if v.get()]
+        row_count = len(self._profile_data)
+        tgz_name = os.path.basename(
+            self.context.get_var('checkout_tgz_path').get().strip())
+        summary = (
+            f"Ready to start checkout?\n\n"
+            f"  Testers:  {', '.join(hostnames)}\n"
+            f"  Profiles: {row_count} row(s)\n"
+            f"  TGZ:      {tgz_name}\n\n"
+            f"This will generate XML profiles and deploy to all selected testers."
+        )
+        if not messagebox.askyesno("Confirm Checkout", summary, icon='question'):
+            return
+
         self._set_checkout_state(CheckoutState.RUNNING)
         self.context.controller.checkout_controller.start_checkout(params)
 
@@ -1051,9 +1380,8 @@ class CheckoutTab(BaseTab):
         
         # Trigger the actual stop
         self.context.controller.checkout_controller.stop_checkout()
-        
         # State will be set to IDLE/ERROR by the completion callback
-        self.stop_btn.state(["disabled"])
+        # (B9: button visibility managed by update_checkout_ui_state)
 
     def _collect_params(self):
         from model.checkout_params import (
@@ -1224,6 +1552,7 @@ class CheckoutTab(BaseTab):
         self._refresh_profile_grid()
         self._sync_tester_column()
         self._update_profile_status()
+        self._validate_profile_realtime()
         self.log(f"✓ Profile table loaded: {len(profile_rows)} row(s) from CRT data")
 
     def on_crt_grid_loaded(self, crt_data):
@@ -1248,6 +1577,7 @@ class CheckoutTab(BaseTab):
         self._refresh_profile_grid()
         self._sync_tester_column()
         self._update_profile_status()
+        self._validate_profile_realtime()
         self.log(f"✓ Profile table loaded from CRT: {crt_data.get('count', 0)} row(s)")
 
     def on_autofill_completed(self, mid, cfgpn, fw_ver):
@@ -1412,9 +1742,17 @@ class CheckoutTab(BaseTab):
         filled = []
         if data.get("tgz_path"):   filled.append("TGZ")
         if data.get("env"):        filled.append(f"ENV={data['env']}")
-        if material_rows:          filled.append(f"{len(material_rows)} MID(s)")
-        elif data.get("mid"):      filled.append(f"MID={data['mid']}")
-        if data.get("lot_prefix"): filled.append(f"Lot={data['lot_prefix']}")
+        if material_rows:
+            filled.append(f"{len(material_rows)} MID(s)")
+            # Show full lot from material_rows (lot_prefix may strip digits)
+            lots = list({r.get("lot", "") for r in material_rows if r.get("lot", "")})
+            if lots:
+                filled.append(f"Lot={'|'.join(lots)}")
+            elif data.get("lot_prefix"):
+                filled.append(f"Lot={data['lot_prefix']}")
+        else:
+            if data.get("mid"):        filled.append(f"MID={data['mid']}")
+            if data.get("lot_prefix"): filled.append(f"Lot={data['lot_prefix']}")
         summary = "  ".join(filled) if filled else "(nothing recognised)"
         self.log(f"✓ XML imported: {summary}")
 
@@ -1631,34 +1969,35 @@ class CheckoutTab(BaseTab):
         self._rc_spool_btn.pack(side=tk.LEFT, padx=(0, 10))
         _tip(self._rc_spool_btn, "Spool/prepare logs or artifacts")
         
-        # Stop button - visually separated with destructive styling
-        self.stop_btn = ttk.Button(
-            btn_container, text="■ Stop", width=8,
-            command=self._stop_checkout)
-        self.stop_btn.pack(side=tk.LEFT)
-        self.stop_btn.state(["disabled"])
-        _tip(self.stop_btn, "Stop active checkout run")
+        # B9: Stop button removed from here — now in action buttons section
 
         # ── Summary bar (MID status summary) ──────────────────────────────
         summary_frm = ttk.Frame(frm)
         summary_frm.grid(row=1, column=0, sticky="we", pady=(0, 4))
 
         self._rc_status_indicator = ttk.Label(
-            summary_frm, text="⏸ Idle", font=("Segoe UI", 9, "bold"))
+            summary_frm, text="\u23f8 Idle", font=("Segoe UI", 9, "bold"))
         self._rc_status_indicator.pack(side=tk.LEFT, padx=(0, 12))
 
         self._rc_summary_label = ttk.Label(
             summary_frm, text="", font=("Segoe UI", 8))
         self._rc_summary_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
+        # B10: Progress bar for test progress
+        self._checkout_progress = ttk.Progressbar(
+            frm, orient=tk.HORIZONTAL, mode='determinate', length=400)
+        self._checkout_progress.grid(row=2, column=0, sticky="we", pady=(0, 6))
+        self._checkout_progress['value'] = 0
+
         # ── Result Collector Grid ─────────────────────────────────────
-        frm.rowconfigure(2, weight=1)
+        frm.rowconfigure(3, weight=1)
 
         columns = ("mid", "location", "name", "status", "fail_info",
                    "collected", "error")
+        # B11: Increased treeview height from 5 to 8 for better visibility
         self._rc_tree = ttk.Treeview(
             frm, columns=columns, show="headings",
-            selectmode="extended", height=5)
+            selectmode="extended", height=8)
 
         self._rc_tree.heading("mid",       text="MID")
         self._rc_tree.heading("location",  text="Location")
@@ -1679,8 +2018,8 @@ class CheckoutTab(BaseTab):
         rc_vsb = ttk.Scrollbar(frm, orient=tk.VERTICAL, command=self._rc_tree.yview)
         self._rc_tree.configure(yscrollcommand=rc_vsb.set)
 
-        self._rc_tree.grid(row=2, column=0, sticky="nsew")
-        rc_vsb.grid(row=2, column=1, sticky="ns")
+        self._rc_tree.grid(row=3, column=0, sticky="nsew")
+        rc_vsb.grid(row=3, column=1, sticky="ns")
 
         # Row colour tags
         self._rc_tree.tag_configure("pass",    foreground="green")
@@ -1704,15 +2043,15 @@ class CheckoutTab(BaseTab):
     def update_checkout_ui_state(self):
         """
         Update all button states and status labels based on current checkout state.
-        
-        State Machine Rules:
-        - IDLE: Start enabled (if preconditions ok), Stop disabled, runtime buttons enabled
-        - RUNNING: Start disabled, Stop enabled, runtime buttons enabled
-        - STOPPING: All buttons disabled except Refresh
-        - COMPLETED/ERROR: Start enabled, Stop disabled, runtime buttons enabled
+
+        State Machine Rules (B9: toggle Start/Stop visibility):
+        - IDLE: Start visible+enabled, Stop hidden, runtime buttons enabled
+        - RUNNING: Start hidden, Stop visible+enabled, runtime buttons enabled
+        - STOPPING: Start hidden, Stop visible+disabled, Refresh enabled
+        - COMPLETED/ERROR: Start visible+enabled, Stop hidden, runtime buttons enabled
         """
         state = self._checkout_state
-        
+
         # Update status label
         status_colors = {
             CheckoutState.IDLE: ("#888888", "IDLE"),
@@ -1723,38 +2062,45 @@ class CheckoutTab(BaseTab):
         }
         color, text = status_colors.get(state, ("#888888", "UNKNOWN"))
         self._checkout_status_label.config(text=f"Status: {text}", foreground=color)
-        
-        # Button states based on current state
+
+        # B9: Toggle Start/Stop button visibility
         if state == CheckoutState.IDLE:
-            # Check preconditions for Start button
             has_testers = any(var.get() for var in self._tester_vars.values())
             has_profile = len(self._profile_data) > 0
+            self.checkout_btn.grid()  # Show Start
             self.checkout_btn.state(["!disabled"] if (has_testers and has_profile) else ["disabled"])
-            self.stop_btn.state(["disabled"])
+            self.stop_btn.grid_remove()  # Hide Stop
             self._rc_refresh_btn.state(["!disabled"])
             self._rc_collect_btn.state(["!disabled"])
             self._rc_spool_btn.state(["!disabled"])
-            
+            # B10: Reset progress bar
+            self._checkout_progress['value'] = 0
+
         elif state == CheckoutState.RUNNING:
-            self.checkout_btn.state(["disabled"])
+            self.checkout_btn.grid_remove()  # Hide Start
+            self.stop_btn.grid()  # Show Stop
             self.stop_btn.state(["!disabled"])
             self._rc_refresh_btn.state(["!disabled"])
             self._rc_collect_btn.state(["!disabled"])
             self._rc_spool_btn.state(["!disabled"])
-            
+
         elif state == CheckoutState.STOPPING:
-            self.checkout_btn.state(["disabled"])
+            self.checkout_btn.grid_remove()  # Hide Start
+            self.stop_btn.grid()  # Show Stop (disabled)
             self.stop_btn.state(["disabled"])
-            self._rc_refresh_btn.state(["!disabled"])  # Keep refresh enabled
+            self._rc_refresh_btn.state(["!disabled"])
             self._rc_collect_btn.state(["disabled"])
             self._rc_spool_btn.state(["disabled"])
-            
+
         elif state in (CheckoutState.COMPLETED, CheckoutState.ERROR):
+            self.checkout_btn.grid()  # Show Start
             self.checkout_btn.state(["!disabled"])
-            self.stop_btn.state(["disabled"])
+            self.stop_btn.grid_remove()  # Hide Stop
             self._rc_refresh_btn.state(["!disabled"])
             self._rc_collect_btn.state(["!disabled"])
             self._rc_spool_btn.state(["!disabled"])
+            # B10: Fill progress bar to 100%
+            self._checkout_progress['value'] = 100
 
     # ──────────────────────────────────────────────────────────────────────
     # SECTION 6 — Toolbar actions
@@ -1912,7 +2258,7 @@ class CheckoutTab(BaseTab):
     def on_rc_progress_update(self, summary: dict, entries: dict):
         """
         Called by ResultController (via root.after) when progress updates.
-        Updates the Section 6 treeview and summary bar.
+        Updates the Section 6 treeview, summary bar, and B10 progress bar.
         """
         total      = summary.get("total", 0)
         passed     = summary.get("passed", 0)
@@ -1923,13 +2269,21 @@ class CheckoutTab(BaseTab):
         machine    = summary.get("machine", "")
         site       = summary.get("site", "")
 
-        unresolved_str = f"  |  ⚠ Unresolved: {unresolved}" if unresolved else ""
+        # B10: Update progress bar
+        if total > 0:
+            done = passed + failed
+            pct = int((done / total) * 100)
+            self._checkout_progress['value'] = pct
+        else:
+            self._checkout_progress['value'] = 0
+
+        unresolved_str = f"  |  \u26a0 Unresolved: {unresolved}" if unresolved else ""
         self._rc_summary_label.config(
             text=(
                 f"Machine: {machine}  |  Site: {site}  |  "
                 f"Total: {total}  |  "
-                f"✅ Pass: {passed}  |  ❌ Fail: {failed}  |  "
-                f"🔄 Running: {running}  |  📁 Collected: {collected}"
+                f"\u2705 Pass: {passed}  |  \u274c Fail: {failed}  |  "
+                f"\ud83d\udd04 Running: {running}  |  \ud83d\udcc1 Collected: {collected}"
                 f"{unresolved_str}"
             )
         )
@@ -2153,6 +2507,29 @@ class CheckoutTab(BaseTab):
             )
             lbl = ttk.Label(row_frame, text=label_text, wraplength=450)
             lbl.pack(side=tk.LEFT, padx=(5, 0))
+
+        # B15: Total file size summary
+        total_size = 0
+        total_files = 0
+        for file_entry in files_info:
+            if file_entry.get("found", False):
+                sizes = file_entry.get("sizes", [])
+                total_size += sum(sizes)
+                total_files += file_entry.get("count", 0)
+        if total_size > 1024 * 1024 * 1024:
+            size_summary = f"{total_size / (1024**3):.2f} GB"
+        elif total_size > 1024 * 1024:
+            size_summary = f"{total_size / (1024**2):.1f} MB"
+        elif total_size > 1024:
+            size_summary = f"{total_size / 1024:.1f} KB"
+        else:
+            size_summary = f"{total_size} B"
+        ttk.Label(
+            dlg,
+            text=f"📦 Total: {total_files} file(s), {size_summary}",
+            font=("Segoe UI", 9, "bold"),
+            foreground="#0078d4",
+        ).pack(padx=10, pady=(5, 0), anchor="w")
 
         # Buttons
         btn_frame = ttk.Frame(dlg)
