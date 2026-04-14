@@ -1,0 +1,194 @@
+{
+  "manifest_version": "1.0",
+  "generated_at": "2026-04-14T15:04:20.625333",
+  "metadata": {
+    "jira_key": "TSESSD-14270",
+    "mid": "ANSKR20285608083800-1-1",
+    "sku": "IBIR-0383_ABIT"
+  },
+  "statistics": {
+    "total_tests": 376,
+    "passed_tests": 345,
+    "failed_tests": 31,
+    "pass_rate": 91.75531914893617,
+    "duration_seconds": 22815.219,
+    "start_time": "2026-04-09T08:45:19.426000",
+    "end_time": "2026-04-09T15:05:34.645000"
+  },
+  "files": {
+    "DispatcherDebug2026_04_09_T08_45_19.txt": {
+      "size_bytes": 7021632,
+      "modified_time": "2026-04-09T23:07:14.888608",
+      "file_type": "trace"
+    },
+    "resultsManager.db": {
+      "size_bytes": 1212416,
+      "modified_time": "2026-04-09T23:07:07.012608",
+      "file_type": "database"
+    }
+  },
+  "test_results": {
+    "flows_executed": [
+      "masterflows/init_ibir.flow",
+      "masterflows/Raven_neosem_ABIT_SEC.flow",
+      "masterflows/wrapup.flow"
+    ],
+    "failed_tests": [
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_13",
+        "timestamp": "2026-04-09T08:47:12.218000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_39",
+        "timestamp": "2026-04-09T08:54:24.826000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_45",
+        "timestamp": "2026-04-09T08:55:34.772000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_60",
+        "timestamp": "2026-04-09T09:04:28.188000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_81",
+        "timestamp": "2026-04-09T09:20:19.566000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_87",
+        "timestamp": "2026-04-09T09:25:25.756000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_93",
+        "timestamp": "2026-04-09T09:30:30.656000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_99",
+        "timestamp": "2026-04-09T09:35:37.923000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_105",
+        "timestamp": "2026-04-09T09:40:48.319000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_111",
+        "timestamp": "2026-04-09T09:46:05.265000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_117",
+        "timestamp": "2026-04-09T09:51:21.776000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_123",
+        "timestamp": "2026-04-09T09:56:42.776000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_129",
+        "timestamp": "2026-04-09T10:02:09.287000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_235",
+        "timestamp": "2026-04-09T11:23:42.519000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_262",
+        "timestamp": "2026-04-09T12:33:18.800000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_281",
+        "timestamp": "2026-04-09T12:57:11.594000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_282",
+        "timestamp": "2026-04-09T12:57:27.092000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_283",
+        "timestamp": "2026-04-09T12:57:43.682000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_287",
+        "timestamp": "2026-04-09T13:00:16.896000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_288",
+        "timestamp": "2026-04-09T13:00:31.301000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_289",
+        "timestamp": "2026-04-09T13:00:47.738000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_293",
+        "timestamp": "2026-04-09T13:03:23.252000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_294",
+        "timestamp": "2026-04-09T13:03:36.986000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_295",
+        "timestamp": "2026-04-09T13:03:53.628000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_299",
+        "timestamp": "2026-04-09T13:06:38.212000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_300",
+        "timestamp": "2026-04-09T13:06:52.644000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_301",
+        "timestamp": "2026-04-09T13:07:09.497000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_305",
+        "timestamp": "2026-04-09T13:09:47.142000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_325",
+        "timestamp": "2026-04-09T13:15:12.716000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_347",
+        "timestamp": "2026-04-09T14:14:58.656000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      },
+      {
+        "test_name": "masterflows/Raven_neosem_ABIT_SEC.flow:test_358",
+        "timestamp": "2026-04-09T14:50:54.039000",
+        "flow_file": "masterflows/Raven_neosem_ABIT_SEC.flow"
+      }
+    ]
+  }
+}
