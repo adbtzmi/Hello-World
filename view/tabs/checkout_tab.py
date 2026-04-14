@@ -319,16 +319,31 @@ class CheckoutTab(BaseTab):
         _tip(imp_btn, "Load an existing SLATE XML profile and auto-fill TGZ path from it.")
 
         # ── Profile Grid ──────────────────────────────────────────────────
-        grid_container = ttk.Frame(frm)
+        # Wrap in a frame with border to create grid-like appearance
+        grid_container = ttk.Frame(frm, relief="solid", borderwidth=1)
         grid_container.grid(row=2, column=0, sticky="nsew")
         grid_container.columnconfigure(0, weight=1)
 
         cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
         
-        # Configure style for gridlines
+        # Configure style with gridlines using theme elements
         style = ttk.Style()
-        style.configure("ProfileGrid.Treeview", rowheight=25)
-        style.configure("ProfileGrid.Treeview.Heading", font=("Segoe UI", 9, "bold"))
+        style.configure("ProfileGrid.Treeview",
+                       rowheight=26,
+                       background="#ffffff",
+                       fieldbackground="#ffffff",
+                       bordercolor="#d0d0d0",
+                       lightcolor="#e0e0e0",
+                       darkcolor="#c0c0c0")
+        style.configure("ProfileGrid.Treeview.Heading",
+                       font=("Segoe UI", 9, "bold"),
+                       background="#f0f0f0",
+                       borderwidth=1,
+                       relief="solid")
+        # Map the style to show borders
+        style.map("ProfileGrid.Treeview",
+                 background=[('selected', '#0078d4')],
+                 foreground=[('selected', 'white')])
         
         self._profile_grid = ttk.Treeview(
             grid_container, columns=cols, show="headings",
@@ -336,7 +351,7 @@ class CheckoutTab(BaseTab):
         
         # Configure row tags for alternating colors with borders
         self._profile_grid.tag_configure("oddrow", background="#ffffff")
-        self._profile_grid.tag_configure("evenrow", background="#f5f5f5")
+        self._profile_grid.tag_configure("evenrow", background="#f8f8f8")
         
         for col_name, col_width in self._PROFILE_GEN_COLUMNS:
             self._profile_grid.heading(col_name, text=col_name, anchor=tk.W)
