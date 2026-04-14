@@ -103,22 +103,23 @@ class CheckoutTab(BaseTab):
         "XML_FAIL":    ("#a80000", "white"),
     }
 
-    # Profile Generation Table columns
+    # Profile Generation Table columns (name, width)
+    # Optimized widths to prevent overflow while maintaining readability
     _PROFILE_GEN_COLUMNS = [
-        ("Form_Factor",         120),
-        ("Material_Desc",       150),
-        ("CFGPN",               120),
-        ("MCTO_#1",             100),
-        ("Dummy_Lot",           120),
-        ("Step",                 80),
-        ("MID",                 120),
-        ("Tester",              120),
-        ("DIB_TYPE",            100),
-        ("MACHINE_MODEL",       120),
-        ("MACHINE_VENDOR",      120),
-        ("Primitive",           100),
-        ("Dut",                  60),
-        ("ATTR_OVERWRITE",      200),
+        ("Form_Factor",         100),
+        ("Material_Desc",       140),
+        ("CFGPN",               100),
+        ("MCTO_#1",              85),
+        ("Dummy_Lot",           100),
+        ("Step",                 70),
+        ("MID",                 100),
+        ("Tester",              100),
+        ("DIB_TYPE",             90),
+        ("MACHINE_MODEL",       110),
+        ("MACHINE_VENDOR",      115),
+        ("Primitive",            85),
+        ("Dut",                  50),
+        ("ATTR_OVERWRITE",      150),
     ]
 
     _AUTO_POPULATED_COLS = {"Form_Factor", "Material_Desc", "CFGPN", "MCTO_#1", "Dummy_Lot"}
@@ -339,8 +340,10 @@ class CheckoutTab(BaseTab):
         
         for col_name, col_width in self._PROFILE_GEN_COLUMNS:
             self._profile_grid.heading(col_name, text=col_name, anchor=tk.W)
-            self._profile_grid.column(col_name, width=col_width, minwidth=40,
-                                      stretch=True, anchor=tk.W)
+            # Use stretch=False to prevent columns from expanding beyond their width
+            # This ensures horizontal scrollbar works properly
+            self._profile_grid.column(col_name, width=col_width, minwidth=col_width,
+                                      stretch=False, anchor=tk.W)
 
         pg_scroll_y = ttk.Scrollbar(grid_container, orient=tk.VERTICAL,
                                     command=self._profile_grid.yview)
