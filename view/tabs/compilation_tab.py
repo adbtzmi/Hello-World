@@ -3,10 +3,26 @@
 view/tabs/compilation_tab.py
 =============================
 Compilation Tab (View) — Standalone tab for TP Compilation & Health
-Extracted from implementation_tab.py to be a main-level tab.
+
+UX Improvements Applied:
+  A2  — Proper placeholder entry with flag-based logic
+  A3  — Fixed misleading Shift+Click hint → "Click to toggle"
+  A4  — Wider path entries (fill available space)
+  A5  — Compile button visual feedback during compilation
+  A6  — Force Fail moved to its own top-level LabelFrame
+  A7  — Double-click instruction label for force-fail cases
+  A8  — Auto-refresh timestamp indicator in health monitor
+  A9  — Scrollbar + increased limit for recent builds
+  A10 — Increased compile history treeview height
+  A11 — Click-to-sort column headings in history
+  A12 — Added Status column to compile history
+  A13 — Reduced Add Tester dialog height, collapsible checklist
+  A14 — Hostname format validation with visual feedback
+  A15 — Vertical stacking layout instead of side-by-side columns
 """
 
 import os
+import re
 import tkinter as tk
 from tkinter import ttk, scrolledtext, filedialog, messagebox
 import logging
@@ -15,14 +31,64 @@ from view.tabs.base_tab import BaseTab
 
 logger = logging.getLogger("bento_app")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Tooltip helper (shared pattern with checkout_tab)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _ToolTip:
+    """Lightweight balloon tooltip for any widget."""
+
+    def __init__(self, widget, text: str, delay: int = 500):
+        self._widget = widget
+        self._text   = text
+        self._delay  = delay
+        self._id     = None
+        self._tw     = None
+        widget.bind("<Enter>",  self._schedule, add="+")
+        widget.bind("<Leave>",  self._cancel,   add="+")
+        widget.bind("<Button>", self._cancel,   add="+")
+
+    def _schedule(self, _=None):
+        self._cancel()
+        self._id = self._widget.after(self._delay, self._show)
+
+    def _cancel(self, _=None):
+        if self._id:
+            self._widget.after_cancel(self._id)
+            self._id = None
+        if self._tw:
+            self._tw.destroy()
+            self._tw = None
+
+    def _show(self):
+        x = self._widget.winfo_rootx() + 20
+        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
+        self._tw = tw = tk.Toplevel(self._widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tw.attributes("-topmost", True)
+        tk.Label(
+            tw, text=self._text, justify=tk.LEFT,
+            relief=tk.SOLID, borderwidth=1,
+            font=("Segoe UI", 8),
+            padx=6, pady=4, wraplength=340,
+        ).pack()
+
+
+def _tip(widget, text: str):
+    _ToolTip(widget, text)
+
 
 class CompilationTab(BaseTab):
     """
     Standalone Compilation tab for TP Package compilation and health monitoring.
-    
-    Layout:
-      1. Compile TP Package (Target Testers, Configuration, Action)
-      2. Force Fail TGZ Section
+
+    Layout (vertical stacking — A15):
+      1. Compile TP Package
+         a. Target Testers (full width)
+         b. Configuration & Paths (full width)
+         c. Action buttons
+      2. Force Fail TGZ (own top-level section — A6)
       3. Watcher Health Monitor
       4. Compile History
     """
@@ -41,6 +107,9 @@ class CompilationTab(BaseTab):
         self._badge_labels = {}
         self._tester_vars  = {}
         self._history_rows = []
+        self._sort_col     = None      # A11: current sort column
+        self._sort_reverse = False     # A11: sort direction
+        self._placeholder_active = True  # A2: placeholder flag
         self._build_ui()
 
     def _build_ui(self):
@@ -88,131 +157,189 @@ class CompilationTab(BaseTab):
 
         # Use _inner as the main container instead of main_frame
         main_frame = self._inner
-        
+
+        # ══════════════════════════════════════════════════════════════════
         # 1. Compile TP Package (Top)
+        # ══════════════════════════════════════════════════════════════════
         compile_frame = ttk.LabelFrame(main_frame, text="Compile TP Package", padding="6")
         compile_frame.pack(fill=tk.X, padx=10, pady=5)
+        # Two-column grid: Target Testers (left) | Configuration & Paths (right)
         compile_frame.columnconfigure(0, weight=1)
         compile_frame.columnconfigure(1, weight=1)
 
-        # 1. Target Testers
+        # ── LEFT: Target Testers ─────────────────────────────────────────
         targets_frame = ttk.LabelFrame(compile_frame, text="1. Target Testers", padding="6")
-        targets_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5), pady=(0, 5))
+        targets_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 3), pady=(0, 5))
         targets_frame.columnconfigure(0, weight=1)
 
+        # A2: Proper placeholder search entry
         search_frame = ttk.Frame(targets_frame)
-        search_frame.grid(row=0, column=0, sticky="we", pady=(0, 5))
-        ttk.Label(search_frame, text="Search:").pack(side=tk.LEFT, padx=(0, 5))
+        search_frame.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(search_frame, text="Search:", font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 4))
         self._tester_search_var = tk.StringVar()
         self._tester_search_var.trace_add("write", self._filter_testers)
-        self._tester_search_entry = ttk.Entry(search_frame, textvariable=self._tester_search_var, width=15)
-        self._tester_search_entry.pack(side=tk.LEFT)
-        self._tester_search_entry.insert(0, "Search...")
+        self._tester_search_entry = ttk.Entry(search_frame, textvariable=self._tester_search_var)
+        self._tester_search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._placeholder_active = True
+        self._tester_search_entry.insert(0, "Search testers...")
         self._tester_search_entry.config(foreground="gray")
-        self._tester_search_entry.bind("<FocusIn>", lambda e: self._tester_search_entry.delete(0, tk.END) if self._tester_search_entry.get() == "Search..." else None)
-        self._tester_search_entry.bind("<FocusOut>", lambda e: (self._tester_search_entry.insert(0, "Search..."), self._tester_search_entry.config(foreground="gray")) if not self._tester_search_entry.get() else None)
-        ttk.Label(search_frame, text="(Shift+Click for multi)", font=("Arial", 8, "italic"), foreground="gray").pack(side=tk.LEFT, padx=(5, 0))
+        self._tester_search_entry.bind("<FocusIn>", self._on_search_focus_in)
+        self._tester_search_entry.bind("<FocusOut>", self._on_search_focus_out)
 
+        # Listbox with scrollbar
         list_frame = ttk.Frame(targets_frame)
-        list_frame.grid(row=1, column=0, sticky="we")
-        self._tester_listbox = tk.Listbox(list_frame, selectmode=tk.MULTIPLE, height=3, width=28, exportselection=False)
-        self._tester_listbox.pack(side=tk.LEFT, fill=tk.Y)
+        list_frame.pack(fill=tk.BOTH, expand=True)
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+
+        self._tester_listbox = tk.Listbox(list_frame, selectmode=tk.MULTIPLE,
+                                          height=4, exportselection=False,
+                                          font=("Segoe UI", 9))
+        self._tester_listbox.grid(row=0, column=0, sticky="nsew")
         self._tester_listbox.bind("<<ListboxSelect>>", self._on_tester_selected)
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self._tester_listbox.yview)
-        scrollbar.pack(side=tk.LEFT, fill=tk.Y)
+        scrollbar.grid(row=0, column=1, sticky="ns")
         self._tester_listbox.config(yscrollcommand=scrollbar.set)
-        
-        btn_frame_list = ttk.Frame(list_frame)
-        btn_frame_list.pack(side=tk.LEFT, padx=(5, 0), anchor=tk.N)
-        ttk.Button(btn_frame_list, text="+ Add Tester", width=12, command=self._add_tester).pack(pady=(0, 5))
-        ttk.Button(btn_frame_list, text="🗑 Remove", width=12, command=self._remove_tester).pack(pady=(0, 5))
+        # A3: Fixed hint
+        _tip(self._tester_listbox, "Click to toggle tester selection.\nMultiple testers can be selected.")
 
+        # Buttons row below listbox
+        btn_row = ttk.Frame(targets_frame)
+        btn_row.pack(fill=tk.X, pady=(4, 0))
+        add_btn = ttk.Button(btn_row, text="+ Add", width=8, command=self._add_tester)
+        add_btn.pack(side=tk.LEFT, padx=(0, 2))
+        _tip(add_btn, "Register a new tester in the shared registry.")
+        rem_btn = ttk.Button(btn_row, text="🗑 Remove", width=9, command=self._remove_tester)
+        rem_btn.pack(side=tk.LEFT, padx=(0, 2))
+        _tip(rem_btn, "Remove selected tester(s) from the registry.")
+        sel_all_btn = ttk.Button(btn_row, text="☑ All", width=6, command=self._select_all_testers)
+        sel_all_btn.pack(side=tk.LEFT, padx=(0, 2))
+        _tip(sel_all_btn, "Select all testers in the list.")
+        desel_btn = ttk.Button(btn_row, text="☐ None", width=7, command=self._deselect_all_testers)
+        desel_btn.pack(side=tk.LEFT)
+        _tip(desel_btn, "Deselect all testers.")
+
+        # Selected indicator
         info_frame = ttk.Frame(targets_frame)
-        info_frame.grid(row=2, column=0, sticky="we", pady=(5, 0))
-        ttk.Label(info_frame, text="Selected:", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=(0, 5))
+        info_frame.pack(fill=tk.X, pady=(3, 0))
+        ttk.Label(info_frame, text="Selected:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(0, 4))
         self._compile_mode_var = tk.StringVar(value="No tester selected")
-        self._compile_mode_lbl = ttk.Label(info_frame, textvariable=self._compile_mode_var, font=("Arial", 9, "italic"), foreground="#cc0000")
+        self._compile_mode_lbl = ttk.Label(info_frame, textvariable=self._compile_mode_var,
+                                           font=("Segoe UI", 9, "italic"), foreground="#cc0000")
         self._compile_mode_lbl.pack(side=tk.LEFT)
 
-        # 2. Configuration & Paths
+        # ── RIGHT: Configuration & Paths ─────────────────────────────────
         config_frame = ttk.LabelFrame(compile_frame, text="2. Configuration & Paths", padding="6")
-        config_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0), pady=(0, 5))
+        config_frame.grid(row=0, column=1, sticky="nsew", padx=(3, 0), pady=(0, 5))
         config_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(config_frame, text="TGZ Label:").grid(row=0, column=0, sticky=tk.W, pady=2, padx=(0, 5))
+        ttk.Label(config_frame, text="TGZ Label:", font=("Segoe UI", 9)).grid(
+            row=0, column=0, sticky=tk.W, pady=2, padx=(0, 5))
         self.context.set_var("tgz_label_var", tk.StringVar())
-        ttk.Entry(config_frame, textvariable=self.context.get_var("tgz_label_var"), width=22).grid(row=0, column=1, sticky=tk.W, pady=2)
-        ttk.Label(config_frame, text="(blank = default)", font=("Arial", 8), foreground="gray").grid(row=0, column=2, sticky=tk.W, padx=2)
+        tgz_label_entry = ttk.Entry(config_frame, textvariable=self.context.get_var("tgz_label_var"))
+        tgz_label_entry.grid(row=0, column=1, sticky="we", pady=2)
+        _tip(tgz_label_entry, "Custom label appended to the TGZ filename.\nLeave blank for default naming.")
+        ttk.Label(config_frame, text="(blank = default)", font=("Segoe UI", 8),
+                  foreground="gray").grid(row=0, column=2, sticky=tk.W, padx=2)
 
-        ttk.Label(config_frame, text="RAW_ZIP:").grid(row=1, column=0, sticky=tk.W, pady=2, padx=(0, 5))
+        ttk.Label(config_frame, text="RAW_ZIP:", font=("Segoe UI", 9)).grid(
+            row=1, column=0, sticky=tk.W, pady=2, padx=(0, 5))
         raw_zip_frame = ttk.Frame(config_frame)
         raw_zip_frame.grid(row=1, column=1, columnspan=2, sticky="we", pady=2)
-        
-        # Initialize paths from global site resolver
+        raw_zip_frame.columnconfigure(0, weight=1)
+
         from model.site_paths import get_site_path
         default_raw_zip = get_site_path("RAW_ZIP")
         default_release_tgz = get_site_path("RELEASE_TGZ")
-        
-        self.context.set_var("compile_raw_zip", tk.StringVar(value=default_raw_zip))
-        self.raw_zip_entry = ttk.Entry(raw_zip_frame, textvariable=self.context.get_var("compile_raw_zip"), width=28)
-        self.raw_zip_entry.pack(side=tk.LEFT)
-        ttk.Button(raw_zip_frame, text="📁", width=3, command=self._browse_raw_zip).pack(side=tk.LEFT, padx=(2, 0))
 
-        ttk.Label(config_frame, text="RELEASE_TGZ:").grid(row=2, column=0, sticky=tk.W, pady=2, padx=(0, 5))
+        self.context.set_var("compile_raw_zip", tk.StringVar(value=default_raw_zip))
+        self.raw_zip_entry = ttk.Entry(raw_zip_frame, textvariable=self.context.get_var("compile_raw_zip"))
+        self.raw_zip_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        _tip(self.raw_zip_entry, "Path to the RAW_ZIP folder where compiled ZIPs are placed\nfor the watcher to process.")
+        browse_rz = ttk.Button(raw_zip_frame, text="📁", width=3, command=self._browse_raw_zip)
+        browse_rz.pack(side=tk.LEFT, padx=(2, 0))
+        _tip(browse_rz, "Browse for RAW_ZIP folder.")
+
+        ttk.Label(config_frame, text="RELEASE_TGZ:", font=("Segoe UI", 9)).grid(
+            row=2, column=0, sticky=tk.W, pady=2, padx=(0, 5))
         release_tgz_frame = ttk.Frame(config_frame)
         release_tgz_frame.grid(row=2, column=1, columnspan=2, sticky="we", pady=2)
+        release_tgz_frame.columnconfigure(0, weight=1)
         self.context.set_var("compile_release_tgz", tk.StringVar(value=default_release_tgz))
-        self.release_tgz_entry = ttk.Entry(release_tgz_frame, textvariable=self.context.get_var("compile_release_tgz"), width=28)
-        self.release_tgz_entry.pack(side=tk.LEFT)
-        ttk.Button(release_tgz_frame, text="📁", width=3, command=self._browse_release_tgz).pack(side=tk.LEFT, padx=(2, 0))
+        self.release_tgz_entry = ttk.Entry(release_tgz_frame, textvariable=self.context.get_var("compile_release_tgz"))
+        self.release_tgz_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        _tip(self.release_tgz_entry, "Path to the RELEASE_TGZ folder where final TGZ files\nare stored after watcher processing.")
+        browse_rt = ttk.Button(release_tgz_frame, text="📁", width=3, command=self._browse_release_tgz)
+        browse_rt.pack(side=tk.LEFT, padx=(2, 0))
+        _tip(browse_rt, "Browse for RELEASE_TGZ folder.")
 
-        # 3. Action Frame
+        # ── Compile Button (spans both columns) ─────────────────────────
         action_frame = ttk.Frame(compile_frame)
-        action_frame.grid(row=1, column=0, columnspan=2, sticky="we", pady=(0, 5))
-        btn_container = ttk.Frame(action_frame)
-        btn_container.pack(expand=True)
-        
+        action_frame.grid(row=1, column=0, columnspan=2, pady=(0, 5))
+
         style = ttk.Style()
         style.configure('Compile.TButton')
-        self.compile_btn = ttk.Button(btn_container, text="🚀 Compile on Selected Tester(s)", style='Compile.TButton', command=self._start_compile, width=35)
+        # A5: Button text changes during compilation
+        self.compile_btn = ttk.Button(action_frame, text="🚀 Compile on Selected Tester(s)",
+                                     style='Compile.TButton', command=self._start_compile, width=35)
         self.compile_btn.pack(pady=(0, 2))
         self.context.lockable_buttons.append(self.compile_btn)
+        _tip(self.compile_btn, "Start TP compilation on all selected testers.\nRequires JIRA key and repo path from other tabs.")
         self.compile_status_var = tk.StringVar(value="")
-        ttk.Label(btn_container, textvariable=self.compile_status_var, font=("Arial", 9, "bold"), foreground="#0066cc").pack()
+        ttk.Label(action_frame, textvariable=self.compile_status_var,
+                  font=("Segoe UI", 9, "bold"), foreground="#0066cc").pack()
 
         self._refresh_testers()
 
-        # 4. Force Fail Section (between action and health monitor)
-        self._build_force_fail_section(compile_frame)
+        # ══════════════════════════════════════════════════════════════════
+        # 2. Force Fail TGZ (A6: Own top-level section)
+        # ══════════════════════════════════════════════════════════════════
+        self._build_force_fail_section(main_frame)
 
-        # 2. Watcher Health Monitor (Middle)
+        # ══════════════════════════════════════════════════════════════════
+        # 3. Watcher Health Monitor (Middle)
+        # ══════════════════════════════════════════════════════════════════
         self.health_wrapper = ttk.LabelFrame(main_frame, text="🔍 Watcher Health Monitor", padding="6")
         self.health_wrapper.pack(fill=tk.X, padx=10, pady=5)
-        
+
         row_frame1 = ttk.Frame(self.health_wrapper)
         row_frame1.pack(fill=tk.X, pady=2)
-        ttk.Label(row_frame1, text="📂 RAW_ZIP Folder:", width=28, anchor="w", font=("Arial", 9, "bold")).pack(side=tk.LEFT)
+        ttk.Label(row_frame1, text="📂 RAW_ZIP Folder:", width=28, anchor="w",
+                  font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
         self.health_raw_zip_lbl = ttk.Label(row_frame1, text="Checking...", foreground="gray")
         self.health_raw_zip_lbl.pack(side=tk.LEFT)
 
         row_frame2 = ttk.Frame(self.health_wrapper)
         row_frame2.pack(fill=tk.X, pady=2)
-        ttk.Label(row_frame2, text="📂 RELEASE_TGZ Folder:", width=28, anchor="w", font=("Arial", 9, "bold")).pack(side=tk.LEFT)
+        ttk.Label(row_frame2, text="📂 RELEASE_TGZ Folder:", width=28, anchor="w",
+                  font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
         self.health_release_lbl = ttk.Label(row_frame2, text="Checking...", foreground="gray")
         self.health_release_lbl.pack(side=tk.LEFT)
 
         row_frame3 = ttk.Frame(self.health_wrapper)
         row_frame3.pack(fill=tk.X, pady=2)
-        ttk.Label(row_frame3, text="🤖 Watcher Process:", width=28, anchor="w", font=("Arial", 9, "bold")).pack(side=tk.LEFT)
+        ttk.Label(row_frame3, text="🤖 Watcher Process:", width=28, anchor="w",
+                  font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
         self.health_watcher_lbl = ttk.Label(row_frame3, text="Checking...", foreground="gray")
         self.health_watcher_lbl.pack(side=tk.LEFT)
 
         recent_frame = ttk.Frame(self.health_wrapper)
         recent_frame.pack(fill=tk.X, pady=(3, 2))
-        ttk.Label(recent_frame, text="📊 Recent Builds:", width=28, anchor="w", font=("Arial", 9, "bold")).pack(side=tk.LEFT, anchor=tk.N)
-        
-        self.builds_text = tk.Text(recent_frame, height=6, width=65, bg="white", relief="flat", font=("Segoe UI", 9))
-        self.builds_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        recent_frame.columnconfigure(1, weight=1)
+        ttk.Label(recent_frame, text="📊 Recent Builds:", width=28, anchor="w",
+                  font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="nw")
+
+        # A9: Added scrollbar, increased height, added border
+        builds_container = ttk.Frame(recent_frame)
+        builds_container.grid(row=0, column=1, sticky="nsew")
+        builds_container.columnconfigure(0, weight=1)
+        self.builds_text = tk.Text(builds_container, height=8, bg="white",
+                                   relief="groove", bd=1, font=("Segoe UI", 9))
+        self.builds_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        builds_scroll = ttk.Scrollbar(builds_container, orient=tk.VERTICAL,
+                                      command=self.builds_text.yview)
+        builds_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.builds_text.config(yscrollcommand=builds_scroll.set)
 
         self.builds_text.tag_config("success",     foreground="#28a745")
         self.builds_text.tag_config("failed",      foreground="#dc3545")
@@ -222,61 +349,100 @@ class CompilationTab(BaseTab):
         self.builds_text.tag_config("unknown",     foreground="gray")
         self.builds_text.tag_config("default",     foreground="black")
 
-        ttk.Button(self.health_wrapper, text="🔄 Refresh Now", command=self._refresh_health).pack(anchor="e", padx=5, pady=2)
+        # A8: Refresh button row with last-refreshed timestamp
+        refresh_row = ttk.Frame(self.health_wrapper)
+        refresh_row.pack(fill=tk.X, padx=5, pady=2)
+        self._health_last_refresh_var = tk.StringVar(value="")
+        ttk.Label(refresh_row, textvariable=self._health_last_refresh_var,
+                  font=("Segoe UI", 8, "italic"), foreground="gray").pack(side=tk.LEFT)
+        refresh_btn = ttk.Button(refresh_row, text="🔄 Refresh Now", command=self._refresh_health)
+        refresh_btn.pack(side=tk.RIGHT)
+        _tip(refresh_btn, "Manually refresh health status.\nAuto-refreshes every 30 seconds.")
         self._refresh_health()
 
-        # 3. Compile History Section (Bottom - Fills remainder)
+        # ══════════════════════════════════════════════════════════════════
+        # 4. Compile History Section (Bottom - Fills remainder)
+        # ══════════════════════════════════════════════════════════════════
         history_wrapper = ttk.LabelFrame(main_frame, text="📋 Compile History", padding="6")
         history_wrapper.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         history_wrapper.columnconfigure(0, weight=1)
 
-        # Toolbar (matches original)
+        # Toolbar
         toolbar = ttk.Frame(history_wrapper)
         toolbar.grid(row=0, column=0, columnspan=2, sticky="we", pady=(0, 2))
         ttk.Label(toolbar, text="Past compilations from RELEASE_TGZ",
-                  font=("Arial", 8), foreground="gray").pack(side=tk.LEFT)
-        
-        ttk.Button(toolbar, text="🔄 Refresh", 
-                   command=self._refresh_history_from_disk).pack(side=tk.RIGHT)
-        ttk.Button(toolbar, text="📁 Open Folder",
-                   command=self._open_release_folder).pack(side=tk.RIGHT, padx=5)
+                  font=("Segoe UI", 8), foreground="gray").pack(side=tk.LEFT)
 
-        # Treeview (height=6 to save space, columns match original)
-        hist_cols = ("Timestamp", "JIRA", "Tester", "ENV", "Label", "Output TGZ")
-        self._history_tree = ttk.Treeview(history_wrapper, columns=hist_cols, show="headings", height=4)
-        
-        # Column widths matching original
-        col_widths = [140, 120, 110, 70, 100, 300]
+        hist_refresh_btn = ttk.Button(toolbar, text="🔄 Refresh",
+                                      command=self._refresh_history_from_disk)
+        hist_refresh_btn.pack(side=tk.RIGHT)
+        _tip(hist_refresh_btn, "Reload compile history from disk.")
+        open_folder_btn = ttk.Button(toolbar, text="📁 Open Folder",
+                                     command=self._open_release_folder)
+        open_folder_btn.pack(side=tk.RIGHT, padx=5)
+        _tip(open_folder_btn, "Open the RELEASE_TGZ folder in Explorer.\nDouble-click a history row to open its specific folder.")
+
+        # A12: Added "Status" column; A10: Increased height to 8
+        hist_cols = ("Timestamp", "Status", "JIRA", "Tester", "ENV", "Label", "Output TGZ")
+        self._history_tree = ttk.Treeview(history_wrapper, columns=hist_cols,
+                                          show="headings", height=8)
+
+        # A12: Column widths with new Status column
+        col_widths = [140, 80, 120, 110, 70, 100, 280]
         for col, width in zip(hist_cols, col_widths):
-            self._history_tree.heading(col, text=col)
+            # A11: Click-to-sort on column headings
+            self._history_tree.heading(col, text=col,
+                                       command=lambda c=col: self._sort_history(c))
             self._history_tree.column(col, width=width, anchor="w")
 
-        # Row colors (even/odd tags match original)
+        # Row colors (even/odd tags)
         self._history_tree.tag_configure("even", background="#f5f5f5")
         self._history_tree.tag_configure("odd",  background="#ffffff")
+        # A12: Only failures get colored — SUCCESS rows stay default black
+        self._history_tree.tag_configure("status_failed",  foreground="#a80000")
+        self._history_tree.tag_configure("status_error",   foreground="#a80000")
 
-        hist_scroll = ttk.Scrollbar(history_wrapper, orient=tk.VERTICAL, command=self._history_tree.yview)
+        hist_scroll = ttk.Scrollbar(history_wrapper, orient=tk.VERTICAL,
+                                    command=self._history_tree.yview)
         self._history_tree.configure(yscrollcommand=hist_scroll.set)
-        
+
         # Add double-click handler to open the specific folder
         self._history_tree.bind("<Double-1>", lambda e: self._open_release_folder())
-        
+
         self._history_tree.grid(row=1, column=0, sticky="nsew")
         hist_scroll.grid(row=1, column=1, sticky="ns")
-        
+
         history_wrapper.rowconfigure(1, weight=1)
-        
+
         # Initial history load
         self._refresh_history_from_disk()
 
     # ──────────────────────────────────────────────────────────────────────
-    # FORCE FAIL SECTION
+    # A2: PROPER PLACEHOLDER ENTRY HANDLERS
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _on_search_focus_in(self, event):
+        """Clear placeholder text on focus."""
+        if self._placeholder_active:
+            self._tester_search_entry.delete(0, tk.END)
+            self._tester_search_entry.config(foreground="black")
+            self._placeholder_active = False
+
+    def _on_search_focus_out(self, event):
+        """Restore placeholder text if entry is empty."""
+        if not self._tester_search_entry.get().strip():
+            self._placeholder_active = True
+            self._tester_search_entry.insert(0, "Search testers...")
+            self._tester_search_entry.config(foreground="gray")
+
+    # ──────────────────────────────────────────────────────────────────────
+    # A6: FORCE FAIL SECTION — Own top-level LabelFrame
     # ──────────────────────────────────────────────────────────────────────
 
     def _build_force_fail_section(self, parent):
-        """Build the force-fail UI section inside the compile LabelFrame."""
+        """Build the force-fail UI section as its own top-level LabelFrame."""
         ff_frame = ttk.LabelFrame(parent, text="❌ Force Fail TGZ", padding="6")
-        ff_frame.grid(row=2, column=0, columnspan=2, sticky="we", pady=(0, 5))
+        ff_frame.pack(fill=tk.X, padx=10, pady=5)
         ff_frame.columnconfigure(1, weight=1)
 
         # Row 0: Enable checkbox + Generate button
@@ -290,6 +456,7 @@ class CompilationTab(BaseTab):
             command=self._on_ff_toggle,
         )
         self._ff_check.pack(side=tk.LEFT, padx=(0, 10))
+        _tip(self._ff_check, "Enable force-fail TGZ generation.\nWhen enabled, AI generates test cases that intentionally fail.")
 
         self._ff_generate_btn = ttk.Button(
             ctrl_row, text="🤖 Generate Force Fail Cases",
@@ -297,6 +464,7 @@ class CompilationTab(BaseTab):
         )
         self._ff_generate_btn.pack(side=tk.LEFT, padx=(0, 10))
         self.context.lockable_buttons.append(self._ff_generate_btn)
+        _tip(self._ff_generate_btn, "Use AI to generate force-fail test cases\nbased on the JIRA issue and repository code.")
 
         self._ff_compile_btn = ttk.Button(
             ctrl_row, text="🚀 Compile Force Fail TGZ",
@@ -304,18 +472,20 @@ class CompilationTab(BaseTab):
         )
         self._ff_compile_btn.pack(side=tk.LEFT, padx=(0, 10))
         self.context.lockable_buttons.append(self._ff_compile_btn)
+        _tip(self._ff_compile_btn, "Compile a TGZ with force-fail patches applied.")
 
         self._ff_clear_btn = ttk.Button(
             ctrl_row, text="🗑 Clear", command=self._clear_ff_cases,
             state=tk.DISABLED, width=8,
         )
         self._ff_clear_btn.pack(side=tk.LEFT)
+        _tip(self._ff_clear_btn, "Clear all generated force-fail cases.")
 
         # Row 1: Status label
         self._ff_status_var = tk.StringVar(value="Force fail disabled")
         self._ff_status_lbl = ttk.Label(
             ff_frame, textvariable=self._ff_status_var,
-            font=("Arial", 9, "italic"), foreground="gray",
+            font=("Segoe UI", 9, "italic"), foreground="gray",
         )
         self._ff_status_lbl.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 4))
 
@@ -323,6 +493,11 @@ class CompilationTab(BaseTab):
         cases_frame = ttk.Frame(ff_frame)
         cases_frame.grid(row=2, column=0, columnspan=2, sticky="we", pady=(0, 4))
         cases_frame.columnconfigure(0, weight=1)
+
+        # A7: Instruction label for double-click toggle
+        ttk.Label(cases_frame, text="💡 Double-click a row to enable/disable a case",
+                  font=("Segoe UI", 8, "italic"), foreground="#666666").grid(
+            row=0, column=0, sticky="w", pady=(0, 2))
 
         ff_cols = ("Enabled", "Test ID", "Description", "Files")
         self._ff_tree = ttk.Treeview(
@@ -339,8 +514,8 @@ class CompilationTab(BaseTab):
 
         ff_scroll = ttk.Scrollbar(cases_frame, orient=tk.VERTICAL, command=self._ff_tree.yview)
         self._ff_tree.configure(yscrollcommand=ff_scroll.set)
-        self._ff_tree.grid(row=0, column=0, sticky="we")
-        ff_scroll.grid(row=0, column=1, sticky="ns")
+        self._ff_tree.grid(row=1, column=0, sticky="we")
+        ff_scroll.grid(row=1, column=1, sticky="ns")
 
         # Row 3: Diff preview (collapsed by default)
         self._ff_diff_visible = tk.BooleanVar(value=False)
@@ -547,6 +722,7 @@ class CompilationTab(BaseTab):
         self.lock_gui()
         self._ff_status_var.set("⏳ Compiling force-fail TGZ…")
         self._ff_status_lbl.config(foreground="#fd7e14")
+        # A5: Update compile button text
         self.compile_status_var.set("Force Fail Compile Running...")
         self.log(f"[Force Fail] Compiling {enabled} case(s) on {len(hostnames)} tester(s)")
 
@@ -609,11 +785,11 @@ class CompilationTab(BaseTab):
     def update_paths_from_site(self):
         """Update all path fields based on the current global site selection."""
         from model.site_paths import get_site_path
-        
+
         # Update RAW_ZIP path
         raw_zip_path = get_site_path("RAW_ZIP")
         self.context.get_var("compile_raw_zip").set(raw_zip_path)
-        
+
         # Update RELEASE_TGZ path
         release_tgz_path = get_site_path("RELEASE_TGZ")
         self.context.get_var("compile_release_tgz").set(release_tgz_path)
@@ -628,15 +804,16 @@ class CompilationTab(BaseTab):
     def _filter_testers(self, *_):
         if not hasattr(self, '_tester_listbox'):
             return
-        query = self._tester_search_var.get().lower()
-        if query == "search...":
-            query = ""
+        # A2: Use placeholder flag instead of string comparison
+        if self._placeholder_active:
+            return
+        query = self._tester_search_var.get().lower().strip()
         self._tester_listbox.delete(0, tk.END)
         ctrl = getattr(self.context.controller, "compile_controller", None)
         testers = ctrl.get_available_testers() if ctrl else []
         for hostname, env in testers:
             label = f"{hostname} ({env})"
-            if query in hostname.lower() or query in env.lower():
+            if not query or query in hostname.lower() or query in env.lower():
                 self._tester_listbox.insert(tk.END, label)
         self._on_tester_selected()
 
@@ -650,11 +827,23 @@ class CompilationTab(BaseTab):
             self._compile_mode_var.set("Selected: " + val)
             self._compile_mode_lbl.config(foreground="#1a6e1a")
         else:
-            self._compile_mode_var.set(f"Multi-compile: {len(selections)} testers - " + ", ".join([self._tester_listbox.get(i) for i in selections]))
+            names = ", ".join([self._tester_listbox.get(i) for i in selections])
+            self._compile_mode_var.set(f"Multi-compile: {len(selections)} testers — {names}")
             self._compile_mode_lbl.config(foreground="#0066cc")
 
+    # A1: Select All / Deselect All
+    def _select_all_testers(self):
+        """Select all testers in the listbox."""
+        self._tester_listbox.select_set(0, tk.END)
+        self._on_tester_selected()
+
+    def _deselect_all_testers(self):
+        """Deselect all testers in the listbox."""
+        self._tester_listbox.select_clear(0, tk.END)
+        self._on_tester_selected()
+
     def _add_tester(self):
-        """Open the custom Add Tester dialog (matches legacy app.py)."""
+        """Open the custom Add Tester dialog."""
         AddTesterDialog(self.root, self)
 
     def _browse_directory(self, var, title):
@@ -665,7 +854,7 @@ class CompilationTab(BaseTab):
             var.set(path)
 
     def _centre_dialog(self, dialog, w, h):
-        """Position dialog at the centre of the main window (matches legacy app.py)."""
+        """Position dialog at the centre of the main window."""
         dialog.transient(self.root)
         dialog.update_idletasks()
         x = self.root.winfo_x() + (self.root.winfo_width()  - w) // 2
@@ -673,20 +862,20 @@ class CompilationTab(BaseTab):
         dialog.geometry(f"{w}x{h}+{x}+{y}")
 
     def _remove_tester(self):
-        """Remove selected tester(s) with confirmation (matches legacy app.py)."""
+        """Remove selected tester(s) with confirmation."""
         from tkinter import messagebox
         selections = self._tester_listbox.curselection()
         if not selections:
             messagebox.showwarning("No Selection", "Please select one or more testers to remove.")
             return
-        
+
         testers_to_remove = [self._tester_listbox.get(idx) for idx in selections]
-        
+
         if len(testers_to_remove) == 1:
             msg = f"Remove '{testers_to_remove[0]}' from the registry?"
         else:
             msg = f"Remove {len(testers_to_remove)} testers from the registry?\n\n" + "\n".join(f"  • {t}" for t in testers_to_remove)
-        
+
         if messagebox.askyesno("Remove Tester(s)", msg):
             # Load current registry to delete correctly
             import json, os
@@ -697,12 +886,12 @@ class CompilationTab(BaseTab):
                     with open(registry_path, "r") as f:
                         registry_data = json.load(f)
                 except Exception: pass
-                
+
             for key in testers_to_remove:
                 if key in registry_data:
                     del registry_data[key]
                     self.log(f"[Tester Removed] {key}")
-            
+
             self._save_tester_registry(registry_data)
             self._refresh_testers()
 
@@ -715,7 +904,7 @@ class CompilationTab(BaseTab):
         registry_path = self.context.config.get("registry_path", r"P:\temp\BENTO\bento_testers.json")
         try:
             os.makedirs(os.path.dirname(registry_path), exist_ok=True)
-            
+
             # If we didn't get explicit data, we reconstruct from listbox (legacy behavior for removals)
             if registry_data is None:
                 registry_data = {}
@@ -789,6 +978,8 @@ class CompilationTab(BaseTab):
         else:
             # Single tester — use the default label directly
             self.lock_gui()
+            # A5: Visual feedback on compile button
+            self.compile_btn.config(text="⏳ Compiling...")
             self.compile_status_var.set("Running...")
             self.log(f"[Compile] Starting compile for {issue_key} on {len(hostnames)} tester(s)…")
 
@@ -813,7 +1004,7 @@ class CompilationTab(BaseTab):
         self._centre_dialog(dialog, 500, h)
 
         ttk.Label(dialog, text="Set Custom TGZ Labels",
-                  font=("Arial", 12, "bold")).pack(pady=(15, 5))
+                  font=("Segoe UI", 12, "bold")).pack(pady=(15, 5))
         ttk.Label(dialog,
                   text="Enter a specific TGZ label for each tester (leave blank for no label):"
                   ).pack(pady=(0, 10))
@@ -837,6 +1028,8 @@ class CompilationTab(BaseTab):
             dialog.destroy()
             hostnames = [h for h, _ in targets]
             self.lock_gui()
+            # A5: Visual feedback on compile button
+            self.compile_btn.config(text="⏳ Compiling...")
             self.compile_status_var.set("Running...")
             self.log(f"[Compile] Starting multi-compile for {issue_key} on {len(hostnames)} tester(s)…")
             ctrl.start_compile(
@@ -857,22 +1050,23 @@ class CompilationTab(BaseTab):
         import os
         import time
         import json
-        
+        import datetime
+
         raw_zip = self.context.get_var("compile_raw_zip").get().strip()
         release_tgz = self.context.get_var("compile_release_tgz").get().strip()
         repo_dir = r"C:\BENTO\adv_ibir_master" # Default as per original
-        
+
         # 1. Folder Reachability
         if os.path.isdir(raw_zip):
             self.health_raw_zip_lbl.config(text="✅ Reachable  " + raw_zip, foreground="#28a745")
         else:
             self.health_raw_zip_lbl.config(text="❌ NOT REACHABLE: " + raw_zip, foreground="#dc3545")
-            
+
         if os.path.isdir(release_tgz):
             self.health_release_lbl.config(text="✅ Reachable  " + release_tgz, foreground="#28a745")
         else:
             self.health_release_lbl.config(text="❌ NOT REACHABLE: " + release_tgz, foreground="#dc3545")
-            
+
         # 2. Watcher Process & Locks
         lock_path = os.path.join(repo_dir, ".bento_build_lock")
         local_lock_msg = ""
@@ -892,7 +1086,7 @@ class CompilationTab(BaseTab):
                             active_locks.append("Active")
             except Exception:
                 pass
-        
+
         if active_locks or local_lock_msg:
             locks_str = ", ".join(active_locks)
             msg = "🟡 Processing: " + locks_str if locks_str else "🟡 Processing..."
@@ -901,12 +1095,12 @@ class CompilationTab(BaseTab):
             self.health_watcher_lbl.config(text=msg, foreground="#fd7e14")
         else:
             self.health_watcher_lbl.config(text="✅ Idle (no active builds)", foreground="#28a745")
-            
-        # 3. Recent Builds List
+
+        # 3. Recent Builds List — A9: increased to 5 entries
         try:
             self.builds_text.config(state="normal")
             self.builds_text.delete("1.0", tk.END)
-            
+
             all_builds = []
             if os.path.isdir(raw_zip):
                 try:
@@ -920,10 +1114,10 @@ class CompilationTab(BaseTab):
                             all_builds.append((f, None, mtime))
                 except Exception:
                     pass
-            
+
             # Sort by mtime descending
             all_builds.sort(key=lambda x: x[2], reverse=True)
-            
+
             # Deduplicate by core name
             seen_bases = set()
             unique_count = 0
@@ -932,10 +1126,10 @@ class CompilationTab(BaseTab):
                 if core_name not in seen_bases:
                     seen_bases.add(core_name)
                     unique_count += 1
-                    
+
                     state = "unknown"
                     detail = "No status file yet (Waiting for watcher...)"
-                    
+
                     if status_file:
                         full_status_path = os.path.join(raw_zip, status_file)
                         try:
@@ -947,21 +1141,26 @@ class CompilationTab(BaseTab):
                             detail = "Status parse error"
                     else:
                         state = "pending"
-                    
+
                     display_name = base_name if base_name.endswith(".zip") else base_name + ".zip"
                     self.builds_text.insert(tk.END, f"{display_name}\n", "default")
                     self.builds_text.insert(tk.END, f"↳ {state.upper()} — {detail[:70]}\n", state)
-                    
-                    if unique_count >= 3:
+
+                    # A9: Show up to 5 recent builds instead of 3
+                    if unique_count >= 5:
                         break
-            
+
             if unique_count == 0:
                 self.builds_text.insert(tk.END, "(no recent builds found)\n", "unknown")
-                
+
         except Exception as e:
             self.builds_text.insert(tk.END, f"Refresh error: {e}", "failed")
         finally:
             self.builds_text.config(state="disabled")
+
+        # A8: Update last-refreshed timestamp
+        now_str = datetime.datetime.now().strftime("%H:%M:%S")
+        self._health_last_refresh_var.set(f"Auto-refresh active · Last updated: {now_str}")
 
         # Auto-refresh loop
         self.after(30000, self._refresh_health)
@@ -971,6 +1170,8 @@ class CompilationTab(BaseTab):
     # ──────────────────────────────────────────────────────────────────────
 
     def on_compile_started(self, hostname: str, env: str):
+        # A5: Update button text
+        self.compile_btn.config(text="⏳ Compiling...")
         self.log(f"⚙ Compile started → {hostname} ({env})")
 
     def on_compile_completed(self, hostname: str, env: str, result: dict):
@@ -985,13 +1186,53 @@ class CompilationTab(BaseTab):
 
         import datetime
         ts = datetime.datetime.now().strftime("%H:%M:%S")
-        # Columns: ("Timestamp", "JIRA", "Tester", "ENV", "Label", "Output TGZ")
-        self._history_tree.insert("", 0, values=(ts, jira_key, hostname, env, label, tgz_file))
+        # A12: Columns now include Status: ("Timestamp", "Status", "JIRA", "Tester", "ENV", "Label", "Output TGZ")
+        # Only failures get a color tag; SUCCESS stays default black
+        tags = ("status_failed",) if status != "SUCCESS" else ()
+        self._history_tree.insert("", 0, values=(ts, status, jira_key, hostname, env, label, tgz_file),
+                                  tags=tags)
 
         self.unlock_gui()
+        # A5: Restore compile button text
+        self.compile_btn.config(text="🚀 Compile on Selected Tester(s)")
         self.compile_status_var.set("")
 
         self.log(f"{'✓' if status == 'SUCCESS' else '✗'} Compile {status} → {hostname} ({env}): {result.get('detail', '')}")
+
+    # ──────────────────────────────────────────────────────────────────────
+    # A11: COLUMN SORTING FOR COMPILE HISTORY
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _sort_history(self, col):
+        """Sort the history treeview by the clicked column heading."""
+        # Toggle direction if same column clicked again
+        if self._sort_col == col:
+            self._sort_reverse = not self._sort_reverse
+        else:
+            self._sort_col = col
+            self._sort_reverse = False
+
+        # Get all items
+        items = [(str(self._history_tree.set(k, col)), k) for k in self._history_tree.get_children("")]
+        items.sort(reverse=self._sort_reverse, key=lambda t: t[0].lower())
+
+        # Rearrange items in sorted order
+        for index, (val, k) in enumerate(items):
+            self._history_tree.move(k, "", index)
+            # Re-apply alternating row colors
+            tag = "even" if index % 2 == 0 else "odd"
+            # Preserve status color tag
+            existing_tags = list(self._history_tree.item(k, "tags"))
+            status_tags = [t for t in existing_tags if t.startswith("status_")]
+            self._history_tree.item(k, tags=(tag, *status_tags))
+
+        # Update heading to show sort direction
+        arrow = " ▼" if self._sort_reverse else " ▲"
+        hist_cols = ("Timestamp", "Status", "JIRA", "Tester", "ENV", "Label", "Output TGZ")
+        for c in hist_cols:
+            text = c + (arrow if c == col else "")
+            self._history_tree.heading(c, text=text,
+                                       command=lambda c=c: self._sort_history(c))
 
     # ──────────────────────────────────────────────────────────────────────
     # COMPILE HISTORY LOGIC
@@ -999,7 +1240,7 @@ class CompilationTab(BaseTab):
 
     def _open_release_folder(self):
         import os
-        
+
         # Get the selected item from the history tree
         selected_items = self._history_tree.selection()
         if not selected_items:
@@ -1010,24 +1251,21 @@ class CompilationTab(BaseTab):
             else:
                 self.show_error("Error", f"Release folder not found: {repo_dir}")
             return
-            
+
         # Get the selected item's values
         item_id = selected_items[0]
         values = self._history_tree.item(item_id, "values")
-        
-        # Extract the tester, env, and output TGZ filename
-        tester = values[2]  # Index 2 is the "Tester" column
-        env = values[3]      # Index 3 is the "ENV" column
-        output_tgz = values[5]  # Index 5 is the "Output TGZ" column
-        
-        # Construct the folder name based on the naming pattern in the screenshot
-        # The pattern appears to be: TESTER_TSESSD-XXXX_ENV
-        jira_key = values[1]  # Index 1 is the "JIRA" column
+
+        # A12: Column indices shifted by 1 due to new Status column
+        tester = values[3]      # Index 3 is the "Tester" column
+        env = values[4]          # Index 4 is the "ENV" column
+        output_tgz = values[6]  # Index 6 is the "Output TGZ" column
+        jira_key = values[2]    # Index 2 is the "JIRA" column
         folder_name = f"{tester}_{jira_key}_{env}"
-        
+
         # Get the base RELEASE_TGZ directory
         base_dir = self.context.get_var("compile_release_tgz").get().strip()
-        
+
         # Look for a matching folder
         target_dir = None
         if os.path.isdir(base_dir):
@@ -1043,7 +1281,7 @@ class CompilationTab(BaseTab):
                         if jira_key in item:
                             target_dir = item_path
                             break
-        
+
         # Open the folder if found, otherwise show an error
         if target_dir and os.path.isdir(target_dir):
             os.startfile(target_dir)
@@ -1058,7 +1296,7 @@ class CompilationTab(BaseTab):
         import glob
         import os
         import threading
-        
+
         release_root = self.context.get_var("compile_release_tgz").get().strip()
         if not os.path.isdir(release_root):
             return
@@ -1082,14 +1320,19 @@ class CompilationTab(BaseTab):
 
     def _populate_history(self, files):
         self._history_tree.delete(*self._history_tree.get_children())
-        for i, fpath in enumerate(files[:100]): # Limit to 100 entries
+        for i, fpath in enumerate(files[:100]):  # Limit to 100 entries
             row = self._parse_build_info(fpath)
             if row:
+                # A12: Only failures get a color tag; SUCCESS stays default black
+                status_val = row[1].upper() if len(row) > 1 else ""
                 tag = "even" if i % 2 == 0 else "odd"
-                self._history_tree.insert("", tk.END, values=row, tags=(tag,))
+                if status_val in ("FAILED", "ERROR"):
+                    self._history_tree.insert("", tk.END, values=row, tags=(tag, "status_failed"))
+                else:
+                    self._history_tree.insert("", tk.END, values=row, tags=(tag,))
 
     def _parse_build_info(self, fpath):
-        """Matches original _parse() logic in gui/app.py."""
+        """Matches original _parse() logic in gui/app.py. A12: Now includes Status column."""
         data = {}
         try:
             with open(fpath, "r") as f:
@@ -1097,21 +1340,15 @@ class CompilationTab(BaseTab):
                     if ":" in line:
                         k, v = line.split(":", 1)
                         data[k.strip()] = v.strip()
-            
-            # Key names written by watcher_copier.py write_build_info():
-            #   "Tester"    -> hostname
-            #   "JIRA Key"  -> jira_key   (NOT "JIRA")
-            #   "Env"       -> env        (NOT "ENV")
-            #   "Label"     -> label
-            #   "Timestamp" -> timestamp
-            # Original cols: ("Timestamp", "JIRA", "Tester", "ENV", "Label", "Output TGZ")
-            # Prefer the "Output TGZ" field written by watcher_copier (full filename),
-            # fall back to deriving from the build_info filename (label only).
+
             output_tgz = data.get("Output TGZ", "").strip()
             if not output_tgz:
                 output_tgz = os.path.basename(fpath).replace("build_info_", "").replace(".txt", ".tgz")
+            # A12: Added Status column (derive from data or default to "N/A")
+            status = data.get("Status", "SUCCESS").upper()
             return (
                 data.get("Timestamp", "N/A"),
+                status,
                 data.get("JIRA Key", "N/A"),
                 data.get("Tester", "N/A"),
                 data.get("Env", "N/A"),
@@ -1123,23 +1360,33 @@ class CompilationTab(BaseTab):
 
 
 # ──────────────────────────────────────────────────────────────────────
+# A13 + A14: IMPROVED ADD TESTER DIALOG
+# ──────────────────────────────────────────────────────────────────────
 
 class AddTesterDialog:
     """
     Modal dialog to register a new tester.
-    Final adjustment for exact 1:1 parity and visibility.
+
+    A13: Reduced height, collapsible preflight checklist.
+    A14: Hostname format validation with visual feedback.
     """
+
+    # A14: Hostname pattern (e.g., IBIR-0999, PION-1234, TEST-0001)
+    _HOSTNAME_PATTERN = re.compile(r'^[A-Z]{2,8}-\d{2,6}$')
+
     def __init__(self, root, parent_tab):
         self.root = root
         self.parent_tab = parent_tab
-        
+
         self.dialog = tk.Toplevel(root)
         self.dialog.title("Add New Tester")
-        self.dialog.geometry("560x640")
-        self.dialog.resizable(False, False)
+        # A13: Reduced from 560x640 to 520x520, resizable
+        self.dialog.geometry("520x520")
+        self.dialog.resizable(True, True)
+        self.dialog.minsize(400, 400)
         self.dialog.grab_set()
-        
-        self.parent_tab._centre_dialog(self.dialog, 560, 640)
+
+        self.parent_tab._centre_dialog(self.dialog, 520, 520)
 
         # Container frame
         self.main_frame = ttk.Frame(self.dialog, padding="10")
@@ -1148,20 +1395,29 @@ class AddTesterDialog:
 
         # ── Header ──
         ttk.Label(self.main_frame, text="Register New Tester",
-                  font=("Arial", 12, "bold")).grid(
-            row=0, column=0, columnspan=2, pady=(2, 6))
+                  font=("Segoe UI", 12, "bold")).grid(
+            row=0, column=0, columnspan=3, pady=(2, 6))
 
         ttk.Separator(self.main_frame, orient="horizontal").grid(
-            row=1, column=0, columnspan=2, sticky="we", pady=(0, 6))
+            row=1, column=0, columnspan=3, sticky="we", pady=(0, 6))
 
-        # ── Preflight Checklist ──
-        checklist_frame = ttk.LabelFrame(self.main_frame, text="⚠ Preflight Checklist", padding=10)
-        checklist_frame.grid(row=2, column=0, columnspan=2, sticky="we", pady=2)
+        # ── A13: Collapsible Preflight Checklist ──
+        self._checklist_visible = tk.BooleanVar(value=False)
+        checklist_toggle = ttk.Checkbutton(
+            self.main_frame, text="⚠ Show Preflight Checklist",
+            variable=self._checklist_visible,
+            command=self._toggle_checklist,
+        )
+        checklist_toggle.grid(row=2, column=0, columnspan=3, sticky="w", pady=(0, 4))
 
-        ttk.Label(checklist_frame,
-                  text="Before registering, confirm the tester is ready to receive compile jobs:",
-                  font=("Arial", 9, "bold"), foreground="#cc6600",
-                  wraplength=500).pack(anchor=tk.W, pady=(0, 4))
+        self._checklist_frame = ttk.LabelFrame(self.main_frame, text="⚠ Preflight Checklist", padding=8)
+        self._checklist_frame.grid(row=3, column=0, columnspan=3, sticky="we", pady=2)
+        self._checklist_frame.grid_remove()  # Hidden by default
+
+        ttk.Label(self._checklist_frame,
+                  text="Before registering, confirm the tester is ready:",
+                  font=("Segoe UI", 9, "bold"), foreground="#cc6600",
+                  wraplength=460).pack(anchor=tk.W, pady=(0, 4))
 
         self.check_vars = []
         checklist_items = [
@@ -1172,19 +1428,15 @@ class AddTesterDialog:
         for text in checklist_items:
             v = tk.BooleanVar(value=False)
             self.check_vars.append(v)
-            ttk.Checkbutton(checklist_frame, text=text, variable=v).pack(anchor=tk.W, pady=1)
+            ttk.Checkbutton(self._checklist_frame, text=text, variable=v).pack(anchor=tk.W, pady=1)
 
         def open_guide():
             import os, sys, webbrowser
             from tkinter import messagebox
             pdf_name = "BENTO_Watcher_Setup_Guide.pdf"
-            # Try multiple strategies to locate the PDF
             candidates = [
-                # 1. Relative to this source file (view/tabs/ -> project root)
                 os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), pdf_name),
-                # 2. Relative to main script (e.g. main.py in project root)
                 os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), pdf_name),
-                # 3. Current working directory
                 os.path.join(os.getcwd(), pdf_name),
             ]
             guide_path = None
@@ -1201,74 +1453,112 @@ class AddTesterDialog:
                 messagebox.showwarning("Guide Not Found",
                     f"Setup guide PDF not found.\n\nSearched:\n" +
                     "\n".join(candidates))
-        
-        ttk.Button(checklist_frame, text="📄 Open Setup Guide (PDF)", command=open_guide).pack(anchor=tk.W, pady=(6, 0))
+
+        ttk.Button(self._checklist_frame, text="📄 Open Setup Guide (PDF)", command=open_guide).pack(anchor=tk.W, pady=(6, 0))
 
         ttk.Separator(self.main_frame, orient="horizontal").grid(
-            row=3, column=0, columnspan=2, sticky="we", pady=8)
+            row=4, column=0, columnspan=3, sticky="we", pady=8)
 
         # ── Tester Details ──
-        ttk.Label(self.main_frame, text="Tester Hostname:").grid(row=4, column=0, sticky="w", padx=10, pady=4)
+        ttk.Label(self.main_frame, text="Tester Hostname:", font=("Segoe UI", 9)).grid(
+            row=5, column=0, sticky="w", padx=10, pady=4)
         self.hostname_var = tk.StringVar()
-        self.hostname_entry = ttk.Entry(self.main_frame, textvariable=self.hostname_var, width=30)
-        self.hostname_entry.grid(row=4, column=1, sticky="w", padx=10, pady=4)
-        ttk.Label(self.main_frame, text="e.g.  IBIR-0999", font=("Arial", 8), foreground="gray").grid(row=5, column=1, sticky="w", padx=10, pady=0)
+        self.hostname_entry = ttk.Entry(self.main_frame, textvariable=self.hostname_var, width=20)
+        self.hostname_entry.grid(row=5, column=1, sticky="we", padx=10, pady=4)
+        # A14: Validation indicator label
+        self._hostname_valid_lbl = ttk.Label(self.main_frame, text="", width=3)
+        self._hostname_valid_lbl.grid(row=5, column=2, padx=(0, 10))
+        ttk.Label(self.main_frame, text="Format: XXXX-0000  (e.g. IBIR-0999)",
+                  font=("Segoe UI", 8), foreground="gray").grid(
+            row=6, column=1, columnspan=2, sticky="w", padx=10, pady=0)
 
-        ttk.Label(self.main_frame, text="Environment:").grid(row=6, column=0, sticky="w", padx=10, pady=4)
+        ttk.Label(self.main_frame, text="Environment:", font=("Segoe UI", 9)).grid(
+            row=7, column=0, sticky="w", padx=10, pady=4)
         self.env_var = tk.StringVar(value="ABIT")
-        env_combo = ttk.Combobox(self.main_frame, textvariable=self.env_var, values=["ABIT", "SFN2", "CNFG"], state="readonly", width=12)
-        env_combo.grid(row=6, column=1, sticky="w", padx=10, pady=4)
+        env_combo = ttk.Combobox(self.main_frame, textvariable=self.env_var,
+                                 values=["ABIT", "SFN2", "CNFG"], state="readonly", width=12)
+        env_combo.grid(row=7, column=1, sticky="w", padx=10, pady=4)
 
-        ttk.Label(self.main_frame, text="Repo Path:").grid(row=7, column=0, sticky="w", padx=10, pady=4)
+        ttk.Label(self.main_frame, text="Repo Path:", font=("Segoe UI", 9)).grid(
+            row=8, column=0, sticky="w", padx=10, pady=4)
         self.repo_dir_var = tk.StringVar(value=r"C:\BENTO\adv_ibir_master")
         repo_frame = ttk.Frame(self.main_frame)
-        repo_frame.grid(row=7, column=1, sticky="w", padx=10, pady=4)
-        ttk.Entry(repo_frame, textvariable=self.repo_dir_var, width=32).pack(side=tk.LEFT)
-        ttk.Button(repo_frame, text="📁", width=3, command=lambda: self.parent_tab._browse_directory(self.repo_dir_var, "Select TP Repository")).pack(side=tk.LEFT, padx=(2, 0))
+        repo_frame.grid(row=8, column=1, columnspan=2, sticky="we", padx=10, pady=4)
+        repo_frame.columnconfigure(0, weight=1)
+        ttk.Entry(repo_frame, textvariable=self.repo_dir_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(repo_frame, text="📁", width=3,
+                   command=lambda: self.parent_tab._browse_directory(self.repo_dir_var, "Select TP Repository")).pack(side=tk.LEFT, padx=(2, 0))
 
-        ttk.Label(self.main_frame, text="Build Command:").grid(row=8, column=0, sticky="w", padx=10, pady=4)
+        ttk.Label(self.main_frame, text="Build Command:", font=("Segoe UI", 9)).grid(
+            row=9, column=0, sticky="w", padx=10, pady=4)
         self.build_cmd_var = tk.StringVar(value="make release")
-        build_combo = ttk.Combobox(self.main_frame, textvariable=self.build_cmd_var, values=["make release", "make release_supermicro"], width=28)
-        build_combo.grid(row=8, column=1, sticky="w", padx=10, pady=4)
+        build_combo = ttk.Combobox(self.main_frame, textvariable=self.build_cmd_var,
+                                   values=["make release", "make release_supermicro"], width=28)
+        build_combo.grid(row=9, column=1, sticky="w", padx=10, pady=4)
 
-        ttk.Separator(self.main_frame, orient="horizontal").grid(row=9, column=0, columnspan=2, sticky="we", pady=8)
+        ttk.Separator(self.main_frame, orient="horizontal").grid(
+            row=10, column=0, columnspan=3, sticky="we", pady=8)
 
         # ── Error label ──
         self.err_var = tk.StringVar(value="")
-        ttk.Label(self.main_frame, textvariable=self.err_var, foreground="#cc0000", font=("Arial", 8)).grid(row=10, column=0, columnspan=2)
+        self._err_lbl = ttk.Label(self.main_frame, textvariable=self.err_var,
+                                  foreground="#cc0000", font=("Segoe UI", 9))
+        self._err_lbl.grid(row=11, column=0, columnspan=3, padx=10)
 
         # ── Buttons ──
         btn_row = ttk.Frame(self.main_frame)
-        btn_row.grid(row=11, column=0, columnspan=2, pady=10)
-        
-        self.add_btn = ttk.Button(btn_row, text="Add Tester", command=self._confirm, state="disabled", width=14)
+        btn_row.grid(row=12, column=0, columnspan=3, pady=10)
+
+        self.add_btn = ttk.Button(btn_row, text="Add Tester", command=self._confirm, width=14)
         self.add_btn.pack(side=tk.LEFT, padx=6)
         ttk.Button(btn_row, text="Cancel", command=self.dialog.destroy, width=14).pack(side=tk.LEFT, padx=6)
 
-        # ── Validation ──
-        def _update_add_btn(*_):
-            all_checked = all(v.get() for v in self.check_vars)
-            self.add_btn.config(state="normal" if all_checked else "disabled")
-            if all_checked:
-                self.err_var.set("")
-        
-        for v in self.check_vars:
-            v.trace_add("write", _update_add_btn)
+        # A14: Real-time hostname validation
+        self.hostname_var.trace_add("write", self._validate_hostname)
 
         self.hostname_entry.focus_set()
+
+    def _toggle_checklist(self):
+        """A13: Show/hide the preflight checklist."""
+        if self._checklist_visible.get():
+            self._checklist_frame.grid()
+        else:
+            self._checklist_frame.grid_remove()
+
+    def _validate_hostname(self, *_):
+        """A14: Real-time hostname format validation with visual indicator."""
+        hostname = self.hostname_var.get().strip().upper()
+        if not hostname:
+            self._hostname_valid_lbl.config(text="", foreground="gray")
+            return
+        if self._HOSTNAME_PATTERN.match(hostname):
+            self._hostname_valid_lbl.config(text="✓", foreground="#107c10")
+            self.err_var.set("")
+        else:
+            self._hostname_valid_lbl.config(text="✗", foreground="#cc0000")
 
     def _confirm(self):
         hostname = self.hostname_var.get().strip().upper()
         env      = self.env_var.get().strip().upper()
         repo_dir = self.repo_dir_var.get().strip()
         build_cmd = self.build_cmd_var.get().strip()
-        
+
         if not hostname:
-            self.err_var.set("Hostname cannot be empty.")
+            self.err_var.set("⚠ Hostname cannot be empty.")
             return
-        
+
+        # A14: Validate hostname format (warn but don't block)
+        if not self._HOSTNAME_PATTERN.match(hostname):
+            if not messagebox.askyesno(
+                "Non-Standard Hostname",
+                f"'{hostname}' doesn't match the expected format (e.g. IBIR-0999).\n\n"
+                f"Continue anyway?",
+                parent=self.dialog
+            ):
+                return
+
         key = f"{hostname} ({env})"
-        
+
         import json, os
         registry_path = self.parent_tab.context.config.get("registry_path", r"P:\temp\BENTO\bento_testers.json")
         registry_data = {}
@@ -1279,7 +1569,7 @@ class AddTesterDialog:
             except Exception: pass
 
         if key in registry_data:
-            self.err_var.set(f"Tester '{key}' is already registered.")
+            self.err_var.set(f"⚠ Tester '{key}' is already registered.")
             return
 
         registry_data[key] = {
@@ -1288,7 +1578,7 @@ class AddTesterDialog:
             "repo_dir": repo_dir,
             "build_cmd": build_cmd
         }
-        
+
         self.parent_tab._save_tester_registry(registry_data)
         self.parent_tab._refresh_testers()
         self.parent_tab.log(f"[Tester Added] {key} registered.")
