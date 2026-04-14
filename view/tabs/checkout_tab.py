@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+from enum import Enum
 import json
 import logging
 from datetime import datetime
@@ -14,6 +15,22 @@ logger = logging.getLogger("bento_app")
 _STATUS_PASS    = "PASS"
 _STATUS_FAIL    = "FAIL"
 _STATUS_RUNNING = "RUNNING"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Checkout State Machine
+# ─────────────────────────────────────────────────────────────────────────────
+
+class CheckoutState(Enum):
+    """
+    Checkout state machine for UI control.
+    Single source of truth for button enable/disable logic.
+    """
+    IDLE = "IDLE"           # No active checkout, ready to start
+    RUNNING = "RUNNING"     # Checkout in progress
+    STOPPING = "STOPPING"   # Stop requested, waiting for cleanup
+    COMPLETED = "COMPLETED" # Checkout finished successfully
+    ERROR = "ERROR"         # Checkout finished with errors
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -172,6 +189,9 @@ class CheckoutTab(BaseTab):
         self._tester_row               = 0
         self._profile_data: List[Dict] = []
 
+        # ── Checkout State Machine ────────────────────────────────────
+        self._checkout_state = CheckoutState.IDLE
+
         # ── Task 2: Result collection state ───────────────────────────
         self._rc_checkout_results: Dict[str, dict] = {}   # hostname → result
         self._rc_checkout_hostnames: List[str]      = []   # testers used
@@ -269,7 +289,7 @@ class CheckoutTab(BaseTab):
         self._build_paths_section(f, row=1)
         self._build_detection_tester_section(f, row=2)
         self._build_action_buttons(f, row=3)
-        self._build_test_progress_section(f, row=5)
+        self._build_test_progress_section(f, row=4)
 
         # ── Keyboard shortcuts ───────────────────────────────────────────
         self.bind_all("<Control-Return>", lambda e: self._start_checkout())
@@ -400,7 +420,7 @@ class CheckoutTab(BaseTab):
     # ──────────────────────────────────────────────────────────────────────
 
     def _build_paths_section(self, parent, row):
-        frm = ttk.LabelFrame(parent, text="  Checkout Paths & Test Cases  ",
+        frm = ttk.LabelFrame(parent, text="  Checkout Paths  ",
                              padding=(8, 6, 8, 8))
         frm.grid(row=row, column=0, sticky="we", pady=(0, 14))
         # 3-column grid: Label (col 0) | Input (col 1, expands) | Button (col 2)
@@ -410,9 +430,7 @@ class CheckoutTab(BaseTab):
 
         cur_row = 0
 
-        # ── Row 0: Form Factor, Generate TempTraveler, Auto Start ──
-        from model.site_config import _DEFAULT_FORM_FACTORS
-
+        # ── Row 0: Generate TempTraveler, Auto Start ──
         opts_row = ttk.Frame(frm)
         opts_row.grid(row=cur_row, column=0, columnspan=3,
                       sticky=tk.W, pady=(0, 6))
@@ -437,41 +455,19 @@ class CheckoutTab(BaseTab):
 
         cur_row += 1
 
-        # ── Test Cases ────────────────────────────────────────────────
-        ttk.Label(frm, text="TC:").grid(
-            row=cur_row, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
-
-        tc_frame = ttk.Frame(frm)
-        tc_frame.grid(row=cur_row, column=1, columnspan=2,
-                      sticky="we", pady=(0, 4))
-
-        pass_cb = ttk.Checkbutton(tc_frame, text="PASS",
-                      variable=self.context.get_var('checkout_tc_passing'))
-        pass_cb.pack(side=tk.LEFT)
-        _tip(pass_cb, "Include a passing test case in the checkout run.")
-
-        pass_entry = ttk.Entry(tc_frame,
-                   textvariable=self.context.get_var('checkout_tc_passing_label'),
-                   width=12)
-        pass_entry.pack(side=tk.LEFT, padx=(4, 14))
-        _tip(pass_entry, "Label for the passing test case (default: passing).")
-
-        fail_cb = ttk.Checkbutton(tc_frame, text="FAIL",
-                      variable=self.context.get_var('checkout_tc_force_fail'))
-        fail_cb.pack(side=tk.LEFT)
-        _tip(fail_cb, "Include a force-fail test case in the checkout run.")
-
-        fail_lbl_entry = ttk.Entry(tc_frame,
-                   textvariable=self.context.get_var('checkout_tc_fail_label'),
-                   width=14)
-        fail_lbl_entry.pack(side=tk.LEFT, padx=(4, 4))
-        _tip(fail_lbl_entry, "Label for the force-fail test case (default: force_fail_1).")
-
-        fail_desc_entry = ttk.Entry(tc_frame,
-                   textvariable=self.context.get_var('checkout_tc_fail_desc'),
-                   width=28)
-        fail_desc_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        _tip(fail_desc_entry, "Optional description for the force-fail test case.")
+        # ── TGZ Archive Path ──────────────────────────────────────────
+        ttk.Label(frm, text="TGZ:").grid(
+            row=cur_row, column=0, sticky=tk.W, padx=(0, 8))
+        
+        tgz_entry = ttk.Entry(frm, textvariable=self.context.get_var('checkout_tgz_path'))
+        tgz_entry.grid(row=cur_row, column=1, sticky="we")
+        _tip(tgz_entry, "Path to the compiled TGZ archive containing test programs.")
+        
+        tgz_browse_btn = ttk.Button(frm, text="Browse...",
+                                     command=lambda: self._browse_file('checkout_tgz_path',
+                                                                       "Select TGZ Archive",
+                                                                       [("TGZ files", "*.tgz"), ("All files", "*.*")]))
+        tgz_browse_btn.grid(row=cur_row, column=2, sticky=tk.W, padx=(4, 0))
     # ──────────────────────────────────────────────────────────────────────
     # SECTION 3 — SLATE Detection + Tester Selection (side-by-side)
     # ──────────────────────────────────────────────────────────────────────
@@ -509,26 +505,26 @@ class CheckoutTab(BaseTab):
     # ──────────────────────────────────────────────────────────────────────
 
     def _build_action_buttons(self, parent, row):
-        btn_frame = ttk.Frame(parent)
-        btn_frame.grid(row=row, column=0, pady=(0, 14))
-
-        # Primary: Start
+        """Build the primary action button section."""
+        action_frame = ttk.Frame(parent)
+        action_frame.grid(row=row, column=0, sticky="we", pady=(0, 14))
+        
+        # Center the button
+        action_frame.columnconfigure(0, weight=1)
+        action_frame.columnconfigure(1, weight=0)
+        action_frame.columnconfigure(2, weight=1)
+        
         self.checkout_btn = ttk.Button(
-            btn_frame, text="▶ Start Checkout",
+            action_frame, text="▶ Start Checkout",
             style='Accent.TButton',
             command=self._start_checkout)
-        self.checkout_btn.pack(side=tk.LEFT, padx=(0, 3))
+        self.checkout_btn.grid(row=0, column=1)
         self.context.lockable_buttons.append(self.checkout_btn)
+        
+        _tip = _ToolTip
         _tip(self.checkout_btn,
-             "Generate XML profiles and start the checkout run on all selected testers.")
-
-        # Stop
-        self.stop_btn = ttk.Button(
-            btn_frame, text="⏹ Stop Checkout",
-            command=self._stop_checkout)
-        self.stop_btn.pack(side=tk.LEFT, padx=(0, 10))
-        self.stop_btn.state(["disabled"])
-        _tip(self.stop_btn, "Abort the running checkout on all testers.")
+             "Generate XML profiles and start the checkout run on all selected testers.\n"
+             "Only enabled when IDLE and preconditions are met.")
 
     # ──────────────────────────────────────────────────────────────────────
     # SITE PATH UPDATE
@@ -541,6 +537,20 @@ class CheckoutTab(BaseTab):
         # Update hot folder path
         checkout_queue_path = get_site_path("CHECKOUT_QUEUE")
         self.context.get_var("checkout_hot_folder").set(checkout_queue_path)
+
+    def _browse_file(self, var_name, title, filetypes):
+        """Browse for a file and update the specified variable."""
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(title=title, filetypes=filetypes)
+        if path:
+            self.context.get_var(var_name).set(path)
+
+    def _browse_directory(self, var, title):
+        """Browse for a directory and update the specified variable."""
+        from tkinter import filedialog
+        path = filedialog.askdirectory(title=title)
+        if path:
+            var.set(path)
 
     # ──────────────────────────────────────────────────────────────────────
     # PROFILE TABLE — DATA MANAGEMENT
@@ -1056,12 +1066,39 @@ class CheckoutTab(BaseTab):
         params = self._collect_params()
         if params is None:
             return
-        self.lock_gui()
-        self.stop_btn.state(["!disabled"])
+        self._set_checkout_state(CheckoutState.RUNNING)
         self.context.controller.checkout_controller.start_checkout(params)
 
     def _stop_checkout(self):
+        """
+        Stop the active checkout run with confirmation dialog.
+        Prevents accidental stops and logs the user action.
+        """
+        # Confirmation dialog for safety
+        if self._checkout_state != CheckoutState.RUNNING:
+            return
+            
+        response = messagebox.askyesno(
+            "Stop Checkout",
+            "Stop the active checkout run?\n\n"
+            "This will terminate the checkout process on all testers.\n"
+            "Are you sure you want to continue?",
+            icon='warning'
+        )
+        
+        if not response:
+            return
+        
+        # Log the stop action
+        self.log("⏹ User requested checkout stop")
+        
+        # Set state to STOPPING to disable buttons during cleanup
+        self._set_checkout_state(CheckoutState.STOPPING)
+        
+        # Trigger the actual stop
         self.context.controller.checkout_controller.stop_checkout()
+        
+        # State will be set to IDLE/ERROR by the completion callback
         self.stop_btn.state(["disabled"])
 
     def _collect_params(self):
@@ -1475,14 +1512,17 @@ class CheckoutTab(BaseTab):
         running = [lbl for lbl in self._badge_labels.values()
                    if lbl.cget("text") in ("PENDING", "RUNNING", "COLLECTING")]
         if not running:
-            self.stop_btn.state(["disabled"])
-            self.unlock_gui()
-
-            # ── Task 2: Auto-start result collection ──────────────────
+            # Determine final state based on results
             any_success = any(
                 r.get("status", "").lower() in ("success", "partial")
                 for r in self._rc_checkout_results.values()
             )
+            if any_success:
+                self._set_checkout_state(CheckoutState.COMPLETED)
+            else:
+                self._set_checkout_state(CheckoutState.ERROR)
+
+            # ── Task 2: Auto-start result collection ──────────────────
             if any_success and self._rc_checkout_hostnames:
                 primary_host = self._rc_checkout_hostnames[0]
                 self.log(f"🔍 All testers done — auto-starting result "
@@ -1575,8 +1615,11 @@ class CheckoutTab(BaseTab):
         running = [lbl for lbl in self._badge_labels.values()
                    if lbl.cget("text") in ("PENDING", "RUNNING", "COLLECTING")]
         if not running:
-            self.stop_btn.state(["disabled"])
-            self.unlock_gui()
+            # Determine final state based on XML generation result
+            if status in ("SUCCESS", "XML_SUCCESS"):
+                self._set_checkout_state(CheckoutState.COMPLETED)
+            else:
+                self._set_checkout_state(CheckoutState.ERROR)
 
     def get_profile_table_data(self) -> List[Dict]:
         return self._profile_data.copy()
@@ -1587,14 +1630,64 @@ class CheckoutTab(BaseTab):
 
     def _build_test_progress_section(self, parent, row):
         """Build the auto-detect test progress section with MID status treeview."""
-        frm = ttk.LabelFrame(parent, text="  Test Progress (Auto-Detect)  ",
-                             padding=(8, 6, 8, 8))
-        frm.grid(row=row, column=0, sticky="we", pady=(0, 14))
+        # ── Header Frame with Title and Runtime Controls ─────────────────
+        header_container = ttk.Frame(parent)
+        header_container.grid(row=row, column=0, sticky="we", pady=(0, 0))
+        header_container.columnconfigure(0, weight=1)
+        
+        # Create the LabelFrame with custom header
+        frm = ttk.LabelFrame(header_container, text="", padding=(8, 6, 8, 8))
+        frm.grid(row=0, column=0, sticky="we")
         frm.columnconfigure(0, weight=1)
+        
+        # ── Custom Header: Title + Status + Runtime Buttons ──────────────
+        header_frm = ttk.Frame(frm)
+        header_frm.grid(row=0, column=0, sticky="we", pady=(0, 8))
+        header_frm.columnconfigure(1, weight=1)
+        
+        # Left: Title
+        ttk.Label(header_frm, text="Test Progress (Auto-Detect)",
+                 font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=(0, 15))
+        
+        # Middle: Status indicator
+        self._checkout_status_label = ttk.Label(
+            header_frm, text="Status: IDLE",
+            font=("Segoe UI", 9), foreground="#888888")
+        self._checkout_status_label.pack(side=tk.LEFT, padx=(0, 20))
+        
+        # Right: Runtime control buttons
+        btn_container = ttk.Frame(header_frm)
+        btn_container.pack(side=tk.RIGHT)
+        
+        self._rc_refresh_btn = ttk.Button(
+            btn_container, text="🔄 Refresh", width=10,
+            command=self._rc_refresh_status)
+        self._rc_refresh_btn.pack(side=tk.LEFT, padx=(0, 3))
+        _tip(self._rc_refresh_btn, "Refresh tester status")
+        
+        self._rc_collect_btn = ttk.Button(
+            btn_container, text="📁 Collect", width=10,
+            command=self._rc_collect_selected)
+        self._rc_collect_btn.pack(side=tk.LEFT, padx=(0, 3))
+        _tip(self._rc_collect_btn, "Collect results from selected MID(s)")
+        
+        self._rc_spool_btn = ttk.Button(
+            btn_container, text="📊 Spool", width=10,
+            command=self._rc_spool_selected)
+        self._rc_spool_btn.pack(side=tk.LEFT, padx=(0, 10))
+        _tip(self._rc_spool_btn, "Spool/prepare logs or artifacts")
+        
+        # Stop button - visually separated with destructive styling
+        self.stop_btn = ttk.Button(
+            btn_container, text="■ Stop", width=8,
+            command=self._stop_checkout)
+        self.stop_btn.pack(side=tk.LEFT)
+        self.stop_btn.state(["disabled"])
+        _tip(self.stop_btn, "Stop active checkout run")
 
-        # ── Summary bar ───────────────────────────────────────────────
+        # ── Summary bar (MID status summary) ──────────────────────────────
         summary_frm = ttk.Frame(frm)
-        summary_frm.grid(row=0, column=0, sticky="we", pady=(0, 4))
+        summary_frm.grid(row=1, column=0, sticky="we", pady=(0, 4))
 
         self._rc_status_indicator = ttk.Label(
             summary_frm, text="⏸ Idle", font=("Segoe UI", 9, "bold"))
@@ -1604,38 +1697,11 @@ class CheckoutTab(BaseTab):
             summary_frm, text="", font=("Segoe UI", 8))
         self._rc_summary_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # ── Toolbar ───────────────────────────────────────────────────
-        toolbar = ttk.Frame(frm)
-        toolbar.grid(row=1, column=0, sticky="we", pady=(0, 4))
-
-        self._rc_refresh_btn = ttk.Button(
-            toolbar, text="🔄 Refresh", width=10,
-            command=self._rc_refresh_status)
-        self._rc_refresh_btn.pack(side=tk.LEFT, padx=(0, 4))
-        _tip(self._rc_refresh_btn, "Force re-check all MID statuses.")
-
-        self._rc_collect_btn = ttk.Button(
-            toolbar, text="📁 Collect", width=10,
-            command=self._rc_collect_selected)
-        self._rc_collect_btn.pack(side=tk.LEFT, padx=(0, 4))
-        _tip(self._rc_collect_btn, "Manually collect files for selected MID(s).")
-
-        self._rc_spool_btn = ttk.Button(
-            toolbar, text="📊 Spool", width=10,
-            command=self._rc_spool_selected)
-        self._rc_spool_btn.pack(side=tk.LEFT, padx=(0, 4))
-        _tip(self._rc_spool_btn, "Manually spool summary for selected MID(s).")
-
-        self._rc_stop_btn = ttk.Button(
-            toolbar, text="⏹ Stop", width=8,
-            command=self._rc_stop_monitoring, state=tk.DISABLED)
-        self._rc_stop_btn.pack(side=tk.RIGHT)
-        _tip(self._rc_stop_btn, "Stop the background result collector.")
-
         # ── Treeview ──────────────────────────────────────────────────
         tree_frm = ttk.Frame(frm)
         tree_frm.grid(row=2, column=0, sticky="nsew")
         tree_frm.columnconfigure(0, weight=1)
+        frm.rowconfigure(2, weight=1)
 
         columns = ("mid", "location", "name", "status", "fail_info",
                    "collected", "error")
@@ -1671,6 +1737,73 @@ class CheckoutTab(BaseTab):
         self._rc_tree.tag_configure("running", foreground="blue")
         self._rc_tree.tag_configure("unknown", foreground="gray")
         self._rc_tree.tag_configure("error",   foreground="orange")
+
+    # ──────────────────────────────────────────────────────────────────────
+    # STATE MACHINE — Centralized UI State Management
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _set_checkout_state(self, new_state: CheckoutState):
+        """
+        Set the checkout state and update all UI elements accordingly.
+        Single source of truth for button enable/disable logic.
+        """
+        self._checkout_state = new_state
+        self.update_checkout_ui_state()
+
+    def update_checkout_ui_state(self):
+        """
+        Update all button states and status labels based on current checkout state.
+        
+        State Machine Rules:
+        - IDLE: Start enabled (if preconditions ok), Stop disabled, runtime buttons enabled
+        - RUNNING: Start disabled, Stop enabled, runtime buttons enabled
+        - STOPPING: All buttons disabled except Refresh
+        - COMPLETED/ERROR: Start enabled, Stop disabled, runtime buttons enabled
+        """
+        state = self._checkout_state
+        
+        # Update status label
+        status_colors = {
+            CheckoutState.IDLE: ("#888888", "IDLE"),
+            CheckoutState.RUNNING: ("#0078d4", "RUNNING"),
+            CheckoutState.STOPPING: ("#ca5010", "STOPPING"),
+            CheckoutState.COMPLETED: ("#107c10", "COMPLETED"),
+            CheckoutState.ERROR: ("#a80000", "ERROR"),
+        }
+        color, text = status_colors.get(state, ("#888888", "UNKNOWN"))
+        self._checkout_status_label.config(text=f"Status: {text}", foreground=color)
+        
+        # Button states based on current state
+        if state == CheckoutState.IDLE:
+            # Check preconditions for Start button
+            has_testers = any(var.get() for var in self._tester_vars.values())
+            has_profile = len(self._profile_data) > 0
+            self.checkout_btn.state(["!disabled"] if (has_testers and has_profile) else ["disabled"])
+            self.stop_btn.state(["disabled"])
+            self._rc_refresh_btn.state(["!disabled"])
+            self._rc_collect_btn.state(["!disabled"])
+            self._rc_spool_btn.state(["!disabled"])
+            
+        elif state == CheckoutState.RUNNING:
+            self.checkout_btn.state(["disabled"])
+            self.stop_btn.state(["!disabled"])
+            self._rc_refresh_btn.state(["!disabled"])
+            self._rc_collect_btn.state(["!disabled"])
+            self._rc_spool_btn.state(["!disabled"])
+            
+        elif state == CheckoutState.STOPPING:
+            self.checkout_btn.state(["disabled"])
+            self.stop_btn.state(["disabled"])
+            self._rc_refresh_btn.state(["!disabled"])  # Keep refresh enabled
+            self._rc_collect_btn.state(["disabled"])
+            self._rc_spool_btn.state(["disabled"])
+            
+        elif state in (CheckoutState.COMPLETED, CheckoutState.ERROR):
+            self.checkout_btn.state(["!disabled"])
+            self.stop_btn.state(["disabled"])
+            self._rc_refresh_btn.state(["!disabled"])
+            self._rc_collect_btn.state(["!disabled"])
+            self._rc_spool_btn.state(["!disabled"])
 
     # ──────────────────────────────────────────────────────────────────────
     # SECTION 6 — Toolbar actions
@@ -1731,7 +1864,7 @@ class CheckoutTab(BaseTab):
             rc = controller.result_controller
             if rc:
                 rc.stop_monitoring()
-        self._rc_stop_btn.config(state=tk.DISABLED)
+        # Stop button state is now managed by update_checkout_ui_state()
 
     # ──────────────────────────────────────────────────────────────────────
     # SECTION 6 — Auto-detect: generate MIDs.txt + start monitoring
@@ -1805,7 +1938,8 @@ class CheckoutTab(BaseTab):
         self.log(f"🚀 Auto-starting result collection for {hostname}...")
         self._rc_status_indicator.config(
             text="🔄 MONITORING", foreground="blue")
-        self._rc_stop_btn.config(state=tk.NORMAL)
+        # Stop button state managed by update_checkout_ui_state()
+        self._set_checkout_state(CheckoutState.RUNNING)
 
         rc.start_monitoring(
             mids_file       = mids_path,
@@ -1882,7 +2016,8 @@ class CheckoutTab(BaseTab):
         Called by ResultController when monitoring ends.
         Resets button states and updates status indicator.
         """
-        self._rc_stop_btn.config(state=tk.DISABLED)
+        # Stop button state managed by update_checkout_ui_state()
+        self._set_checkout_state(CheckoutState.COMPLETED)
 
         all_done = summary.get("all_done", False)
         failed   = summary.get("failed", 0)
