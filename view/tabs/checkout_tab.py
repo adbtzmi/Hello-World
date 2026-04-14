@@ -303,11 +303,6 @@ class CheckoutTab(BaseTab):
         exp_btn.pack(side=tk.LEFT, padx=(0, 3))
         _tip(exp_btn, "Export the current profile table to an Excel file.")
 
-        crt_btn = ttk.Button(toolbar, text="Load from CRT", command=self._profile_load_from_crt)
-        crt_btn.pack(side=tk.LEFT, padx=(0, 3))
-        _tip(crt_btn, "Read the CRT Excel file and auto-populate Form_Factor, Material_Desc,\n"
-             "CFGPN, MCTO_#1, Dummy_Lot. Editable columns (Step, MID, Tester…) remain blank.")
-
         self.gen_btn = ttk.Button(toolbar, text="Generate Profile",
                    command=self._generate_xml_only)
         self.gen_btn.pack(side=tk.LEFT, padx=(6, 3))
@@ -321,33 +316,6 @@ class CheckoutTab(BaseTab):
                    command=self._import_xml)
         imp_btn.pack(side=tk.LEFT, padx=(0, 3))
         _tip(imp_btn, "Load an existing SLATE XML profile and auto-fill TGZ path from it.")
-
-        # ── CRT Source row ────────────────────────────────────────────────
-        src_row = ttk.Frame(frm)
-        src_row.grid(row=1, column=0, sticky="we", pady=(0, 6))
-        src_row.columnconfigure(1, weight=1)
-
-        ttk.Label(src_row, text="Excel File:").grid(
-            row=0, column=0, sticky=tk.W, padx=(0, 6))
-        excel_entry = ttk.Entry(src_row,
-                  textvariable=self.context.get_var('checkout_excel_path'))
-        excel_entry.grid(row=0, column=1, sticky="we")
-        _tip(excel_entry, "Path to the CRT Excel source file (incoming_crt.xlsx).\n"
-             "Used by 'Load from CRT' to auto-populate the profile table.")
-
-        browse_btn = ttk.Button(src_row, text="Browse",
-                    command=self._browse_excel)
-        browse_btn.grid(row=0, column=2, padx=(6, 12))
-        _tip(browse_btn, "Browse for a CRT Excel file.")
-
-        ttk.Label(src_row, text="Filter CFGPN:").grid(
-            row=0, column=3, sticky=tk.W, padx=(0, 6))
-        filter_entry = ttk.Entry(src_row,
-                  textvariable=self.context.get_var('checkout_cfgpn_filter'),
-                  width=18)
-        filter_entry.grid(row=0, column=4, sticky=tk.W)
-        _tip(filter_entry, "Optional CFGPN substring filter applied when loading CRT data.\n"
-             "Leave blank to load all rows.")
 
         # ── Profile Grid ──────────────────────────────────────────────────
         grid_container = ttk.Frame(frm)
@@ -451,53 +419,7 @@ class CheckoutTab(BaseTab):
 
         cur_row += 1
 
-        # ── Separator ─────────────────────────────────────────────────
-        ttk.Separator(frm, orient=tk.HORIZONTAL).grid(
-            row=cur_row, column=0, columnspan=3, sticky="we", pady=(0, 4))
-        cur_row += 1
-
-        # ── Row 3: TGZ path ──────────────────────────────────────────
-        ttk.Label(frm, text="TGZ:").grid(
-            row=cur_row, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
-        tgz_entry = ttk.Entry(frm, textvariable=self.context.get_var('checkout_tgz_path'))
-        tgz_entry.grid(row=cur_row, column=1, sticky="we", pady=(0, 4))
-        _tip(tgz_entry, "Path to the compiled .tgz test program archive.\n"
-             "Default browse location: P:\\temp\\BENTO\\RELEASE_TGZ")
-        tgz_btn = ttk.Button(frm, text="Browse TGZ", width=12, command=self._browse_tgz)
-        tgz_btn.grid(row=cur_row, column=2, padx=(6, 0), pady=(0, 4))
-        _tip(tgz_btn, "Browse for a compiled TGZ archive.")
-        cur_row += 1
-
-        # ── Row 4: Recipe override ───────────────────────────────────
-        ttk.Label(frm, text="Recipe:").grid(
-            row=cur_row, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
-        recipe_frame = ttk.Frame(frm)
-        recipe_frame.grid(row=cur_row, column=1, columnspan=2,
-                          sticky="we", pady=(0, 4))
-        self._recipe_combo = ttk.Combobox(
-            recipe_frame,
-            textvariable=self.context.get_var('checkout_recipe_override'),
-            width=40,
-            state="normal",
-        )
-        self._recipe_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        _tip(self._recipe_combo,
-             "Recipe file override. Leave empty for auto-detection.\n"
-             "Click 'Scan' to list available recipes from the TGZ archive.\n"
-             "Format: RECIPE\\ProductName_neosem_STEP.XML")
-        scan_btn = ttk.Button(recipe_frame, text="Scan TGZ", width=12,
-                              command=self._scan_tgz_recipes)
-        scan_btn.pack(side=tk.LEFT, padx=(6, 0))
-        _tip(scan_btn, "Scan the selected TGZ archive for available recipe files\n"
-             "and populate the dropdown list.")
-        cur_row += 1
-
-        # ── Separator ─────────────────────────────────────────────────
-        ttk.Separator(frm, orient=tk.HORIZONTAL).grid(
-            row=cur_row, column=0, columnspan=3, sticky="we", pady=(0, 4))
-        cur_row += 1
-
-        # ── Row 6: Test Cases ────────────────────────────────────────
+        # ── Test Cases ────────────────────────────────────────────────
         ttk.Label(frm, text="TC:").grid(
             row=cur_row, column=0, sticky=tk.W, padx=(0, 8), pady=(0, 4))
 
@@ -532,21 +454,6 @@ class CheckoutTab(BaseTab):
                    width=28)
         fail_desc_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         _tip(fail_desc_entry, "Optional description for the force-fail test case.")
-        cur_row += 1
-
-        # ── Separator ─────────────────────────────────────────────────
-        ttk.Separator(frm, orient=tk.HORIZONTAL).grid(
-            row=cur_row, column=0, columnspan=3, sticky="we", pady=(0, 4))
-        cur_row += 1
-
-        # ── Row 8: Hot Folder ────────────────────────────────────────
-        ttk.Label(frm, text="Hot Folder:").grid(
-            row=cur_row, column=0, sticky=tk.W, padx=(0, 8))
-        hot_entry = ttk.Entry(frm, textvariable=self.context.get_var('checkout_hot_folder'))
-        hot_entry.grid(row=cur_row, column=1, columnspan=2, sticky="we")
-        _tip(hot_entry, "Path to the SLATE hot folder where XML profiles are dropped.\n"
-             "Default: C:\\test_program\\playground_queue")
-
     # ──────────────────────────────────────────────────────────────────────
     # SECTION 3 — SLATE Detection + Tester Selection (side-by-side)
     # ──────────────────────────────────────────────────────────────────────
@@ -1105,69 +1012,6 @@ class CheckoutTab(BaseTab):
     # ──────────────────────────────────────────────────────────────────────
     # USER ACTIONS
     # ──────────────────────────────────────────────────────────────────────
-
-    def _browse_tgz(self):
-        _DEFAULT_TGZ_DIR = r"P:\temp\BENTO\RELEASE_TGZ"
-        initial_dir = _DEFAULT_TGZ_DIR if os.path.isdir(_DEFAULT_TGZ_DIR) else "/"
-        path = filedialog.askopenfilename(
-            title="Select compiled TGZ",
-            initialdir=initial_dir,
-            filetypes=[("TGZ archives", "*.tgz"), ("All files", "*.*")])
-        if path:
-            self.context.get_var('checkout_tgz_path').set(path)
-            # Auto-scan recipes when TGZ is selected
-            self._scan_tgz_recipes()
-
-    def _scan_tgz_recipes(self):
-        """Scan the selected TGZ archive for available recipe files."""
-        tgz_path = self.context.get_var('checkout_tgz_path').get().strip()
-        if not tgz_path:
-            messagebox.showwarning("No TGZ Selected",
-                                   "Please select a TGZ archive first.")
-            return
-
-        if not os.path.isfile(tgz_path):
-            messagebox.showwarning("TGZ Not Found",
-                                   f"TGZ file not found:\n{tgz_path}")
-            return
-
-        # Show busy cursor while scanning
-        self.config(cursor="watch")
-        self.update_idletasks()
-        try:
-            from model.recipe_selector import scan_tgz_recipes
-            recipes = scan_tgz_recipes(tgz_path)
-            if recipes:
-                # Format as RECIPE\filename for the combobox
-                recipe_values = [f"RECIPE\\{r}" for r in recipes]
-                self._recipe_combo['values'] = recipe_values
-                # If current value is empty, don't auto-select — leave for auto-detection
-                current = self.context.get_var('checkout_recipe_override').get().strip()
-                if not current:
-                    # Show count but don't auto-select
-                    messagebox.showinfo(
-                        "Recipes Found",
-                        f"Found {len(recipes)} recipe(s) in TGZ.\n"
-                        f"Select one from the dropdown to override auto-detection,\n"
-                        f"or leave empty for automatic recipe selection.")
-            else:
-                self._recipe_combo['values'] = []
-                messagebox.showwarning(
-                    "No Recipes Found",
-                    f"No recipe XML files found in:\n{tgz_path}\n\n"
-                    f"The TGZ may not contain a recipe/ folder.")
-        except Exception as e:
-            messagebox.showerror("Scan Error",
-                                 f"Failed to scan TGZ:\n{e}")
-        finally:
-            self.config(cursor="")
-
-    def _browse_excel(self):
-        path = filedialog.askopenfilename(
-            title="Select CRT Excel File",
-            filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")])
-        if path:
-            self.context.get_var('checkout_excel_path').set(path)
 
     def _select_all(self):
         for var in self._tester_vars.values():
