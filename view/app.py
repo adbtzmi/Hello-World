@@ -132,7 +132,7 @@ class BentoApp:
         site_frame = ttk.Frame(title_frame)
         site_frame.pack(side=tk.RIGHT, padx=(10, 0))
         
-        ttk.Label(site_frame, text="Site:", font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(site_frame, text="🏭 Site:", font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=(0, 5))
         
         self.site_var = tk.StringVar(value=DEFAULT_SITE)
         self.context.set_var('global_site_var', self.site_var)
@@ -207,6 +207,8 @@ class BentoApp:
                 comp_tab = self.compile_checkout_tab.compilation_tab
                 if comp_tab:
                     comp_tab.update_paths_from_site()
+                    # Immediately refresh the watcher health monitor
+                    comp_tab._refresh_health()
         
         # Update all path fields in checkout tab
         if hasattr(self, 'compile_checkout_tab') and self.compile_checkout_tab:
