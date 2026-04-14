@@ -390,7 +390,9 @@ class CheckoutTab(BaseTab):
 
         self._profile_grid.bind("<Double-1>", self._on_profile_cell_double_click)
         self._profile_grid.bind("<<TreeviewSelect>>", self._on_profile_row_select)
+        self._profile_grid.bind("<Button-1>", self._on_profile_single_click)
         _tip(self._profile_grid,
+             "Click to select/deselect a row.\n"
              "Double-click any cell to edit it inline.\n"
              "Double-click ATTR_OVERWRITE to open the attribute editor dialog.")
 
@@ -988,6 +990,27 @@ class CheckoutTab(BaseTab):
         ttk.Button(btn_frame, text="Remove All", command=_remove_all).pack(side=tk.LEFT, padx=(0, 3))
         ttk.Button(btn_frame, text="Save",       command=_save).pack(side=tk.RIGHT, padx=(3, 0))
         ttk.Button(btn_frame, text="Cancel",     command=dialog.destroy).pack(side=tk.RIGHT, padx=(0, 3))
+
+    def _on_profile_single_click(self, event):
+        """Handle single click to allow deselection by clicking the same row again."""
+        # Get the item that was clicked
+        region = self._profile_grid.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        
+        item = self._profile_grid.identify_row(event.y)
+        if not item:
+            return
+        
+        # If the clicked item is already selected, deselect it
+        current_selection = self._profile_grid.selection()
+        if current_selection and item in current_selection:
+            self._profile_grid.selection_remove(item)
+            # Update status to show no selection
+            self._profile_status_label.configure(
+                text="No row selected",
+                foreground="#666666")
+            return "break"  # Prevent default selection behavior
 
     def _on_profile_row_select(self, event):
         sel = self._profile_grid.selection()
