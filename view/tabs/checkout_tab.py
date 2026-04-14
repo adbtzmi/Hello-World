@@ -6,6 +6,7 @@ import logging
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, simpledialog, messagebox
+import tksheet
 from typing import Any, List, Dict
 from view.tabs.base_tab import BaseTab
 
@@ -338,63 +339,59 @@ class CheckoutTab(BaseTab):
         imp_btn.pack(side=tk.LEFT, padx=(0, 3))
         _tip(imp_btn, "Load an existing SLATE XML profile and auto-fill TGZ path from it.")
 
-        # ── Profile Grid ──────────────────────────────────────────────────
-        # Wrap in a frame with border to create grid-like appearance
-        grid_container = ttk.Frame(frm, relief="solid", borderwidth=1)
-        grid_container.grid(row=2, column=0, sticky="nsew")
-        grid_container.columnconfigure(0, weight=1)
-
+        # ── Profile Grid (tksheet for visible black cell borders) ────────
         cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
-        
-        # Configure style with gridlines using theme elements
-        style = ttk.Style()
-        style.configure("ProfileGrid.Treeview",
-                       rowheight=26,
-                       background="#ffffff",
-                       fieldbackground="#ffffff",
-                       bordercolor="#d0d0d0",
-                       lightcolor="#e0e0e0",
-                       darkcolor="#c0c0c0")
-        style.configure("ProfileGrid.Treeview.Heading",
-                       font=("Segoe UI", 9, "bold"),
-                       background="#f0f0f0",
-                       borderwidth=1,
-                       relief="solid")
-        # Map the style to show borders
-        style.map("ProfileGrid.Treeview",
-                 background=[('selected', '#0078d4')],
-                 foreground=[('selected', 'white')])
-        
-        self._profile_grid = ttk.Treeview(
-            grid_container, columns=cols, show="headings",
-            height=5, selectmode="browse", style="ProfileGrid.Treeview")
-        
-        # Configure row tags for alternating colors with borders
-        self._profile_grid.tag_configure("oddrow", background="#ffffff")
-        self._profile_grid.tag_configure("evenrow", background="#f8f8f8")
-        
-        for col_name, col_width in self._PROFILE_GEN_COLUMNS:
-            self._profile_grid.heading(col_name, text=col_name, anchor=tk.W)
-            # Use stretch=False to prevent columns from expanding beyond their width
-            # This ensures horizontal scrollbar works properly
-            self._profile_grid.column(col_name, width=col_width, minwidth=col_width,
-                                      stretch=False, anchor=tk.W)
+        col_widths = [w for _, w in self._PROFILE_GEN_COLUMNS]
 
-        pg_scroll_y = ttk.Scrollbar(grid_container, orient=tk.VERTICAL,
-                                    command=self._profile_grid.yview)
-        pg_scroll_x = ttk.Scrollbar(grid_container, orient=tk.HORIZONTAL,
-                                    command=self._profile_grid.xview)
-        self._profile_grid.configure(yscrollcommand=pg_scroll_y.set,
-                                     xscrollcommand=pg_scroll_x.set)
-        self._profile_grid.grid(row=0, column=0, sticky="nsew")
-        pg_scroll_y.grid(row=0, column=1, sticky="ns")
-        pg_scroll_x.grid(row=1, column=0, sticky="ew")
+        self._profile_grid = tksheet.Sheet(
+            frm,
+            headers=cols,
+            show_x_scrollbar=True,
+            show_y_scrollbar=True,
+            height=160,
+            width=None,
+            default_row_height=26,
+            font=("Segoe UI", 9, "normal"),
+            header_font=("Segoe UI", 9, "bold"),
+            table_grid_fg="#000000",
+            header_grid_fg="#000000",
+            index_grid_fg="#000000",
+            header_border_fg="#000000",
+            table_bg="#ffffff",
+            table_fg="#000000",
+            header_bg="#f0f0f0",
+            header_fg="#000000",
+            top_left_bg="#f0f0f0",
+            outline_thickness=1,
+            outline_color="#000000",
+            show_row_index=False,
+            show_top_left=False,
+            align="w",
+        )
+        self._profile_grid.grid(row=2, column=0, sticky="nsew")
 
-        self._profile_grid.bind("<Double-1>", self._on_profile_cell_double_click)
-        self._profile_grid.bind("<<TreeviewSelect>>", self._on_profile_row_select)
-        self._profile_grid.bind("<Button-1>", self._on_profile_single_click)
+        # Set individual column widths
+        for i, w in enumerate(col_widths):
+            self._profile_grid.column_width(column=i, width=w)
+
+        # Enable cell editing and selection
+        self._profile_grid.enable_bindings(
+            "single_select",
+            "row_select",
+            "column_width_resize",
+            "arrowkeys",
+            "copy",
+            "paste",
+            "undo",
+            "edit_cell",
+        )
+
+        # Bind cell edit end to capture changes
+        self._profile_grid.extra_bindings("end_edit_cell", self._on_sheet_cell_edited)
+        self._profile_grid.extra_bindings("cell_select", self._on_sheet_cell_select)
+
         _tip(self._profile_grid,
-             "Click to select/deselect a row.\n"
+             "Click to select a row.\n"
              "Double-click any cell to edit it inline.\n"
              "Double-click ATTR_OVERWRITE to open the attribute editor dialog.")
 
@@ -587,53 +584,62 @@ class CheckoutTab(BaseTab):
                    if r.get("MID", "").strip().upper() == mid.strip().upper()) > 1
 
     def _profile_remove_row(self):
-        sel = self._profile_grid.selection()
-        if not sel:
+        # tksheet selection: try multiple API patterns for compatibility
+        idx = -1
+        try:
+            selected = self._profile_grid.get_currently_selected()
+            if hasattr(selected, 'rows') and selected.rows:
+                idx = list(selected.rows)[0]
+            elif hasattr(selected, 'row') and selected.row is not None:
+                idx = selected.row
+        except Exception:
+            pass
+        # Fallback: try get_selected_rows()
+        if idx < 0:
+            try:
+                sel_rows = self._profile_grid.get_selected_rows()
+                if sel_rows:
+                    idx = min(sel_rows)
+            except Exception:
+                pass
+        if idx < 0:
             self.show_error("No Selection", "Select a row to remove.")
             return
-        idx = self._profile_grid.index(sel[0])
         if 0 <= idx < len(self._profile_data):
             self._profile_data.pop(idx)
         self._refresh_profile_grid()
         self._update_profile_status()
 
     def _refresh_profile_grid(self):
-        # Preserve current selection index so we can restore it after rebuild
-        sel = self._profile_grid.selection()
-        sel_idx = self._profile_grid.index(sel[0]) if sel else -1
-
         # Auto-populate hardware configuration based on Step and Form_Factor
         from model.hardware_config import HardwareConfig
         hw_config = HardwareConfig()
-        
-        for row in self._profile_grid.get_children():
-            self._profile_grid.delete(row)
+
         cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
+        sheet_data = []
         for idx, row_dict in enumerate(self._profile_data):
             # Auto-populate hardware config if Step and Form_Factor are present
             step = row_dict.get("Step", "").strip()
             form_factor = row_dict.get("Form_Factor", "").strip()
             if step and form_factor:
-                # Only auto-populate if the fields are empty
                 if not row_dict.get("DIB_TYPE", "").strip():
                     row_dict["DIB_TYPE"] = hw_config.get_dib_type(step, form_factor)
                 if not row_dict.get("MACHINE_MODEL", "").strip():
                     row_dict["MACHINE_MODEL"] = hw_config.get_machine_model(step)
                 if not row_dict.get("MACHINE_VENDOR", "").strip():
                     row_dict["MACHINE_VENDOR"] = hw_config.get_machine_vendor(step)
-            
+
             values = [str(row_dict.get(col, "")) for col in cols]
-            # Apply alternating row colors
-            tag = "evenrow" if idx % 2 == 0 else "oddrow"
-            self._profile_grid.insert("", tk.END, values=values, tags=(tag,))
+            sheet_data.append(values)
+
+        self._profile_grid.set_sheet_data(sheet_data, reset_col_positions=False)
+        self._profile_grid.set_all_column_widths()
+        # Re-apply column widths
+        for i, (_, w) in enumerate(self._PROFILE_GEN_COLUMNS):
+            self._profile_grid.column_width(column=i, width=w)
+        self._profile_grid.refresh()
         self._profile_row_count_label.configure(
             text=f"{len(self._profile_data)} row(s)")
-
-        # Restore selection if the row still exists
-        children = self._profile_grid.get_children()
-        if children and 0 <= sel_idx < len(children):
-            self._profile_grid.selection_set(children[sel_idx])
-            self._profile_grid.see(children[sel_idx])
 
     def _update_profile_status(self):
         count = len(self._profile_data)
@@ -734,63 +740,57 @@ class CheckoutTab(BaseTab):
     # PROFILE GRID — INLINE EDITING
     # ──────────────────────────────────────────────────────────────────────
 
-    def _on_profile_cell_double_click(self, event):
-        region = self._profile_grid.identify_region(event.x, event.y)
-        if region != "cell":
+    def _on_sheet_cell_edited(self, event):
+        """Called by tksheet when a cell edit is completed."""
+        row_idx = event.row
+        col_idx = event.column
+        new_value = event.text if hasattr(event, 'text') else str(event.value if hasattr(event, 'value') else "")
+        cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
+        if row_idx < 0 or row_idx >= len(self._profile_data):
             return
-        col_id  = self._profile_grid.identify_column(event.x)
-        item_id = self._profile_grid.identify_row(event.y)
-        if not item_id or not col_id:
-            return
-        col_idx  = int(col_id.replace("#", "")) - 1
-        cols     = [c for c, _ in self._PROFILE_GEN_COLUMNS]
         if col_idx < 0 or col_idx >= len(cols):
             return
         col_name = cols[col_idx]
-        row_idx  = self._profile_grid.index(item_id)
-        if row_idx < 0 or row_idx >= len(self._profile_data):
-            return
-        current_value = self._profile_data[row_idx].get(col_name, "")
+
+        # For ATTR_OVERWRITE, reject inline edit and open dialog instead
         if col_name == "ATTR_OVERWRITE":
-            self._show_attr_overwrite_dialog(row_idx)
+            # Revert the cell to old value and open dialog
+            old_val = self._profile_data[row_idx].get(col_name, "")
+            self._profile_grid.set_cell_data(row_idx, col_idx, old_val)
+            self._profile_grid.refresh()
+            self.after(50, lambda: self._show_attr_overwrite_dialog(row_idx))
             return
-        self._start_inline_edit(item_id, col_id, col_idx, row_idx, col_name, current_value)
 
-    def _start_inline_edit(self, item_id, col_id, col_idx, row_idx, col_name, current_value):
-        bbox = self._profile_grid.bbox(item_id, col_id)
-        if not bbox:
+        self._profile_data[row_idx][col_name] = new_value.strip()
+        # Auto-lookup CFGPN/MCTO when Dummy_Lot is edited
+        if col_name == "Dummy_Lot" and new_value.strip() and new_value.strip().upper() not in ("", "NONE"):
+            self._trigger_lot_lookup(row_idx, new_value.strip())
+        # Auto-verify MID link when MID is edited
+        if col_name == "MID" and new_value.strip() and new_value.strip().upper() not in ("", "NONE"):
+            self._trigger_mid_verify(row_idx, new_value.strip())
+            if self._has_duplicate_mid(new_value.strip()):
+                messagebox.showwarning(
+                    "Duplicate MID",
+                    f"MID '{new_value.strip()}' already exists in another row.\n"
+                    f"Duplicate MIDs will generate conflicting profiles.")
+
+    def _on_sheet_cell_select(self, event):
+        """Called by tksheet when a cell is selected — update status bar."""
+        row_idx = event.row if hasattr(event, 'row') else -1
+        if row_idx < 0 or row_idx >= len(self._profile_data):
+            self._profile_status_label.configure(
+                text="No row selected", foreground="#666666")
             return
-        x, y, w, h = bbox
-        edit_entry = ttk.Entry(self._profile_grid, width=w // 8)
-        edit_entry.insert(0, current_value)
-        edit_entry.select_range(0, tk.END)
-        edit_entry.place(x=x, y=y, width=w, height=h)
-        edit_entry.focus_set()
-
-        def _save(event=None):
-            new_value = edit_entry.get().strip()
-            self._profile_data[row_idx][col_name] = new_value
-            self._refresh_profile_grid()
-            edit_entry.destroy()
-            # Auto-lookup CFGPN/MCTO when Dummy_Lot is edited
-            if col_name == "Dummy_Lot" and new_value and new_value.upper() not in ("", "NONE"):
-                self._trigger_lot_lookup(row_idx, new_value)
-            # Auto-verify MID link when MID is edited
-            if col_name == "MID" and new_value and new_value.upper() not in ("", "NONE"):
-                self._trigger_mid_verify(row_idx, new_value)
-                # Warn on duplicate MID
-                if self._has_duplicate_mid(new_value):
-                    messagebox.showwarning(
-                        "Duplicate MID",
-                        f"MID '{new_value}' already exists in another row.\n"
-                        f"Duplicate MIDs will generate conflicting profiles.")
-
-        def _cancel(event=None):
-            edit_entry.destroy()
-
-        edit_entry.bind("<Return>",   _save)
-        edit_entry.bind("<Escape>",   _cancel)
-        edit_entry.bind("<FocusOut>", _save)
+        row_dict = self._profile_data[row_idx]
+        cfgpn     = row_dict.get("CFGPN", "")
+        dummy_lot = row_dict.get("Dummy_Lot", "")
+        mid       = row_dict.get("MID", "")
+        step      = row_dict.get("Step", "")
+        tester    = row_dict.get("Tester", "")
+        self._profile_status_label.configure(
+            text=(f"Selected: CFGPN={cfgpn}  Lot={dummy_lot}  "
+                  f"MID={mid}  Step={step}  Tester={tester}"),
+            foreground="#0078d4")
 
     def _show_attr_overwrite_dialog(self, row_idx):
         current_value = self._profile_data[row_idx].get("ATTR_OVERWRITE", "")
@@ -906,54 +906,8 @@ class CheckoutTab(BaseTab):
         ttk.Button(btn_frame, text="Save",       command=_save).pack(side=tk.RIGHT, padx=(3, 0))
         ttk.Button(btn_frame, text="Cancel",     command=dialog.destroy).pack(side=tk.RIGHT, padx=(0, 3))
 
-    def _on_profile_single_click(self, event):
-        """Handle single click to allow deselection by clicking the same row or empty space."""
-        # Get the item that was clicked
-        region = self._profile_grid.identify_region(event.x, event.y)
-        item = self._profile_grid.identify_row(event.y)
-        
-        # If clicked outside any row (empty space), deselect all
-        if not item or region not in ("cell", "tree"):
-            current_selection = self._profile_grid.selection()
-            if current_selection:
-                self._profile_grid.selection_remove(current_selection)
-                # Update status to show no selection
-                self._profile_status_label.configure(
-                    text="No row selected",
-                    foreground="#666666")
-            return
-        
-        # If the clicked item is already selected, deselect it
-        current_selection = self._profile_grid.selection()
-        if current_selection and item in current_selection:
-            self._profile_grid.selection_remove(item)
-            # Update status to show no selection
-            self._profile_status_label.configure(
-                text="No row selected",
-                foreground="#666666")
-            return "break"  # Prevent default selection behavior
-
-    def _on_profile_row_select(self, event):
-        sel = self._profile_grid.selection()
-        if not sel:
-            return
-        values = self._profile_grid.item(sel[0], "values")
-        cols   = [c for c, _ in self._PROFILE_GEN_COLUMNS]
-
-        def _get(col_name):
-            idx = cols.index(col_name) if col_name in cols else -1
-            return values[idx] if 0 <= idx < len(values) else ""
-
-        cfgpn     = _get("CFGPN")
-        dummy_lot = _get("Dummy_Lot")
-        mid       = _get("MID")
-        step      = _get("Step")
-        tester    = _get("Tester")
-
-        self._profile_status_label.configure(
-            text=(f"Selected: CFGPN={cfgpn}  Lot={dummy_lot}  "
-                  f"MID={mid}  Step={step}  Tester={tester}"),
-            foreground="#0078d4")
+    # _on_profile_single_click and _on_profile_row_select are replaced by
+    # _on_sheet_cell_select (tksheet handles selection natively)
 
     # ──────────────────────────────────────────────────────────────────────
     # TESTER REFRESH
@@ -1697,17 +1651,14 @@ class CheckoutTab(BaseTab):
             summary_frm, text="", font=("Segoe UI", 8))
         self._rc_summary_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # ── Treeview ──────────────────────────────────────────────────
-        tree_frm = ttk.Frame(frm)
-        tree_frm.grid(row=2, column=0, sticky="nsew")
-        tree_frm.columnconfigure(0, weight=1)
+        # ── Result Collector Grid ─────────────────────────────────────
         frm.rowconfigure(2, weight=1)
 
         columns = ("mid", "location", "name", "status", "fail_info",
                    "collected", "error")
         self._rc_tree = ttk.Treeview(
-            tree_frm, columns=columns, show="headings", height=5,
-            selectmode="extended")
+            frm, columns=columns, show="headings",
+            selectmode="extended", height=5)
 
         self._rc_tree.heading("mid",       text="MID")
         self._rc_tree.heading("location",  text="Location")
@@ -1717,7 +1668,7 @@ class CheckoutTab(BaseTab):
         self._rc_tree.heading("collected", text="Collected")
         self._rc_tree.heading("error",     text="Error")
 
-        self._rc_tree.column("mid",       width=90,  minwidth=70)
+        self._rc_tree.column("mid",       width=90,  minwidth=60)
         self._rc_tree.column("location",  width=50,  minwidth=40)
         self._rc_tree.column("name",      width=120, minwidth=80)
         self._rc_tree.column("status",    width=70,  minwidth=50)
@@ -1725,11 +1676,11 @@ class CheckoutTab(BaseTab):
         self._rc_tree.column("collected", width=60,  minwidth=40)
         self._rc_tree.column("error",     width=150, minwidth=80)
 
-        rc_scroll = ttk.Scrollbar(tree_frm, orient=tk.VERTICAL,
-                                  command=self._rc_tree.yview)
-        self._rc_tree.configure(yscrollcommand=rc_scroll.set)
-        self._rc_tree.grid(row=0, column=0, sticky="nsew")
-        rc_scroll.grid(row=0, column=1, sticky="ns")
+        rc_vsb = ttk.Scrollbar(frm, orient=tk.VERTICAL, command=self._rc_tree.yview)
+        self._rc_tree.configure(yscrollcommand=rc_vsb.set)
+
+        self._rc_tree.grid(row=2, column=0, sticky="nsew")
+        rc_vsb.grid(row=2, column=1, sticky="ns")
 
         # Row colour tags
         self._rc_tree.tag_configure("pass",    foreground="green")

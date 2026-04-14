@@ -28,3 +28,6 @@ suds-community>=1.1.2
 
 # MIPC SOAP web gateway client (MAM lot queries via Micron Messaging Gateway)
 zeep>=4.2.1
+
+# Spreadsheet-like grid widget with visible cell borders
+tksheet>=7.0.0
