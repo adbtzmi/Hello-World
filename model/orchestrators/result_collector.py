@@ -54,6 +54,9 @@ IBIR_WORKSPACE_LOCAL = r"C:\Tanisys\DNA2\User\Workspace"
 IBIR_CONFIG_LOCAL    = r"C:\ModAuto\SSDTesterCtrlr\SysState.xml"
 ADV_WORKSPACE_LOCAL  = r"C:\test_program\Rack0"
 
+# ── Checkout results folder (watcher writes collected files here) ────────────
+CHECKOUT_RESULTS_FOLDER = r"P:\temp\BENTO\CHECKOUT_RESULTS"
+
 # ── Test status constants ────────────────────────────────────────────────────
 STATUS_PASS       = "PASS"
 STATUS_FAIL       = "FAIL"
@@ -270,6 +273,37 @@ def resolve_ibir_workspaces(
     return mid_entries
 
 
+def _find_checkout_results_dut(tester_hostname: str, primitive_id: str,
+                                dut_id: str) -> str:
+    """
+    Search CHECKOUT_RESULTS for a DUT folder that the watcher already
+    collected.  Returns the path if found, empty string otherwise.
+
+    Pattern: CHECKOUT_RESULTS/<hostname>_*/<jira>/PRIMITIVE{X}/DUT{Y}/
+    """
+    if not os.path.isdir(CHECKOUT_RESULTS_FOLDER):
+        return ""
+    prefix = f"{tester_hostname}_".upper()
+    prim_name = f"PRIMITIVE{primitive_id}"
+    dut_name  = f"DUT{dut_id}"
+    try:
+        for tester_dir in os.listdir(CHECKOUT_RESULTS_FOLDER):
+            if not tester_dir.upper().startswith(prefix):
+                continue
+            tester_path = os.path.join(CHECKOUT_RESULTS_FOLDER, tester_dir)
+            if not os.path.isdir(tester_path):
+                continue
+            for jira_dir in os.listdir(tester_path):
+                dut_path = os.path.join(
+                    tester_path, jira_dir, prim_name, dut_name
+                )
+                if os.path.isdir(dut_path):
+                    return dut_path
+    except OSError:
+        pass
+    return ""
+
+
 def resolve_adv_workspaces(
     mid_entries: Dict[str, MIDEntry],
     log_callback: Optional[Callable] = None,
@@ -277,45 +311,36 @@ def resolve_adv_workspaces(
 ) -> Dict[str, MIDEntry]:
     """
     Resolve workspace paths for ADV (MPT) testers.
-    The DUT folder path is deterministic from the PxDy location format.
 
-    For ADV testers the workspace IS the DUT folder itself:
-      C:\\test_program\\Rack0\\Primitive{X}\\DUT{Y}
+    The watcher on the tester already collects results (resultsManager.db,
+    TraceFile.txt, summary.zip) into CHECKOUT_RESULTS on the shared drive.
+    This function looks there directly — no UNC admin share needed.
 
-    tmptravl.dat is NOT on the tester — it lives in CHECKOUT_QUEUE alongside
-    the XML.  So we set workspace_path directly from the PxDy location and
-    let check_test_status_adv() look for *_UPDATE_ATTRS.xml in the DUT folder.
-
-    If tester_hostname is provided, paths are converted to UNC admin shares
-    (e.g. \\\\MPT3HVM-0156\\C$\\test_program\\...) for remote access.
+    CHECKOUT_RESULTS path pattern:
+      P:\\temp\\BENTO\\CHECKOUT_RESULTS\\<hostname>_<env>\\<jira>\\PRIMITIVE{X}\\DUT{Y}
     """
-    path_to_workspace = _to_unc(ADV_WORKSPACE_LOCAL, tester_hostname)
-
     for mid, entry in list(mid_entries.items()):
         try:
             loc = entry.location
             primitive_id = loc[1]       # e.g. "P2D7" -> "2"
             dut_id       = loc[3:]      # e.g. "P2D7" -> "7"
 
-            dut_path = os.path.join(
-                path_to_workspace,
-                f"Primitive{primitive_id}",
-                f"DUT{dut_id}",
+            # Check CHECKOUT_RESULTS for watcher-collected files
+            cr_path = _find_checkout_results_dut(
+                tester_hostname, primitive_id, dut_id
             )
-
-            # Set workspace_path directly — the DUT folder path is
-            # deterministic from the PxDy location.  No tmptravl.dat
-            # verification needed (it lives in CHECKOUT_QUEUE, not here).
-            if os.path.isdir(dut_path):
-                entry.workspace_path = dut_path
-                entry.status = STATUS_RUNNING
+            if cr_path:
+                entry.workspace_path = cr_path
+                entry.status = STATUS_PASS
+                entry.collected = True
                 _log(log_callback,
-                     f" ✓ {mid}: workspace → {dut_path}")
+                     f" ✓ {mid}: found in CHECKOUT_RESULTS → {cr_path}")
             else:
+                # Not yet collected — watcher may still be running
                 entry.status = STATUS_NOT_FOUND
-                entry.error_msg = f"DUT folder not found: {dut_path}"
+                entry.error_msg = "Waiting for watcher to collect results"
                 _log(log_callback,
-                     f" ⚠ {mid}: DUT folder not found: {dut_path}")
+                     f" ⚠ {mid}: waiting for watcher to collect results...")
         except Exception as e:
             entry.status = STATUS_ERROR
             entry.error_msg = str(e)
