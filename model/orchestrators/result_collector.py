@@ -52,7 +52,7 @@ DEFAULT_POLL_INTERVAL = 30
 # ── Local tester paths (used as base for UNC conversion) ─────────────────────
 IBIR_WORKSPACE_LOCAL = r"C:\Tanisys\DNA2\User\Workspace"
 IBIR_CONFIG_LOCAL    = r"C:\ModAuto\SSDTesterCtrlr\SysState.xml"
-ADV_WORKSPACE_LOCAL  = r"C:\test_program\rack0"
+ADV_WORKSPACE_LOCAL  = r"C:\test_program\Rack0"
 
 # ── Test status constants ────────────────────────────────────────────────────
 STATUS_PASS       = "PASS"
@@ -280,7 +280,7 @@ def resolve_adv_workspaces(
     The DUT folder path is deterministic from the PxDy location format.
 
     For ADV testers the workspace IS the DUT folder itself:
-      C:\\test_program\\rack0\\primitive{X}\\DUT{Y}
+      C:\\test_program\\Rack0\\Primitive{X}\\DUT{Y}
 
     tmptravl.dat is NOT on the tester — it lives in CHECKOUT_QUEUE alongside
     the XML.  So we set workspace_path directly from the PxDy location and
@@ -299,7 +299,7 @@ def resolve_adv_workspaces(
 
             dut_path = os.path.join(
                 path_to_workspace,
-                f"primitive{primitive_id}",
+                f"Primitive{primitive_id}",
                 f"DUT{dut_id}",
             )
 
