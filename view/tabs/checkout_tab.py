@@ -1060,9 +1060,8 @@ class CheckoutTab(BaseTab):
         # Auto-lookup CFGPN/MCTO when Dummy_Lot is edited
         if col_name == "Dummy_Lot" and new_value.strip() and new_value.strip().upper() not in ("", "NONE"):
             self._trigger_lot_lookup(row_idx, new_value.strip())
-        # Auto-verify MID link when MID is edited
+        # Duplicate MID check when MID is edited
         if col_name == "MID" and new_value.strip() and new_value.strip().upper() not in ("", "NONE"):
-            self._trigger_mid_verify(row_idx, new_value.strip())
             if self._has_duplicate_mid(new_value.strip()):
                 messagebox.showwarning(
                     "Duplicate MID",
