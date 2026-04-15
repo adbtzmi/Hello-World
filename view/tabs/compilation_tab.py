@@ -209,7 +209,7 @@ class CompilationTab(BaseTab):
         add_btn = ttk.Button(btn_row, text="+ Add", width=8, command=self._add_tester)
         add_btn.pack(side=tk.LEFT, padx=(0, 2))
         _tip(add_btn, "Register a new tester in the shared registry.")
-        rem_btn = ttk.Button(btn_row, text="🗑 Remove", width=9, command=self._remove_tester)
+        rem_btn = ttk.Button(btn_row, text="🗑 Remove", width=11, command=self._remove_tester)
         rem_btn.pack(side=tk.LEFT, padx=(0, 2))
         _tip(rem_btn, "Remove selected tester(s) from the registry.")
         sel_all_btn = ttk.Button(btn_row, text="☑ All", width=6, command=self._select_all_testers)
@@ -417,6 +417,20 @@ class CompilationTab(BaseTab):
         # Initial history load
         self._refresh_history_from_disk()
 
+        # ══════════════════════════════════════════════════════════════════
+        # 5. Proceed to Checkout (C2: workflow connection)
+        # ══════════════════════════════════════════════════════════════════
+        proceed_frame = ttk.Frame(main_frame)
+        proceed_frame.pack(fill=tk.X, padx=10, pady=(5, 10))
+        self._proceed_btn = ttk.Button(
+            proceed_frame,
+            text="Proceed to Checkout  ➜",
+            command=self._proceed_to_checkout,
+        )
+        self._proceed_btn.pack(side=tk.RIGHT)
+        _tip(self._proceed_btn,
+             "Switch to the Checkout sub-tab to start checkout after compilation.")
+
     # ──────────────────────────────────────────────────────────────────────
     # A2: PROPER PLACEHOLDER ENTRY HANDLERS
     # ──────────────────────────────────────────────────────────────────────
@@ -434,6 +448,23 @@ class CompilationTab(BaseTab):
             self._placeholder_active = True
             self._tester_search_entry.insert(0, "Search testers...")
             self._tester_search_entry.config(foreground="gray")
+
+    # ──────────────────────────────────────────────────────────────────────
+    # C2: PROCEED TO CHECKOUT — workflow connection
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _proceed_to_checkout(self):
+        """Switch the parent sub-notebook to the Checkout tab."""
+        try:
+            nb = self.master  # the sub_notebook in CompileCheckoutTab
+            if isinstance(nb, ttk.Notebook):
+                for i in range(nb.index("end")):
+                    tab_text = nb.tab(i, "text")
+                    if "Checkout" in tab_text:
+                        nb.select(i)
+                        return
+        except Exception:
+            pass
 
     # ──────────────────────────────────────────────────────────────────────
     # A6: FORCE FAIL SECTION — Own top-level LabelFrame
