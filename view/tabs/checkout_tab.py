@@ -105,6 +105,9 @@ class CheckoutTab(BaseTab):
       3. SLATE Detection  |  Tester Selection   (side-by-side)
       4. Action Buttons
       5. Checkout Results
+
+    B19 — Row validation indicators (incomplete rows highlighted red, complete green)
+    B20 — Bulk paste from Excel (Ctrl+V multi-row paste synced to _profile_data)
     """
 
     _BADGE_COLOURS = {
@@ -403,6 +406,10 @@ class CheckoutTab(BaseTab):
         # B2: Right-click context menu
         self._profile_grid.bind("<Button-3>", self._profile_context_menu)
 
+        # B20: Bulk paste from Excel — override Ctrl+V to sync with _profile_data
+        self._profile_grid.bind("<Control-v>", self._on_sheet_paste)
+        self._profile_grid.bind("<Control-V>", self._on_sheet_paste)
+
         # B12: Editable cell visual indicator — highlight editable column headers
         # with a subtle blue tint so users know which columns are editable
         editable_indices = [i for i, (c, _) in enumerate(self._PROFILE_GEN_COLUMNS)
@@ -418,7 +425,8 @@ class CheckoutTab(BaseTab):
              "Click to select a row.  Right-click for context menu.\n"
              "Double-click any cell to edit it inline.\n"
              "Double-click ATTR_OVERWRITE to open the attribute editor dialog.\n"
-             "Blue-tinted columns are editable.  Ctrl+Z/Y for undo/redo.")
+             "Blue-tinted columns are editable.  Ctrl+Z/Y for undo/redo.\n"
+             "Ctrl+V to paste multiple rows from Excel.")
 
         # B16: Validation indicator label (shown below grid when issues found)
         self._validation_indicator = ttk.Label(
@@ -874,6 +882,9 @@ class CheckoutTab(BaseTab):
         self._profile_grid.extra_bindings("begin_edit_cell", self._on_sheet_begin_edit)
         self._profile_grid.extra_bindings("end_edit_cell", self._on_sheet_cell_edited)
         self._profile_grid.extra_bindings("cell_select", self._on_sheet_cell_select)
+        # B20: Re-bind Ctrl+V for bulk paste sync
+        self._profile_grid.bind("<Control-v>", self._on_sheet_paste)
+        self._profile_grid.bind("<Control-V>", self._on_sheet_paste)
         self._profile_grid.set_all_column_widths()
         # Re-apply column widths
         for i, (_, w) in enumerate(self._PROFILE_GEN_COLUMNS):
@@ -887,6 +898,24 @@ class CheckoutTab(BaseTab):
                     columns=col_idx, bg="#e8f0fe", fg="#000000")
             except Exception:
                 pass
+        # B19: Row validation indicators — highlight incomplete rows
+        for idx, row_dict in enumerate(self._profile_data):
+            mid  = row_dict.get("MID", "").strip()
+            step = row_dict.get("Step", "").strip()
+            if not mid or not step:
+                # Incomplete row — light red background
+                try:
+                    self._profile_grid.highlight_rows(
+                        rows=idx, bg="#fde8e8", fg="#a80000")
+                except Exception:
+                    pass
+            else:
+                # Complete row — light green background
+                try:
+                    self._profile_grid.highlight_rows(
+                        rows=idx, bg="#e8f5e9", fg="#000000")
+                except Exception:
+                    pass
         self._profile_grid.refresh()
         self._profile_row_count_label.configure(
             text=f"{len(self._profile_data)} row(s)")
@@ -1067,6 +1096,95 @@ class CheckoutTab(BaseTab):
                     f"Duplicate MIDs will generate conflicting profiles.")
         # B16: Update validation indicator after edit
         self._validate_profile_realtime()
+
+    # ── B20: Bulk paste from Excel ───────────────────────────────────────
+    def _on_sheet_paste(self, event=None):
+        """Intercept Ctrl+V to handle multi-row paste from Excel clipboard.
+
+        Excel copies cells as tab-separated columns and newline-separated
+        rows.  This handler:
+        1. Reads the clipboard text.
+        2. Parses it into rows × columns.
+        3. Writes values into ``_profile_data`` starting at the currently
+           selected cell, adding new rows if the paste extends beyond the
+           existing data.
+        4. Refreshes the grid and triggers validation.
+
+        Returns ``"break"`` to prevent tksheet's built-in paste from
+        also firing.
+        """
+        try:
+            clipboard_text = self._profile_grid.clipboard_get()
+        except tk.TclError:
+            return "break"  # nothing on clipboard
+
+        if not clipboard_text or not clipboard_text.strip():
+            return "break"
+
+        # ── Determine paste origin (selected cell) ───────────────────
+        try:
+            sel = self._profile_grid.get_currently_selected()
+            if sel and hasattr(sel, 'row') and sel.row is not None:
+                start_row = int(sel.row)
+                start_col = int(sel.column) if sel.column is not None else 0
+            else:
+                start_row, start_col = 0, 0
+        except Exception:
+            start_row, start_col = 0, 0
+
+        cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
+        num_cols = len(cols)
+
+        # ── Parse clipboard (tab-separated columns, newline-separated rows)
+        lines = clipboard_text.replace("\r\n", "\n").replace("\r", "\n")
+        lines = lines.rstrip("\n")  # remove trailing blank line
+        rows_data = [line.split("\t") for line in lines.split("\n")]
+
+        if not rows_data:
+            return "break"
+
+        # ── Save undo snapshot before bulk mutation ───────────────────
+        self._push_undo_snapshot()
+
+        # ── Write pasted data into _profile_data ─────────────────────
+        for r_offset, row_values in enumerate(rows_data):
+            target_row = start_row + r_offset
+
+            # Add new rows if paste extends beyond existing data
+            while target_row >= len(self._profile_data):
+                new_row = {c: "" for c, _ in self._PROFILE_GEN_COLUMNS}
+                self._profile_data.append(new_row)
+
+            for c_offset, cell_value in enumerate(row_values):
+                target_col = start_col + c_offset
+                if target_col >= num_cols:
+                    break  # ignore columns beyond grid width
+
+                col_name = cols[target_col]
+                # Only paste into editable columns
+                if col_name not in self._EDITABLE_COLS:
+                    continue
+                # Skip ATTR_OVERWRITE — managed via dialog
+                if col_name == "ATTR_OVERWRITE":
+                    continue
+
+                self._profile_data[target_row][col_name] = cell_value.strip()
+
+        # ── Refresh grid and validate ────────────────────────────────
+        self._refresh_profile_grid()
+        self._update_profile_status()
+        self._validate_profile_realtime()
+
+        # Show feedback
+        n_rows = len(rows_data)
+        n_cols_pasted = max(len(r) for r in rows_data) if rows_data else 0
+        self._profile_status_label.configure(
+            text=f"Pasted {n_rows} row(s) × {n_cols_pasted} column(s) "
+                 f"starting at row {start_row + 1}",
+            foreground="#107c10",
+        )
+
+        return "break"  # prevent tksheet built-in paste
 
     def _on_sheet_cell_select(self, event):
         """Called by tksheet when a cell is selected — update status bar.

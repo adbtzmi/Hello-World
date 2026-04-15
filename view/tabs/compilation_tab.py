@@ -19,6 +19,7 @@ UX Improvements Applied:
   A13 — Reduced Add Tester dialog height, collapsible checklist
   A14 — Hostname format validation with visual feedback
   A15 — Vertical stacking layout instead of side-by-side columns
+  A23 — Confirmation dialog before compile with summary
 """
 
 import os
@@ -1001,6 +1002,23 @@ class CompilationTab(BaseTab):
         ctrl = getattr(self.context.controller, "compile_controller", None)
         if ctrl is None:
             self.show_error("Error", "CompileController is not initialised.")
+            return
+
+        # A23: Confirmation dialog before compile
+        raw_zip = self.context.get_var("compile_raw_zip").get().strip()
+        tester_list = "\n".join(f"  • {h} ({e})" for h, e in testers)
+        summary = (
+            f"JIRA Key:   {issue_key}\n"
+            f"Repo Path:  {source_dir}\n"
+            f"RAW_ZIP:    {raw_zip}\n"
+            f"TGZ Label:  {label or '(default)'}\n"
+            f"\nTarget Tester(s) ({len(testers)}):\n{tester_list}"
+        )
+        if not messagebox.askyesno(
+            "Confirm Compilation",
+            f"Start compilation with the following settings?\n\n{summary}",
+            parent=self.root,
+        ):
             return
 
         if len(testers) > 1:
