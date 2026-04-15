@@ -527,22 +527,6 @@ class CheckoutTab(BaseTab):
         self._tester_row   = 0
         self._refresh_testers()
 
-        # B7: Badge legend — show what each badge colour means
-        legend_frm = ttk.Frame(tester_outer)
-        legend_frm.grid(row=2, column=0, sticky="we", pady=(8, 0))
-        ttk.Label(legend_frm, text="Legend:", font=("Segoe UI", 7, "bold")).pack(
-            side=tk.LEFT, padx=(0, 6))
-        _legend_items = [
-            ("IDLE", "#888888"), ("PENDING", "#0078d4"),
-            ("RUNNING", "#005a9e"), ("COLLECTING", "#8764b8"),
-            ("SUCCESS", "#107c10"), ("FAILED", "#a80000"),
-            ("TIMEOUT", "#ca5010"),
-        ]
-        for lbl_text, bg_color in _legend_items:
-            tk.Label(legend_frm, text=f" {lbl_text} ", font=("Segoe UI", 7),
-                     bg=bg_color, fg="white", relief=tk.FLAT,
-                     padx=3, pady=1).pack(side=tk.LEFT, padx=1)
-
     # ──────────────────────────────────────────────────────────────────────
     # SECTION 4 — Action Buttons
     # ──────────────────────────────────────────────────────────────────────
@@ -2357,12 +2341,18 @@ class CheckoutTab(BaseTab):
         mids_lines = []
         for row in self._profile_data:
             mid  = row.get("MID", "").strip()
-            loc  = row.get("Primitive", row.get("PRIMITIVE", "")).strip()
-            name = row.get("Dut", row.get("DUT", "")).strip()
+            prim = row.get("Primitive", row.get("PRIMITIVE", "")).strip()
+            dut  = row.get("Dut", row.get("DUT", "")).strip()
             if not mid:
                 continue
-            loc_str  = loc if loc else "0"
-            name_str = name if name else mid
+            # Location must be in PxDy format for resolve_adv_workspaces()
+            if prim and dut:
+                loc_str = f"P{prim}D{dut}"
+            elif prim:
+                loc_str = f"P{prim}D0"
+            else:
+                loc_str = "P0D0"
+            name_str = dut if dut else mid
             mids_lines.append(f"{mid}  {loc_str}  {name_str}  False")
 
         if not mids_lines:
