@@ -997,6 +997,10 @@ class CheckoutTab(BaseTab):
         If the column is ATTR_OVERWRITE, cancel the inline editor and
         open the dialog form instead.  Return ``None`` to cancel,
         or the pre-fill text to allow normal editing.
+
+        If the column is Dummy_Lot and the cell already has a value,
+        trigger the lot lookup immediately (auto-fill CFGPN/MCTO/etc.)
+        so the user doesn't have to re-type the lot to trigger it.
         """
         try:
             row_idx = int(event.row) if event.row is not None else -1
@@ -1008,6 +1012,16 @@ class CheckoutTab(BaseTab):
             if 0 <= row_idx < len(self._profile_data):
                 self.after(50, lambda r=row_idx: self._show_attr_overwrite_dialog(r))
             return None  # cancel inline text editor
+
+        # Auto-trigger lot lookup when double-clicking a pre-filled Dummy_Lot cell
+        if 0 <= col_idx < len(cols) and cols[col_idx] == "Dummy_Lot":
+            if 0 <= row_idx < len(self._profile_data):
+                existing_lot = self._profile_data[row_idx].get("Dummy_Lot", "").strip()
+                existing_cfgpn = self._profile_data[row_idx].get("CFGPN", "").strip()
+                # Only auto-lookup if lot exists but CFGPN is still empty
+                if existing_lot and existing_lot.upper() not in ("", "NONE") and not existing_cfgpn:
+                    self.after(100, lambda r=row_idx, l=existing_lot: self._trigger_lot_lookup(r, l))
+
         return event.value  # allow normal editing
 
     def _on_sheet_cell_edited(self, event):
@@ -1875,6 +1889,15 @@ class CheckoutTab(BaseTab):
             self._refresh_profile_grid()
             self._sync_tester_column()
             self._update_profile_status()
+
+            # Auto-trigger lot lookup for rows with lot but no CFGPN
+            for idx, row in enumerate(self._profile_data):
+                lot = row.get("Dummy_Lot", "").strip()
+                cfgpn = row.get("CFGPN", "").strip()
+                if lot and lot.upper() not in ("", "NONE") and not cfgpn:
+                    # Stagger lookups slightly to avoid flooding MAM
+                    self.after(200 * (idx + 1),
+                               lambda r=idx, l=lot: self._trigger_lot_lookup(r, l))
 
         # ── Log summary ───────────────────────────────────────────────
         filled = []
