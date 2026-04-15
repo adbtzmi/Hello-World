@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 BENTO - Build, Evaluate, Navigate, Test & Orchestrate
 Entry Point — Phase 3D (Clean MVC, no gui/app.py)
