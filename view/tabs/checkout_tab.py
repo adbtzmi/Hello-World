@@ -395,7 +395,8 @@ class CheckoutTab(BaseTab):
             "edit_cell",
         )
 
-        # Bind cell edit end to capture changes
+        # Bind cell edit events to capture changes
+        self._profile_grid.extra_bindings("begin_edit_cell", self._on_sheet_begin_edit)
         self._profile_grid.extra_bindings("end_edit_cell", self._on_sheet_cell_edited)
         self._profile_grid.extra_bindings("cell_select", self._on_sheet_cell_select)
 
@@ -885,7 +886,8 @@ class CheckoutTab(BaseTab):
             "column_width_resize", "double_click_column_resize",
             "arrowkeys", "copy", "paste", "undo", "edit_cell",
         )
-        # Re-bind extra bindings (cell edit callback + cell select callback)
+        # Re-bind extra bindings (cell edit callbacks + cell select callback)
+        self._profile_grid.extra_bindings("begin_edit_cell", self._on_sheet_begin_edit)
         self._profile_grid.extra_bindings("end_edit_cell", self._on_sheet_cell_edited)
         self._profile_grid.extra_bindings("cell_select", self._on_sheet_cell_select)
         self._profile_grid.set_all_column_widths()
@@ -1005,6 +1007,25 @@ class CheckoutTab(BaseTab):
     # PROFILE GRID — INLINE EDITING
     # ──────────────────────────────────────────────────────────────────────
 
+    def _on_sheet_begin_edit(self, event):
+        """Called by tksheet BEFORE the text editor opens.
+
+        If the column is ATTR_OVERWRITE, cancel the inline editor and
+        open the dialog form instead.  Return ``None`` to cancel,
+        or the pre-fill text to allow normal editing.
+        """
+        try:
+            row_idx = int(event.row) if event.row is not None else -1
+            col_idx = int(event.column) if event.column is not None else -1
+        except (TypeError, ValueError):
+            return event.value  # allow edit
+        cols = [c for c, _ in self._PROFILE_GEN_COLUMNS]
+        if 0 <= col_idx < len(cols) and cols[col_idx] == "ATTR_OVERWRITE":
+            if 0 <= row_idx < len(self._profile_data):
+                self.after(50, lambda r=row_idx: self._show_attr_overwrite_dialog(r))
+            return None  # cancel inline text editor
+        return event.value  # allow normal editing
+
     def _on_sheet_cell_edited(self, event):
         """Called by tksheet when a cell edit is completed.
 
@@ -1027,13 +1048,10 @@ class CheckoutTab(BaseTab):
             return
         col_name = cols[col_idx]
 
-        # For ATTR_OVERWRITE, reject inline edit and open dialog instead
+        # ATTR_OVERWRITE is handled by _on_sheet_begin_edit (dialog opens
+        # before the text editor), so this should not fire for that column.
+        # Guard just in case:
         if col_name == "ATTR_OVERWRITE":
-            # Revert the cell to old value and open dialog
-            old_val = self._profile_data[row_idx].get(col_name, "")
-            self._profile_grid.set_cell_data(row_idx, col_idx, old_val)
-            self._profile_grid.refresh()
-            self.after(50, lambda: self._show_attr_overwrite_dialog(row_idx))
             return
 
         # B18: Save undo snapshot before mutation
