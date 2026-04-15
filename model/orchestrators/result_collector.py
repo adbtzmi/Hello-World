@@ -763,6 +763,11 @@ class ResultCollector:
         additional_patterns: Optional[List[str]] = None,
         webhook_url:         str   = "",
         notify_teams:        bool  = True,
+        ai_client:           Any   = None,   # AIGatewayClient for AI-powered analysis
+        jira_context:        Optional[Dict] = None,   # JIRA context for AI analysis
+        test_scenarios:      Optional[str]  = None,   # Test scenarios for AI validation
+        code_changes:        Optional[str]  = None,   # Code changes for AI validation
+        impact_analysis:     Optional[str]  = None,   # Impact analysis for AI risk assessment
         log_callback:        Optional[Callable] = None,
         progress_callback:   Optional[Callable] = None,
         completion_callback: Optional[Callable] = None,
@@ -778,6 +783,11 @@ class ResultCollector:
         self.additional_patterns = additional_patterns or []
         self.webhook_url         = webhook_url
         self.notify_teams        = notify_teams
+        self.ai_client           = ai_client
+        self.jira_context        = jira_context
+        self.test_scenarios      = test_scenarios
+        self.code_changes        = code_changes
+        self.impact_analysis     = impact_analysis
         self.log_callback        = log_callback
         self.progress_callback   = progress_callback
         self.completion_callback = completion_callback
@@ -786,7 +796,7 @@ class ResultCollector:
         self._auto_consolidator = None
         if auto_consolidate and AutoConsolidator is not None:
             try:
-                self._auto_consolidator = AutoConsolidator()
+                self._auto_consolidator = AutoConsolidator(ai_client=ai_client)
             except Exception as e:
                 logger.warning(f"Failed to initialize AutoConsolidator: {e}")
 
@@ -1101,7 +1111,14 @@ class ResultCollector:
                                         generate_validation_doc=True,
                                         generate_spool_summary=True,
                                         generate_manifest=True,
-                                        perform_risk_assessment=True
+                                        perform_risk_assessment=True,
+                                        perform_ai_validation=self.ai_client is not None,
+                                        perform_ai_risk_assessment=self.ai_client is not None,
+                                        jira_context=self.jira_context,
+                                        test_scenarios=self.test_scenarios,
+                                        code_changes=self.code_changes,
+                                        impact_analysis=self.impact_analysis,
+                                        log_callback=self.log_callback,
                                     )
                                     
                                     if results.get("success"):
@@ -1110,6 +1127,14 @@ class ResultCollector:
                                             risk_level = results["risk_assessment"].get("risk_level", "UNKNOWN")
                                             risk_score = results["risk_assessment"].get("risk_score", 0)
                                             _log(self.log_callback, f"      ✓ Risk: {risk_level} ({risk_score:.1f}/100)")
+                                        if "ai_validation" in results:
+                                            val_status = results["ai_validation"].get("validation_status", "N/A")
+                                            val_conf = results["ai_validation"].get("confidence", "N/A")
+                                            _log(self.log_callback, f"      ✓ AI Validation: {val_status} (confidence: {val_conf})")
+                                        if "ai_risk_assessment" in results:
+                                            ai_risk = results["ai_risk_assessment"].get("enhanced_risk_level", "N/A")
+                                            ai_score = results["ai_risk_assessment"].get("enhanced_risk_score", 0)
+                                            _log(self.log_callback, f"      ✓ AI Risk: {ai_risk} ({ai_score:.1f}/100)")
                                     else:
                                         errors = results.get("errors", [])
                                         _log(self.log_callback, f"      ⚠ Consolidation had errors: {', '.join(errors)}")

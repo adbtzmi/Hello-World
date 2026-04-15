@@ -2,12 +2,17 @@
 """
 Auto Consolidator
 Integrates all analysis modules to automatically consolidate checkout results.
+
+Enhanced with AI-powered validation and risk assessment capabilities:
+  - AI Checkout Validator: Understands test cases & code changes, verifies validation
+  - AI Risk Assessor: Context-aware risk assessment with production scenario analysis
 """
 
 import os
 import sys
 import json
-from typing import Dict, List, Optional
+import logging
+from typing import Dict, List, Optional, Callable
 from datetime import datetime
 
 # Handle imports for both standalone and module usage
@@ -17,6 +22,8 @@ try:
     from model.analyzers.spool_summary_generator import SpoolSummaryGenerator
     from model.analyzers.manifest_generator import ManifestGenerator
     from model.analyzers.risk_assessor import RiskAssessor
+    from model.analyzers.ai_checkout_validator import AICheckoutValidator
+    from model.analyzers.ai_risk_assessor import AIRiskAssessor
 except ModuleNotFoundError:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
     from model.analyzers.trace_analyzer import TraceAnalyzer
@@ -24,6 +31,10 @@ except ModuleNotFoundError:
     from model.analyzers.spool_summary_generator import SpoolSummaryGenerator
     from model.analyzers.manifest_generator import ManifestGenerator
     from model.analyzers.risk_assessor import RiskAssessor
+    from model.analyzers.ai_checkout_validator import AICheckoutValidator
+    from model.analyzers.ai_risk_assessor import AIRiskAssessor
+
+logger = logging.getLogger("bento_app")
 
 
 class AutoConsolidator:
@@ -36,20 +47,29 @@ class AutoConsolidator:
     3. Create spool summaries
     4. Generate manifests
     5. Perform risk assessment
+    6. AI-powered checkout validation (if AI client available)
+    7. AI-enhanced risk assessment (if AI client available)
     """
     
-    def __init__(self, template_path: str = "template_validation.docx"):
+    def __init__(self, template_path: str = "template_validation.docx",
+                 ai_client=None):
         """
         Initialize the auto consolidator.
         
         Args:
             template_path: Path to validation document template
+            ai_client: Optional AIGatewayClient for AI-powered analysis.
+                       When provided, enables AI checkout validation and
+                       AI-enhanced risk assessment.
         """
+        self.ai_client = ai_client
         self.trace_analyzer = TraceAnalyzer()
         self.validation_populator = ValidationDocumentPopulator(template_path)
         self.spool_generator = SpoolSummaryGenerator()
         self.manifest_generator = ManifestGenerator()
         self.risk_assessor = RiskAssessor()
+        self.ai_validator = AICheckoutValidator(ai_client=ai_client)
+        self.ai_risk_assessor = AIRiskAssessor(ai_client=ai_client)
     
     def consolidate(
         self,
@@ -64,7 +84,14 @@ class AutoConsolidator:
         generate_validation_doc: bool = True,
         generate_spool_summary: bool = True,
         generate_manifest: bool = True,
-        perform_risk_assessment: bool = True
+        perform_risk_assessment: bool = True,
+        perform_ai_validation: bool = True,
+        perform_ai_risk_assessment: bool = True,
+        jira_context: Optional[Dict] = None,
+        test_scenarios: Optional[str] = None,
+        code_changes: Optional[str] = None,
+        impact_analysis: Optional[str] = None,
+        log_callback: Optional[Callable] = None,
     ) -> Dict:
         """
         Perform complete auto-consolidation.
@@ -82,6 +109,13 @@ class AutoConsolidator:
             generate_spool_summary: Whether to generate spool summary
             generate_manifest: Whether to generate manifest
             perform_risk_assessment: Whether to perform risk assessment
+            perform_ai_validation: Whether to perform AI checkout validation
+            perform_ai_risk_assessment: Whether to perform AI-enhanced risk assessment
+            jira_context: Optional JIRA context dict for AI analysis
+            test_scenarios: Optional expected test scenarios for AI analysis
+            code_changes: Optional code changes description for AI analysis
+            impact_analysis: Optional impact analysis text for AI analysis
+            log_callback: Optional callback for progress logging
             
         Returns:
             Dictionary with consolidation results
@@ -95,9 +129,17 @@ class AutoConsolidator:
             "errors": []
         }
         
+        def _log(msg):
+            print(msg)
+            if log_callback:
+                try:
+                    log_callback(msg)
+                except Exception:
+                    pass
+        
         try:
             # Step 1: Analyze trace file
-            print("Step 1: Analyzing trace file...")
+            _log("Step 1: Analyzing trace file...")
             trace_analysis = self.trace_analyzer.analyze_file(trace_file_path)
             results["trace_analysis"] = {
                 "total_tests": trace_analysis.total_tests,
@@ -106,11 +148,11 @@ class AutoConsolidator:
                 "pass_rate": trace_analysis.pass_rate,
                 "duration_hours": trace_analysis.duration_seconds / 3600
             }
-            print(f"  [OK] Analyzed {trace_analysis.total_tests} tests ({trace_analysis.pass_rate:.2f}% pass rate)")
+            _log(f"  [OK] Analyzed {trace_analysis.total_tests} tests ({trace_analysis.pass_rate:.2f}% pass rate)")
             
             # Step 2: Generate validation document
             if generate_validation_doc:
-                print("Step 2: Generating validation document...")
+                _log("Step 2: Generating validation document...")
                 validation_doc_path = os.path.join(collection_dir, "validation_document.docx")
                 success = self.validation_populator.populate_document(
                     trace_analysis=trace_analysis,
@@ -123,14 +165,14 @@ class AutoConsolidator:
                 )
                 if success:
                     results["outputs"]["validation_document"] = validation_doc_path
-                    print(f"  [OK] Validation document: {validation_doc_path}")
+                    _log(f"  [OK] Validation document: {validation_doc_path}")
                 else:
                     results["errors"].append("Failed to generate validation document")
-                    print("  [ERROR] Failed to generate validation document")
+                    _log("  [ERROR] Failed to generate validation document")
             
             # Step 3: Generate spool summary
             if generate_spool_summary:
-                print("Step 3: Generating spool summary...")
+                _log("Step 3: Generating spool summary...")
                 spool_summary_path = os.path.join(collection_dir, "spool_summary.txt")
                 success = self.spool_generator.save_summary(
                     trace_analysis=trace_analysis,
@@ -143,14 +185,14 @@ class AutoConsolidator:
                 )
                 if success:
                     results["outputs"]["spool_summary"] = spool_summary_path
-                    print(f"  [OK] Spool summary: {spool_summary_path}")
+                    _log(f"  [OK] Spool summary: {spool_summary_path}")
                 else:
                     results["errors"].append("Failed to generate spool summary")
-                    print("  [ERROR] Failed to generate spool summary")
+                    _log("  [ERROR] Failed to generate spool summary")
             
             # Step 4: Generate manifest
             if generate_manifest:
-                print("Step 4: Generating manifest...")
+                _log("Step 4: Generating manifest...")
                 manifest_path = os.path.join(collection_dir, "manifest.json")
                 success = self.manifest_generator.generate_and_save(
                     collection_dir=collection_dir,
@@ -162,17 +204,17 @@ class AutoConsolidator:
                 )
                 if success:
                     results["outputs"]["manifest"] = manifest_path
-                    print(f"  [OK] Manifest: {manifest_path}")
+                    _log(f"  [OK] Manifest: {manifest_path}")
                 else:
                     results["errors"].append("Failed to generate manifest")
-                    print("  [ERROR] Failed to generate manifest")
+                    _log("  [ERROR] Failed to generate manifest")
             
-            # Step 5: Perform risk assessment
+            # Step 5: Perform rule-based risk assessment
+            baseline_analysis = None
             if perform_risk_assessment:
-                print("Step 5: Performing risk assessment...")
+                _log("Step 5: Performing risk assessment...")
                 
                 # Analyze baseline if provided
-                baseline_analysis = None
                 if baseline_trace_path and os.path.exists(baseline_trace_path):
                     baseline_analysis = self.trace_analyzer.analyze_file(baseline_trace_path)
                 
@@ -199,15 +241,123 @@ class AutoConsolidator:
                     "risk_level": risk_assessment.risk_level.value,
                     "risk_score": risk_assessment.risk_score
                 }
-                print(f"  [OK] Risk Level: {risk_assessment.risk_level.value} (Score: {risk_assessment.risk_score:.1f}/100)")
-                print(f"  [OK] Risk assessment: {risk_report_path}")
+                _log(f"  [OK] Risk Level: {risk_assessment.risk_level.value} (Score: {risk_assessment.risk_score:.1f}/100)")
+                _log(f"  [OK] Risk assessment: {risk_report_path}")
             
-            print("\n[SUCCESS] Auto-consolidation completed successfully!")
+            # Step 6: AI-powered checkout validation
+            validation_result = None
+            if perform_ai_validation:
+                _log("Step 6: AI checkout validation...")
+                try:
+                    validation_result = self.ai_validator.validate_checkout(
+                        trace_analysis=trace_analysis,
+                        jira_context=jira_context,
+                        test_scenarios=test_scenarios,
+                        code_changes=code_changes,
+                        impact_analysis=impact_analysis,
+                        trace_file_path=trace_file_path,
+                        log_callback=log_callback,
+                    )
+                    
+                    if validation_result.get("success"):
+                        # Save validation report
+                        val_report_path = os.path.join(collection_dir, "ai_validation_report.txt")
+                        val_report = self.ai_validator.generate_validation_report(validation_result)
+                        with open(val_report_path, 'w', encoding='utf-8') as f:
+                            f.write(val_report)
+                        
+                        # Save validation JSON
+                        val_json_path = os.path.join(collection_dir, "ai_validation.json")
+                        # Remove non-serializable items for JSON
+                        val_json_data = {
+                            k: v for k, v in validation_result.items()
+                            if k != "success"
+                        }
+                        with open(val_json_path, 'w', encoding='utf-8') as f:
+                            json.dump(val_json_data, f, indent=2, default=str)
+                        
+                        results["outputs"]["ai_validation_report"] = val_report_path
+                        results["outputs"]["ai_validation_json"] = val_json_path
+                        results["ai_validation"] = {
+                            "validation_status": validation_result.get("validation_status"),
+                            "confidence": validation_result.get("confidence"),
+                            "method": validation_result.get("method"),
+                        }
+                        
+                        status = validation_result.get("validation_status", "UNKNOWN")
+                        confidence = validation_result.get("confidence", "UNKNOWN")
+                        method = validation_result.get("method", "unknown")
+                        _log(f"  [OK] Validation: {status} (Confidence: {confidence}, Method: {method})")
+                    else:
+                        err = validation_result.get("error", "Unknown error")
+                        results["errors"].append(f"AI validation failed: {err}")
+                        _log(f"  [WARN] AI validation failed: {err}")
+                except Exception as e:
+                    results["errors"].append(f"AI validation error: {e}")
+                    _log(f"  [WARN] AI validation error: {e}")
+                    logger.warning(f"AI validation error in consolidation: {e}")
+            
+            # Step 7: AI-enhanced risk assessment
+            if perform_ai_risk_assessment and self.ai_client:
+                _log("Step 7: AI-enhanced risk assessment...")
+                try:
+                    # Resolve baseline if not already done
+                    if baseline_analysis is None and baseline_trace_path and os.path.exists(baseline_trace_path):
+                        baseline_analysis = self.trace_analyzer.analyze_file(baseline_trace_path)
+                    
+                    enhanced_risk = self.ai_risk_assessor.assess_risk_enhanced(
+                        trace_analysis=trace_analysis,
+                        baseline_analysis=baseline_analysis,
+                        expected_duration_hours=expected_duration_hours,
+                        jira_context=jira_context,
+                        code_changes=code_changes,
+                        impact_analysis=impact_analysis,
+                        test_scenarios=test_scenarios,
+                        validation_result=validation_result,
+                        log_callback=log_callback,
+                    )
+                    
+                    if enhanced_risk.get("success"):
+                        # Save enhanced risk report
+                        enh_report_path = os.path.join(collection_dir, "ai_risk_assessment.txt")
+                        enh_report = self.ai_risk_assessor.generate_enhanced_report(enhanced_risk)
+                        with open(enh_report_path, 'w', encoding='utf-8') as f:
+                            f.write(enh_report)
+                        
+                        # Save enhanced risk JSON
+                        enh_json_path = os.path.join(collection_dir, "ai_risk_assessment.json")
+                        enh_json_data = {
+                            k: v for k, v in enhanced_risk.items()
+                            if k != "success"
+                        }
+                        with open(enh_json_path, 'w', encoding='utf-8') as f:
+                            json.dump(enh_json_data, f, indent=2, default=str)
+                        
+                        results["outputs"]["ai_risk_report"] = enh_report_path
+                        results["outputs"]["ai_risk_json"] = enh_json_path
+                        results["ai_risk_assessment"] = {
+                            "enhanced_risk_level": enhanced_risk.get("enhanced_risk_level"),
+                            "enhanced_risk_score": enhanced_risk.get("enhanced_risk_score"),
+                            "method": enhanced_risk.get("method"),
+                        }
+                        
+                        level = enhanced_risk.get("enhanced_risk_level", "UNKNOWN")
+                        score = enhanced_risk.get("enhanced_risk_score", 0)
+                        method = enhanced_risk.get("method", "unknown")
+                        _log(f"  [OK] AI Risk: {level} (Score: {score:.1f}/100, Method: {method})")
+                    else:
+                        _log("  [WARN] AI-enhanced risk assessment returned no results")
+                except Exception as e:
+                    results["errors"].append(f"AI risk assessment error: {e}")
+                    _log(f"  [WARN] AI risk assessment error: {e}")
+                    logger.warning(f"AI risk assessment error in consolidation: {e}")
+            
+            _log("\n[SUCCESS] Auto-consolidation completed successfully!")
             
         except Exception as e:
             results["success"] = False
             results["errors"].append(str(e))
-            print(f"\n[FAILED] Auto-consolidation failed: {e}")
+            _log(f"\n[FAILED] Auto-consolidation failed: {e}")
         
         return results
     
