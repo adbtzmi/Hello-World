@@ -223,6 +223,10 @@ def resolve_ibir_workspaces(
         _log(log_callback, f"✗ Cannot parse SysState.xml: {e}")
         return mid_entries
 
+    if child is None:
+        _log(log_callback, "✗ Primitives element not found in SysState.xml")
+        return mid_entries
+
     for mid, entry in list(mid_entries.items()):
         try:
             loc = entry.location
@@ -238,7 +242,7 @@ def resolve_ibir_workspaces(
                 _log(log_callback, f" ⚠ {mid}: DUT {loc} not found in SysState.xml")
                 continue
 
-            workspace = subchild.get("workspaceID")
+            workspace = subchild.get("workspaceID") or ""
             travl_path = os.path.join(path_to_workspace, workspace, "tmptravl.dat")
 
             if not os.path.exists(travl_path):
@@ -377,8 +381,8 @@ def check_test_status_ibir(entry: MIDEntry) -> MIDEntry:
                 entry.status = STATUS_PASS
             elif status_text == "FAIL":
                 entry.status = STATUS_FAIL
-                entry.fail_reg  = fail_reg.text  if fail_reg  is not None else ""
-                entry.fail_code = fail_code.text if fail_code is not None else ""
+                entry.fail_reg  = (fail_reg.text  or "") if fail_reg  is not None else ""
+                entry.fail_code = (fail_code.text or "") if fail_code is not None else ""
             else:
                 entry.status = STATUS_UNKNOWN
         else:
@@ -413,8 +417,8 @@ def check_test_status_adv(entry: MIDEntry) -> MIDEntry:
                 entry.status = STATUS_PASS
             elif status_text == "FAIL":
                 entry.status = STATUS_FAIL
-                entry.fail_reg  = fail_reg.text  if fail_reg  is not None else ""
-                entry.fail_code = fail_code.text if fail_code is not None else ""
+                entry.fail_reg  = (fail_reg.text  or "") if fail_reg  is not None else ""
+                entry.fail_code = (fail_code.text or "") if fail_code is not None else ""
             else:
                 entry.status = STATUS_UNKNOWN
         else:
@@ -879,7 +883,7 @@ class ResultCollector:
         for mid, entry in self._entries.items():
             if entry.consolidation_results and entry.consolidation_results.get("success"):
                 cr = entry.consolidation_results
-                mid_result = {"mid": mid}
+                mid_result: Dict[str, Any] = {"mid": mid}
                 if "ai_validation" in cr:
                     mid_result["ai_validation"] = cr["ai_validation"]
                 if "ai_risk_assessment" in cr:
