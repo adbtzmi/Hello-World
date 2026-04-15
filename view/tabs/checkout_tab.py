@@ -1648,10 +1648,16 @@ class CheckoutTab(BaseTab):
         # Set state to STOPPING to disable buttons during cleanup
         self._set_checkout_state(CheckoutState.STOPPING)
         
-        # Trigger the actual stop
+        # Trigger the actual stop on the checkout orchestrator
         self.context.controller.checkout_controller.stop_checkout()
-        # State will be set to IDLE/ERROR by the completion callback
-        # (B9: button visibility managed by update_checkout_ui_state)
+
+        # Also stop the result-collector monitoring loop (if running)
+        self._rc_stop_monitoring()
+
+        # Transition to IDLE so the UI re-enables correctly.
+        # (The completion callback may never fire when the user cancels
+        #  mid-monitoring, so we set IDLE explicitly here.)
+        self._set_checkout_state(CheckoutState.IDLE)
 
     def _collect_params(self):
         from model.checkout_params import (
