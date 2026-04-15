@@ -57,6 +57,11 @@ class ResultController:
         additional_patterns: list  | None = None,
         webhook_url:         str   = "",
         notify_teams:        bool  = True,
+        ai_client            = None,
+        jira_context:        dict  | None = None,
+        test_scenarios:      str   | None = None,
+        code_changes:        str   | None = None,
+        impact_analysis:     str   | None = None,
     ):
         """
         Start background result collection monitoring.
@@ -73,6 +78,11 @@ class ResultController:
             additional_patterns: Extra file glob patterns to collect
             webhook_url:         Teams webhook URL for notifications
             notify_teams:        Whether to send Teams notification
+            ai_client:           AIGatewayClient for AI-powered validation & risk assessment
+            jira_context:        JIRA issue context dict for AI analysis
+            test_scenarios:      Test scenarios text for AI checkout validation
+            code_changes:        Code changes text for AI checkout validation
+            impact_analysis:     Impact analysis text for AI risk assessment
         """
         if self._running:
             self.context.log("⚠ Result collector is already running.")
@@ -93,8 +103,26 @@ class ResultController:
         if notify_var is not None:
             notify_teams = notify_var.get()
 
+        # Resolve AI client from context if not provided
+        if ai_client is None:
+            ai_client = getattr(self.context, 'ai_client', None)
+
+        # Resolve JIRA context from workflow state if not provided
+        if jira_context is None:
+            workflow = getattr(self.context, 'workflow_state', {})
+            if workflow:
+                jira_context = workflow.get('jira_analysis', None)
+                if test_scenarios is None:
+                    test_scenarios = workflow.get('test_scenarios', None)
+                if code_changes is None:
+                    code_changes = workflow.get('code_changes', None)
+                if impact_analysis is None:
+                    impact_analysis = workflow.get('impact_analysis', None)
+
         self._running = True
         self.context.log(f"🚀 Starting result collection monitor...")
+        if ai_client:
+            self.context.log(f"   🤖 AI-powered validation & risk assessment enabled")
 
         # Import here to avoid circular imports
         from model.orchestrators.result_collector import ResultCollector
@@ -111,6 +139,11 @@ class ResultController:
             additional_patterns = additional_patterns or [],
             webhook_url         = webhook_url,
             notify_teams        = notify_teams,
+            ai_client           = ai_client,
+            jira_context        = jira_context,
+            test_scenarios      = test_scenarios,
+            code_changes        = code_changes,
+            impact_analysis     = impact_analysis,
             log_callback        = self._log_from_thread,
             progress_callback   = self._on_progress,
             completion_callback = self._on_completion,
@@ -234,6 +267,13 @@ class ResultController:
                 checkout_tab = getattr(view, "checkout_tab", None)
                 if checkout_tab and hasattr(checkout_tab, "on_rc_collection_complete"):
                     checkout_tab.on_rc_collection_complete(summary)
+
+                # Forward AI consolidation results to Validation & Risk tab
+                ai_consolidation = summary.get("ai_consolidation")
+                if ai_consolidation:
+                    validation_tab = getattr(view, "validation_tab", None)
+                    if validation_tab and hasattr(validation_tab, "on_ai_checkout_results"):
+                        validation_tab.on_ai_checkout_results(ai_consolidation, summary)
 
                 # Show popup notification
                 from tkinter import messagebox

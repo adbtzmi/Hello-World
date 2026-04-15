@@ -153,6 +153,88 @@ class ValidationTab(BaseTab):
 
     # ── View callbacks ────────────────────────────────────────────────────
 
+    def on_ai_checkout_results(self, ai_consolidation: list, summary: dict):
+        """
+        Called by ResultController when auto-consolidation completes with
+        AI validation and/or risk assessment results.
+
+        Args:
+            ai_consolidation: List of dicts, one per MID, each containing
+                              'mid', 'ai_validation', 'ai_risk_assessment',
+                              'ai_report_paths'.
+            summary: Full summary dict from ResultCollector.
+        """
+        machine = summary.get("machine", "")
+        site = summary.get("site", "")
+        passed = summary.get("passed", 0)
+        failed = summary.get("failed", 0)
+        total = summary.get("total", 0)
+
+        lines = []
+        lines.append("=" * 64)
+        lines.append("  AI CHECKOUT VALIDATION & RISK ASSESSMENT")
+        lines.append("=" * 64)
+        lines.append(f"  Machine : {machine}")
+        lines.append(f"  Site    : {site}")
+        lines.append(f"  Results : {passed} passed, {failed} failed / {total} total")
+        lines.append("")
+
+        for entry in ai_consolidation:
+            mid = entry.get("mid", "?")
+            lines.append("-" * 64)
+            lines.append(f"  MID: {mid}")
+            lines.append("-" * 64)
+
+            # AI Validation
+            val = entry.get("ai_validation")
+            if val:
+                status = val.get("validation_status", "N/A")
+                confidence = val.get("confidence", "N/A")
+                method = val.get("method", "N/A")
+                lines.append("")
+                lines.append("  >> AI Checkout Validation")
+                lines.append(f"     Status     : {status}")
+                lines.append(f"     Confidence : {confidence}")
+                lines.append(f"     Method     : {method}")
+
+            # AI Risk Assessment
+            risk = entry.get("ai_risk_assessment")
+            if risk:
+                level = risk.get("enhanced_risk_level", "N/A")
+                score = risk.get("enhanced_risk_score", 0)
+                method = risk.get("method", "N/A")
+                lines.append("")
+                lines.append("  >> AI Risk Assessment")
+                lines.append(f"     Risk Level : {level}")
+                try:
+                    lines.append(f"     Risk Score : {float(score):.1f} / 100")
+                except (ValueError, TypeError):
+                    lines.append(f"     Risk Score : {score}")
+                lines.append(f"     Method     : {method}")
+
+            # Report file paths
+            paths = entry.get("ai_report_paths", {})
+            if paths:
+                lines.append("")
+                lines.append("  >> Report Files")
+                for key, path in paths.items():
+                    label = key.replace("ai_", "").replace("_", " ").title()
+                    lines.append(f"     {label}: {path}")
+
+            lines.append("")
+
+        lines.append("=" * 64)
+        lines.append("  Full reports saved alongside trace files in collection folder.")
+        lines.append("=" * 64)
+
+        display_text = "\n".join(lines)
+
+        # Update the text area
+        self.risk_result_text.delete('1.0', 'end')
+        self.risk_result_text.insert('1.0', display_text)
+
+        self.log("AI checkout validation & risk assessment results displayed in Validation & Risk tab")
+
     def on_validation_completed(self, result: dict):
         """Called by controller when validation completes"""
         issue_key = result.get("issue_key", "")
