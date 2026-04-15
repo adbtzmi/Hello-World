@@ -898,7 +898,8 @@ class CheckoutTab(BaseTab):
                     columns=col_idx, bg="#e8f0fe", fg="#000000")
             except Exception:
                 pass
-        # B19: Row validation indicators — highlight incomplete rows
+        # B19: Row validation indicators — highlight incomplete rows only.
+        # Complete rows use default white bg (column highlights still apply).
         for idx, row_dict in enumerate(self._profile_data):
             mid  = row_dict.get("MID", "").strip()
             step = row_dict.get("Step", "").strip()
@@ -910,10 +911,9 @@ class CheckoutTab(BaseTab):
                 except Exception:
                     pass
             else:
-                # Complete row — light green background
+                # Complete row — clear any previous red highlight
                 try:
-                    self._profile_grid.highlight_rows(
-                        rows=idx, bg="#e8f5e9", fg="#000000")
+                    self._profile_grid.dehighlight_rows(rows=[idx])
                 except Exception:
                     pass
         self._profile_grid.refresh()
