@@ -2246,15 +2246,25 @@ class CheckoutTab(BaseTab):
             self._rc_collect_btn.state(["disabled"])
             self._rc_spool_btn.state(["disabled"])
 
-        elif state in (CheckoutState.COMPLETED, CheckoutState.ERROR):
+        elif state == CheckoutState.COMPLETED:
             self.checkout_btn.grid()  # Show Start
             self.checkout_btn.state(["!disabled"])
             self.stop_btn.grid_remove()  # Hide Stop
             self._rc_refresh_btn.state(["!disabled"])
             self._rc_collect_btn.state(["!disabled"])
             self._rc_spool_btn.state(["!disabled"])
-            # B10: Fill progress bar to 100%
+            # B10: Fill progress bar to 100% on success
             self._checkout_progress['value'] = 100
+
+        elif state == CheckoutState.ERROR:
+            self.checkout_btn.grid()  # Show Start
+            self.checkout_btn.state(["!disabled"])
+            self.stop_btn.grid_remove()  # Hide Stop
+            self._rc_refresh_btn.state(["!disabled"])
+            self._rc_collect_btn.state(["!disabled"])
+            self._rc_spool_btn.state(["!disabled"])
+            # Reset progress bar on error — no misleading green bar
+            self._checkout_progress['value'] = 0
 
     # ──────────────────────────────────────────────────────────────────────
     # SECTION 6 — Toolbar actions
