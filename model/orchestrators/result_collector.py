@@ -82,6 +82,7 @@ class MIDEntry:
         self.workspace_path = ""   # resolved workspace path
         self.collected = False     # whether files have been collected
         self.error_msg = ""        # any error message
+        self.consolidation_results: Optional[Dict] = None  # dict from AutoConsolidator.consolidate()
 
     def result_line(self) -> str:
         """Format a human-readable result line."""
@@ -851,7 +852,25 @@ class ResultCollector:
             1 for e in self._entries.values()
             if e.status == STATUS_NOT_FOUND and not e.workspace_path
         )
-        return {
+        # Aggregate AI consolidation results across all MIDs
+        ai_consolidation = []
+        for mid, entry in self._entries.items():
+            if entry.consolidation_results and entry.consolidation_results.get("success"):
+                cr = entry.consolidation_results
+                mid_result = {"mid": mid}
+                if "ai_validation" in cr:
+                    mid_result["ai_validation"] = cr["ai_validation"]
+                if "ai_risk_assessment" in cr:
+                    mid_result["ai_risk_assessment"] = cr["ai_risk_assessment"]
+                if "outputs" in cr:
+                    mid_result["ai_report_paths"] = {
+                        k: v for k, v in cr["outputs"].items()
+                        if k.startswith("ai_")
+                    }
+                if len(mid_result) > 1:  # has more than just "mid"
+                    ai_consolidation.append(mid_result)
+
+        summary = {
             "total":      total,
             "passed":     passed,
             "failed":     failed,
@@ -863,6 +882,9 @@ class ResultCollector:
             "site":       self.site,
             "type":       self.machine_type,
         }
+        if ai_consolidation:
+            summary["ai_consolidation"] = ai_consolidation
+        return summary
 
     def start(self):
         """Start background polling thread."""
@@ -1120,6 +1142,9 @@ class ResultCollector:
                                         impact_analysis=self.impact_analysis,
                                         log_callback=self.log_callback,
                                     )
+                                    
+                                    # Store consolidation results on the entry
+                                    entry.consolidation_results = results
                                     
                                     if results.get("success"):
                                         _log(self.log_callback, f"      ✓ Consolidation complete")

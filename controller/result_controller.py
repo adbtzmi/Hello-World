@@ -268,6 +268,13 @@ class ResultController:
                 if checkout_tab and hasattr(checkout_tab, "on_rc_collection_complete"):
                     checkout_tab.on_rc_collection_complete(summary)
 
+                # Forward AI consolidation results to Validation & Risk tab
+                ai_consolidation = summary.get("ai_consolidation")
+                if ai_consolidation:
+                    validation_tab = getattr(view, "validation_tab", None)
+                    if validation_tab and hasattr(validation_tab, "on_ai_checkout_results"):
+                        validation_tab.on_ai_checkout_results(ai_consolidation, summary)
+
                 # Show popup notification
                 from tkinter import messagebox
                 all_done = summary.get("all_done", False)
