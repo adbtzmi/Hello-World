@@ -260,6 +260,8 @@ class AutoConsolidator:
                     )
                     
                     if validation_result.get("success"):
+                        # Save AI outputs alongside trace files in collection_dir
+                        
                         # Save validation report
                         val_report_path = os.path.join(collection_dir, "ai_validation_report.txt")
                         val_report = self.ai_validator.generate_validation_report(validation_result)
@@ -288,6 +290,7 @@ class AutoConsolidator:
                         confidence = validation_result.get("confidence", "UNKNOWN")
                         method = validation_result.get("method", "unknown")
                         _log(f"  [OK] Validation: {status} (Confidence: {confidence}, Method: {method})")
+                        _log(f"  [OK] Report saved to: {val_report_path}")
                     else:
                         err = validation_result.get("error", "Unknown error")
                         results["errors"].append(f"AI validation failed: {err}")
@@ -318,6 +321,8 @@ class AutoConsolidator:
                     )
                     
                     if enhanced_risk.get("success"):
+                        # Save AI outputs alongside trace files in collection_dir
+                        
                         # Save enhanced risk report
                         enh_report_path = os.path.join(collection_dir, "ai_risk_assessment.txt")
                         enh_report = self.ai_risk_assessor.generate_enhanced_report(enhanced_risk)
@@ -345,6 +350,7 @@ class AutoConsolidator:
                         score = enhanced_risk.get("enhanced_risk_score", 0)
                         method = enhanced_risk.get("method", "unknown")
                         _log(f"  [OK] AI Risk: {level} (Score: {score:.1f}/100, Method: {method})")
+                        _log(f"  [OK] Report saved to: {enh_report_path}")
                     else:
                         _log("  [WARN] AI-enhanced risk assessment returned no results")
                 except Exception as e:
