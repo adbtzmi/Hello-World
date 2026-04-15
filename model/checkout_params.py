@@ -229,9 +229,10 @@ def validate_attr_overwrite_string(value: str) -> Tuple[bool, str]:
             f"Found {len(parts)} parts, which is not divisible by 3."
         )
 
-    # Valid section names matching CRT automation tool dropdown
+    # Valid section names matching CRT automation tool dropdown + TempTraveler sections
     valid_sections = {
-        "MAM", "MCTO", "CFGPN", "EQUIPMENT",
+        "MAM", "MCTO", "CFGPN", "EQUIPMENT", "RECIPE_SELECTION",
+        "DRIVE_INFO", "RAW_VALUES",
     }
 
     errors = []

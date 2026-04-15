@@ -913,101 +913,127 @@ def generate_slate_xml(
         # ── RecipeFile ────────────────────────────────────────────────
         ET.SubElement(profile, "RecipeFile").text = recipe.upper() if recipe else ""
 
-        # ── TempTraveler — CAT-aligned attribute format ───────────────
-        # Attribute ordering MUST match CAT's working XML exactly:
+        # ── TempTraveler — user-editable attributes ───────────────────
+        # The ATTR_OVERWRITE dialog pre-fills default TempTraveler attributes
+        # (MAM/STEP, CFGPN/STEP_ID, EQUIPMENT/DIB_TYPE, etc.) and lets the
+        # user edit/add/remove them.  When attr_overwrites is populated, it
+        # is the AUTHORITATIVE source — we use it directly.  When empty
+        # (legacy/no dialog interaction), we fall back to computed defaults.
+        #
+        # Attribute ordering follows CAT's working XML:
         #   1. MAM/STEP
-        #   2. MAM/NAND_OPTION  (from attr_overwrites)
-        #   3. CFGPN/STEP_ID    (underscores — "SSD_FIN_TEST2", matching CAT)
+        #   2. MAM/NAND_OPTION  (optional, from user)
+        #   3. CFGPN/STEP_ID    (underscores — "SSD_FIN_TEST2")
         #   4. EQUIPMENT/DIB_TYPE
         #   5. EQUIPMENT/DIB_TYPE_NAME
         #   6. RECIPE_SELECTION/RECIPE_SEL_TEST_PROGRAM_PATH
-        #   7. MAM/MOD_TST_SWR_NUMBER (from attr_overwrites)
+        #   7+ Any additional user-specified attributes
         # NOTE: CAT does NOT include SEC_PROCESS — removed to match.
         tt = ET.SubElement(profile, "TempTraveler")
 
         # STEP_ID: CAT uses underscores ("SSD_FIN_TEST2"), NOT spaces.
-        # The STEP_NAME config stores them with underscores already.
-        # Previous code replaced underscores with spaces — WRONG.
-        # CAT's ProfileDump/main.py:873 uses "SSD_FIN_TEST2" (underscores).
         cfgpn_step_id_underscored = cfgpn_step_id.replace(" ", "_")
 
-        # Collect non-standard TempTraveler attributes from ATTR_OVERWRITE
-        # Split into "before DIB" (NAND_OPTION) and "after RECIPE_SEL" (rest)
-        # to match the working tester XML attribute ordering.
-        before_dib_attrs = []   # e.g. NAND_OPTION — goes after STEP, before STEP_ID
-        after_recipe_attrs = [] # e.g. MOD_TST_SWR_NUMBER — goes after RECIPE_SEL
+        # Build a lookup of user-provided overwrite attributes
+        ow_lookup = {}  # (section_upper, name_upper) -> (section, name, value)
+        extra_attrs = []  # non-default attrs in original order
         if attr_overwrites:
+            # Known default attribute keys (section, attr) that we handle below
+            _DEFAULT_KEYS = {
+                ("MAM", "STEP"),
+                ("CFGPN", "STEP_ID"),
+                ("EQUIPMENT", "DIB_TYPE"),
+                ("EQUIPMENT", "DIB_TYPE_NAME"),
+                ("RECIPE_SELECTION", "RECIPE_SEL_TEST_PROGRAM_PATH"),
+            }
             for ow in attr_overwrites:
-                sect = ow.get("section", "")
-                name = ow.get("name", "")
+                sect = ow.get("section", "").strip()
+                name = ow.get("name", "").strip()
                 val  = ow.get("value", "")
                 if not sect or not name:
                     continue
-                # NAND_OPTION goes right after MAM/STEP in working XML
-                if name.upper() == "NAND_OPTION":
-                    before_dib_attrs.append((sect, name, val))
-                else:
-                    after_recipe_attrs.append((sect, name, val))
+                key = (sect.upper(), name.upper())
+                ow_lookup[key] = (sect, name, val)
+                if key not in _DEFAULT_KEYS:
+                    extra_attrs.append((sect, name, val))
 
-        # Write attributes in working tester XML order:
-        # 1. MAM/STEP
-        a = ET.SubElement(tt, "Attribute")
-        a.set("section", "MAM")
-        a.set("attr",    "STEP")
-        a.set("value",   mam_step)
+        # Helper: get user-overridden value or fall back to computed default
+        def _ow_val(section: str, attr: str, default: str) -> str:
+            entry = ow_lookup.get((section.upper(), attr.upper()))
+            return entry[2] if entry else default
 
-        # 2. MAM/NAND_OPTION (if present in attr_overwrites)
-        for sect, name, val in before_dib_attrs:
-            a = ET.SubElement(tt, "Attribute")
-            a.set("section", sect)
-            a.set("attr",    name)
-            a.set("value",   val)
-
-        # 3. CFGPN/STEP_ID (with underscores — matching CAT)
-        a = ET.SubElement(tt, "Attribute")
-        a.set("section", "CFGPN")
-        a.set("attr",    "STEP_ID")
-        a.set("value",   cfgpn_step_id_underscored)
-
-        # NOTE: SEC_PROCESS removed — CAT's working XML does NOT include it.
-        # Previously BENTO added CFGPN/SEC_PROCESS = "{step}_REQD" but this
-        # attribute is absent from CAT-generated XMLs that load successfully.
-
-        # 4. EQUIPMENT/DIB_TYPE
-        a = ET.SubElement(tt, "Attribute")
-        a.set("section", "EQUIPMENT")
-        a.set("attr",    "DIB_TYPE")
-        a.set("value",   dib_type)
-
-        # 6. EQUIPMENT/DIB_TYPE_NAME
-        a = ET.SubElement(tt, "Attribute")
-        a.set("section", "EQUIPMENT")
-        a.set("attr",    "DIB_TYPE_NAME")
-        a.set("value",   dib_type)
-
-        # 7. RECIPE_SELECTION attribute — user-selected TGZ takes priority
-        # Priority mirrors TestJobArchive: 1) user tgz_path  2) recipe result
+        # Resolve RECIPE_SEL_TEST_PROGRAM_PATH default
         _recipe_sel_tgz = ""
         if tgz_path and tgz_path.strip():
             _recipe_sel_tgz = _normalize_tester_path(tgz_path)
         elif recipe_result.success and recipe_result.test_program_path:
-            _recipe_sel_tgz = recipe_result.test_program_path  # Already uppercased
-        if _recipe_sel_tgz:
+            _recipe_sel_tgz = recipe_result.test_program_path
+
+        # Write attributes in CAT-compatible order, using user values when available:
+        # 1. MAM/STEP
+        _step_val = _ow_val("MAM", "STEP", mam_step)
+        a = ET.SubElement(tt, "Attribute")
+        a.set("section", "MAM")
+        a.set("attr",    "STEP")
+        a.set("value",   _step_val)
+
+        # 2. Extra attrs that should come before STEP_ID (e.g. NAND_OPTION)
+        for sect, name, val in extra_attrs:
+            if name.upper() == "NAND_OPTION":
+                a = ET.SubElement(tt, "Attribute")
+                a.set("section", sect)
+                a.set("attr",    name)
+                a.set("value",   val)
+
+        # 3. CFGPN/STEP_ID (with underscores — matching CAT)
+        _step_id_val = _ow_val("CFGPN", "STEP_ID", cfgpn_step_id_underscored)
+        a = ET.SubElement(tt, "Attribute")
+        a.set("section", "CFGPN")
+        a.set("attr",    "STEP_ID")
+        a.set("value",   _step_id_val)
+
+        # 4. EQUIPMENT/DIB_TYPE
+        _dib_val = _ow_val("EQUIPMENT", "DIB_TYPE", dib_type)
+        a = ET.SubElement(tt, "Attribute")
+        a.set("section", "EQUIPMENT")
+        a.set("attr",    "DIB_TYPE")
+        a.set("value",   _dib_val)
+
+        # 5. EQUIPMENT/DIB_TYPE_NAME
+        _dib_name_val = _ow_val("EQUIPMENT", "DIB_TYPE_NAME", dib_type)
+        a = ET.SubElement(tt, "Attribute")
+        a.set("section", "EQUIPMENT")
+        a.set("attr",    "DIB_TYPE_NAME")
+        a.set("value",   _dib_name_val)
+
+        # 6. RECIPE_SELECTION/RECIPE_SEL_TEST_PROGRAM_PATH
+        _recipe_val = _ow_val("RECIPE_SELECTION", "RECIPE_SEL_TEST_PROGRAM_PATH",
+                              _recipe_sel_tgz)
+        if _recipe_val:
             a = ET.SubElement(tt, "Attribute")
             a.set("section", "RECIPE_SELECTION")
             a.set("attr",    "RECIPE_SEL_TEST_PROGRAM_PATH")
-            a.set("value",   _recipe_sel_tgz)
-            logger.info("DIAG: RECIPE_SEL_TEST_PROGRAM_PATH = %s", _recipe_sel_tgz)
+            a.set("value",   _recipe_val)
+            logger.info("DIAG: RECIPE_SEL_TEST_PROGRAM_PATH = %s", _recipe_val)
 
-        # 8. Remaining non-standard attributes (e.g. MOD_TST_SWR_NUMBER)
-        for sect, name, val in after_recipe_attrs:
-            a = ET.SubElement(tt, "Attribute")
-            a.set("section", sect)
-            a.set("attr",    name)
-            a.set("value",   val)
+        # 7. Remaining non-standard attributes (e.g. MOD_TST_SWR_NUMBER)
+        #    Skip NAND_OPTION (already written above)
+        for sect, name, val in extra_attrs:
+            if name.upper() != "NAND_OPTION":
+                a = ET.SubElement(tt, "Attribute")
+                a.set("section", sect)
+                a.set("attr",    name)
+                a.set("value",   val)
+
+        _total_tt = len(tt)
         if attr_overwrites:
             _log(logger,
-                 f"  Added {len(attr_overwrites)} non-standard TempTraveler attribute(s)",
+                 f"  TempTraveler: {_total_tt} attribute(s) "
+                 f"({len(attr_overwrites)} from ATTR_OVERWRITE)",
+                 log_callback)
+        else:
+            _log(logger,
+                 f"  TempTraveler: {_total_tt} attribute(s) (computed defaults)",
                  log_callback)
 
         # ── AddtionalFileFolder — firmware/config file copy paths ─────

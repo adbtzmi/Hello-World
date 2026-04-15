@@ -1107,27 +1107,72 @@ class CheckoutTab(BaseTab):
                   f"MID={mid}  Step={step}  Tester={tester}"),
             foreground="#0078d4")
 
+    def _get_default_temptraveler_attrs(self, row_idx):
+        """Build default TempTraveler attributes for a profile row.
+
+        These mirror the attributes that generate_slate_xml() would create
+        automatically (MAM/STEP, CFGPN/STEP_ID, EQUIPMENT/DIB_TYPE,
+        EQUIPMENT/DIB_TYPE_NAME, RECIPE_SELECTION/RECIPE_SEL_TEST_PROGRAM_PATH).
+        Pre-populating them in the ATTR_OVERWRITE dialog lets the user
+        inspect, edit, or remove any of them before XML generation.
+        """
+        from model.hardware_config import get_hardware_config
+
+        row = self._profile_data[row_idx]
+        step = str(row.get("Step", row.get("STEP", "ABIT"))).strip().upper() or "ABIT"
+        form_factor = str(row.get("Form_Factor", row.get("FORM_FACTOR", ""))).strip()
+
+        hw = get_hardware_config()
+        mam_step, cfgpn_step_id = hw.get_step_names(step)
+        dib_type = row.get("DIB_TYPE", "").strip()
+        if not dib_type:
+            dib_type = hw.get_dib_type(step, form_factor) if form_factor else ""
+
+        # TGZ path for RECIPE_SEL_TEST_PROGRAM_PATH
+        tgz_path = ""
+        try:
+            tgz_path = self.context.get_var('checkout_tgz_path').get().strip()
+        except Exception:
+            pass
+
+        defaults = [
+            ("MAM",              "STEP",                          mam_step),
+            ("CFGPN",            "STEP_ID",                       cfgpn_step_id),
+            ("EQUIPMENT",        "DIB_TYPE",                      dib_type),
+            ("EQUIPMENT",        "DIB_TYPE_NAME",                 dib_type),
+        ]
+        if tgz_path:
+            # Normalize to UNC-style uppercase path (matches orchestrator)
+            norm_tgz = tgz_path.replace("/", "\\").upper()
+            defaults.append(
+                ("RECIPE_SELECTION", "RECIPE_SEL_TEST_PROGRAM_PATH", norm_tgz)
+            )
+        return defaults
+
     def _show_attr_overwrite_dialog(self, row_idx):
         current_value = self._profile_data[row_idx].get("ATTR_OVERWRITE", "")
 
         dialog = tk.Toplevel(self.winfo_toplevel())
-        dialog.title("ATTR_OVERWRITE Editor")
-        dialog.geometry("620x520")
+        dialog.title("TempTraveler Attribute Editor")
+        dialog.geometry("700x580")
         dialog.transient(self.winfo_toplevel())
         dialog.grab_set()
 
-        # B13: Help text explaining the ATTR_OVERWRITE format
+        # Help text
         help_frm = ttk.Frame(dialog)
         help_frm.pack(fill=tk.X, padx=10, pady=(10, 4))
         ttk.Label(help_frm,
-                  text="Override SLATE profile attributes.  Each entry is a "
-                       "Section;AttrName;AttrValue triplet.\n"
-                       "Example: EQUIPMENT;DIB_ID;DIB-1234  or  MAM;SITE;PG",
+                  text="Edit TempTraveler attributes for this profile row.  "
+                       "Default attributes are auto-filled from the row's Step "
+                       "and Form Factor.\n"
+                       "• Double-click a row to edit its value inline.\n"
+                       "• Remove optional attributes you don't need.\n"
+                       "• Add custom attributes with the fields below.",
                   foreground="#555555", font=("Segoe UI", 8),
-                  wraplength=580, justify=tk.LEFT).pack(anchor="w")
+                  wraplength=660, justify=tk.LEFT).pack(anchor="w")
 
-        # Input fields
-        input_frame = ttk.LabelFrame(dialog, text="Add Attribute Override", padding="8")
+        # Input fields for adding new entries
+        input_frame = ttk.LabelFrame(dialog, text="Add / Edit Attribute", padding="8")
         input_frame.pack(fill=tk.X, padx=10, pady=(4, 4))
         input_frame.columnconfigure(1, weight=1)
 
@@ -1135,51 +1180,135 @@ class CheckoutTab(BaseTab):
             row=0, column=0, sticky=tk.W, padx=(0, 6), pady=2)
         section_var = tk.StringVar()
         section_cb = ttk.Combobox(input_frame, textvariable=section_var,
-                     values=["MAM", "MCTO", "CFGPN", "EQUIPMENT"],
-                     width=18)
+                     values=["MAM", "MCTO", "CFGPN", "EQUIPMENT",
+                             "RECIPE_SELECTION", "DRIVE_INFO", "RAW_VALUES"],
+                     width=22)
         section_cb.grid(row=0, column=1, sticky="we", pady=2)
         section_cb.set("")
-        _tip(section_cb, "Select the SLATE profile section to override.\n"
-                         "Common: EQUIPMENT (hardware), MAM (lot data), CFGPN.")
+        _tip(section_cb, "TempTraveler section name.\n"
+                         "Common: MAM, CFGPN, EQUIPMENT, RECIPE_SELECTION.")
 
         ttk.Label(input_frame, text="Attr Name:").grid(
             row=1, column=0, sticky=tk.W, padx=(0, 6), pady=2)
         attr_name_var = tk.StringVar()
         attr_name_entry = ttk.Entry(input_frame, textvariable=attr_name_var)
         attr_name_entry.grid(row=1, column=1, sticky="we", pady=2)
-        _tip(attr_name_entry, "The attribute name to override (e.g. DIB_ID, SITE, TESTER_TYPE).")
+        _tip(attr_name_entry, "Attribute name (e.g. STEP, DIB_TYPE, NAND_OPTION).")
 
         ttk.Label(input_frame, text="Attr Value:").grid(
             row=2, column=0, sticky=tk.W, padx=(0, 6), pady=2)
         attr_value_var = tk.StringVar()
         attr_value_entry = ttk.Entry(input_frame, textvariable=attr_value_var)
         attr_value_entry.grid(row=2, column=1, sticky="we", pady=2)
-        _tip(attr_value_entry, "The new value for the attribute.")
+        _tip(attr_value_entry, "The value for the attribute.")
 
         # Entries grid
-        entries_frame = ttk.LabelFrame(dialog, text="Current Overrides", padding="8")
+        entries_frame = ttk.LabelFrame(dialog, text="TempTraveler Attributes", padding="8")
         entries_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
 
         entry_cols = ["Section", "Attr Name", "Attr Value"]
         entries_tree = ttk.Treeview(entries_frame, columns=entry_cols,
-                                    show="headings", height=7, selectmode="browse")
+                                    show="headings", height=9, selectmode="browse")
         for col in entry_cols:
             entries_tree.heading(col, text=col, anchor=tk.W)
-            entries_tree.column(col, width=160, stretch=True, anchor=tk.W)
-        entries_tree.pack(fill=tk.BOTH, expand=True)
+        entries_tree.column("Section",    width=140, stretch=False, anchor=tk.W)
+        entries_tree.column("Attr Name",  width=200, stretch=True,  anchor=tk.W)
+        entries_tree.column("Attr Value", width=300, stretch=True,  anchor=tk.W)
 
+        # Scrollbar
+        tree_scroll = ttk.Scrollbar(entries_frame, orient=tk.VERTICAL,
+                                    command=entries_tree.yview)
+        entries_tree.configure(yscrollcommand=tree_scroll.set)
+        entries_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # ── Populate entries ─────────────────────────────────────────────
+        # Parse existing ATTR_OVERWRITE value into a dict for quick lookup
+        existing_attrs = {}  # (section, name) -> value
         if current_value:
             parts = current_value.split(";")
             for i in range(0, len(parts), 3):
                 if i + 2 < len(parts):
-                    entries_tree.insert("", tk.END,
-                                        values=(parts[i], parts[i+1], parts[i+2]))
+                    s, n, v = parts[i].strip(), parts[i+1].strip(), parts[i+2].strip()
+                    existing_attrs[(s, n)] = v
+
+        # Get default TempTraveler attributes
+        defaults = self._get_default_temptraveler_attrs(row_idx)
+
+        # Merge: user values override defaults
+        merged = []
+        seen_keys = set()
+        for sect, name, default_val in defaults:
+            key = (sect, name)
+            val = existing_attrs.pop(key, default_val)
+            merged.append((sect, name, val))
+            seen_keys.add(key)
+
+        # Append any remaining user-added attributes not in defaults
+        for (sect, name), val in existing_attrs.items():
+            merged.append((sect, name, val))
+
+        for sect, name, val in merged:
+            entries_tree.insert("", tk.END, values=(sect, name, val))
+
+        # ── Double-click to edit value inline ────────────────────────────
+        def _on_double_click(event):
+            item = entries_tree.identify_row(event.y)
+            col = entries_tree.identify_column(event.x)
+            if not item:
+                return
+            # Only allow editing the "Attr Value" column (#3)
+            col_idx = int(col.replace("#", "")) - 1
+            if col_idx != 2:
+                return
+            vals = entries_tree.item(item, "values")
+            if not vals or len(vals) < 3:
+                return
+
+            # Get cell bounding box
+            bbox = entries_tree.bbox(item, col)
+            if not bbox:
+                return
+            x, y, w, h = bbox
+
+            # Create inline edit entry
+            edit_var = tk.StringVar(value=vals[2])
+            edit_entry = ttk.Entry(entries_tree, textvariable=edit_var)
+            edit_entry.place(x=x, y=y, width=w, height=h)
+            edit_entry.focus_set()
+            edit_entry.select_range(0, tk.END)
+
+            def _commit(e=None):
+                new_val = edit_var.get().strip()
+                entries_tree.item(item, values=(vals[0], vals[1], new_val))
+                edit_entry.destroy()
+
+            def _cancel_edit(e=None):
+                edit_entry.destroy()
+
+            edit_entry.bind("<Return>", _commit)
+            edit_entry.bind("<FocusOut>", _commit)
+            edit_entry.bind("<Escape>", _cancel_edit)
+
+        entries_tree.bind("<Double-1>", _on_double_click)
+
+        # ── Select entry → populate input fields for reference ───────────
+        def _on_tree_select(event):
+            sel = entries_tree.selection()
+            if sel:
+                vals = entries_tree.item(sel[0], "values")
+                if vals and len(vals) >= 3:
+                    section_var.set(vals[0])
+                    attr_name_var.set(vals[1])
+                    attr_value_var.set(vals[2])
+
+        entries_tree.bind("<<TreeviewSelect>>", _on_tree_select)
 
         # Buttons
         btn_frame = ttk.Frame(dialog)
         btn_frame.pack(fill=tk.X, padx=10, pady=(4, 10))
 
-        def _add_entry():
+        def _add_or_update():
             section = section_var.get().strip()
             attr = attr_name_var.get().strip()
             value = attr_value_var.get().strip()
@@ -1191,10 +1320,14 @@ class CheckoutTab(BaseTab):
                 messagebox.showwarning("Validation", "Attribute name is required", parent=dialog)
                 return
 
-            # Check for duplicates
+            # Check if entry with same section+attr already exists → update it
             for child in entries_tree.get_children():
                 vals = entries_tree.item(child, "values")
-                if vals[0] == section and vals[1] == attr and vals[2] == value:
+                if vals[0] == section and vals[1] == attr:
+                    entries_tree.item(child, values=(section, attr, value))
+                    section_var.set("")
+                    attr_name_var.set("")
+                    attr_value_var.set("")
                     return
 
             entries_tree.insert("", tk.END, values=(section, attr, value))
@@ -1207,9 +1340,13 @@ class CheckoutTab(BaseTab):
             if sel:
                 entries_tree.delete(sel[0])
 
-        def _remove_all():
+        def _reset_defaults():
+            """Clear all and re-populate with defaults."""
             for child in entries_tree.get_children():
                 entries_tree.delete(child)
+            fresh_defaults = self._get_default_temptraveler_attrs(row_idx)
+            for sect, name, val in fresh_defaults:
+                entries_tree.insert("", tk.END, values=(sect, name, val))
 
         def _save():
             entries = []
@@ -1231,11 +1368,11 @@ class CheckoutTab(BaseTab):
             self._refresh_profile_grid()
             dialog.destroy()
 
-        ttk.Button(btn_frame, text="Add",        command=_add_entry).pack(side=tk.LEFT, padx=(0, 3))
-        ttk.Button(btn_frame, text="Remove",     command=_remove_entry).pack(side=tk.LEFT, padx=(0, 3))
-        ttk.Button(btn_frame, text="Remove All", command=_remove_all).pack(side=tk.LEFT, padx=(0, 3))
-        ttk.Button(btn_frame, text="Save",       command=_save).pack(side=tk.RIGHT, padx=(3, 0))
-        ttk.Button(btn_frame, text="Cancel",     command=dialog.destroy).pack(side=tk.RIGHT, padx=(0, 3))
+        ttk.Button(btn_frame, text="Add / Update", command=_add_or_update).pack(side=tk.LEFT, padx=(0, 3))
+        ttk.Button(btn_frame, text="Remove",       command=_remove_entry).pack(side=tk.LEFT, padx=(0, 3))
+        ttk.Button(btn_frame, text="Reset Defaults", command=_reset_defaults).pack(side=tk.LEFT, padx=(0, 3))
+        ttk.Button(btn_frame, text="Save",         command=_save).pack(side=tk.RIGHT, padx=(3, 0))
+        ttk.Button(btn_frame, text="Cancel",       command=dialog.destroy).pack(side=tk.RIGHT, padx=(0, 3))
 
     # _on_profile_single_click and _on_profile_row_select are replaced by
     # _on_sheet_cell_select (tksheet handles selection natively)

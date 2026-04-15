@@ -87,14 +87,16 @@ class HardwareConfig:
         """
         Look up DIB_TYPE by step and form factor.
         Mirrors CAT: dibs = self.dib_dict[step][form]
+
+        Returns empty string when no specific DIB_TYPE is configured,
+        allowing the user to specify it manually via ATTR_OVERWRITE.
         """
         step = step.upper()
         dib_types = self._data.get("DIB_TYPE", {})
         step_dibs = dib_types.get(step, {})
         result = step_dibs.get(form_factor, "")
         if not result:
-            logger.warning(f"No DIB_TYPE for step={step}, form_factor={form_factor}, using fallback {_FALLBACK_DIB}")
-            return _FALLBACK_DIB
+            logger.info(f"No DIB_TYPE for step={step}, form_factor={form_factor} — returning empty (user can set via ATTR_OVERWRITE)")
         return result
 
     def get_machine_model(self, step: str) -> str:
