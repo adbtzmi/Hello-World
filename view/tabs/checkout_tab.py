@@ -1889,6 +1889,7 @@ class CheckoutTab(BaseTab):
             self._refresh_profile_grid()
             self._sync_tester_column()
             self._update_profile_status()
+            self._validate_profile_realtime()
 
             # Auto-trigger lot lookup for rows with lot but no CFGPN
             for idx, row in enumerate(self._profile_data):
