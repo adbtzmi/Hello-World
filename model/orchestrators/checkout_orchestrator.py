@@ -1665,7 +1665,8 @@ def run_checkout(
     # ── KEY FIX: XML goes to CHECKOUT_QUEUE, not hot_folder ──────────
     # CHECKOUT_QUEUE = P:\temp\BENTO\CHECKOUT_QUEUE  (shared P: drive)
     # The watcher on the tester picks it up and copies to playground_queue
-    _queue = CHECKOUT_QUEUE_FOLDER
+    # Subfolder structure: CHECKOUT_QUEUE/<hostname>/<jira_key>/
+    _queue = os.path.join(CHECKOUT_QUEUE_FOLDER, hostname, jira_key)
 
     # ── Auto-create CHECKOUT_QUEUE on shared drive ────────────────────
     try:

@@ -276,7 +276,14 @@ def resolve_adv_workspaces(
 ) -> Dict[str, MIDEntry]:
     """
     Resolve workspace paths for ADV (MPT) testers.
-    Reads tmptravl.dat from rack0\\primitiveX\\DUTX.
+    The DUT folder path is deterministic from the PxDy location format.
+
+    For ADV testers the workspace IS the DUT folder itself:
+      C:\\test_program\\rack0\\primitive{X}\\DUT{Y}
+
+    tmptravl.dat is NOT on the tester — it lives in CHECKOUT_QUEUE alongside
+    the XML.  So we set workspace_path directly from the PxDy location and
+    let check_test_status_adv() look for *_UPDATE_ATTRS.xml in the DUT folder.
 
     If tester_hostname is provided, paths are converted to UNC admin shares
     (e.g. \\\\MPT3HVM-0156\\C$\\test_program\\...) for remote access.
@@ -286,38 +293,28 @@ def resolve_adv_workspaces(
     for mid, entry in list(mid_entries.items()):
         try:
             loc = entry.location
-            primitive_id = loc[1]       # e.g. "P1D1" -> "1"
-            dut_id       = loc[3:]      # e.g. "P1D1" -> "1"
+            primitive_id = loc[1]       # e.g. "P2D7" -> "2"
+            dut_id       = loc[3:]      # e.g. "P2D7" -> "7"
 
             dut_path = os.path.join(
                 path_to_workspace,
                 f"primitive{primitive_id}",
                 f"DUT{dut_id}",
             )
-            travl_path = os.path.join(dut_path, "tmptravl.dat")
 
-            if not os.path.exists(travl_path):
+            # Set workspace_path directly — the DUT folder path is
+            # deterministic from the PxDy location.  No tmptravl.dat
+            # verification needed (it lives in CHECKOUT_QUEUE, not here).
+            if os.path.isdir(dut_path):
+                entry.workspace_path = dut_path
+                entry.status = STATUS_RUNNING
+                _log(log_callback,
+                     f" ✓ {mid}: workspace → {dut_path}")
+            else:
                 entry.status = STATUS_NOT_FOUND
-                entry.error_msg = f"tmptravl.dat not found at {dut_path}"
-                _log(log_callback, f" ⚠ {mid}: tmptravl.dat not found at {dut_path}")
-                continue
-
-            with open(travl_path, "r") as f:
-                for line in f:
-                    if "MID: " in line:
-                        found_mid = line.split(": ")[1].strip()
-                        if found_mid == mid:
-                            entry.workspace_path = dut_path
-                        else:
-                            entry.status = STATUS_NOT_FOUND
-                            entry.error_msg = (
-                                f"MID mismatch at {loc}: "
-                                f"expected {mid}, found {found_mid}"
-                            )
-                            _log(log_callback,
-                                 f" ⚠ {mid} not found at {loc} "
-                                 f"(found {found_mid})")
-                        break
+                entry.error_msg = f"DUT folder not found: {dut_path}"
+                _log(log_callback,
+                     f" ⚠ {mid}: DUT folder not found: {dut_path}")
         except Exception as e:
             entry.status = STATUS_ERROR
             entry.error_msg = str(e)
