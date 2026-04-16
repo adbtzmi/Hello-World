@@ -2054,6 +2054,10 @@ class CheckoutTab(BaseTab):
             self._set_badge(hostname, "RUNNING")
         elif "collect" in phase.lower():
             self._set_badge(hostname, "COLLECTING")
+            # Transition state machine so _poll_for_manifest() guard
+            # allows continued polling (it rejects RUNNING state).
+            if self._checkout_state == CheckoutState.RUNNING:
+                self._set_checkout_state(CheckoutState.COLLECTING)
             # Start manifest polling as soon as we know the watcher is
             # collecting — don't wait for on_checkout_completed() because
             # wait_for_checkout() now keeps polling until "success"/"failed"
