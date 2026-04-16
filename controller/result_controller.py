@@ -261,15 +261,27 @@ class ResultController:
         self._running = False
 
         # Capture final entries before the collector is potentially cleaned up
-        final_entries = self.get_entries()
+        try:
+            final_entries = self.get_entries()
+        except Exception as e:
+            logger.error(f"Failed to capture final entries: {e}")
+            final_entries = {}
 
         def _update():
-            controller = self.context.controller
-            if controller and hasattr(controller, "_view"):
+            try:
+                controller = self.context.controller
+                if not controller or not hasattr(controller, "_view"):
+                    return
                 view = controller._view
                 checkout_tab = getattr(view, "checkout_tab", None)
+
+                # Step 1: Populate treeview with final entries FIRST
+                if checkout_tab and final_entries and hasattr(checkout_tab, "on_rc_progress_update"):
+                    checkout_tab.on_rc_progress_update(summary, final_entries)
+
+                # Step 2: Set final state (COMPLETED) and status indicator
                 if checkout_tab and hasattr(checkout_tab, "on_rc_collection_complete"):
-                    checkout_tab.on_rc_collection_complete(summary, final_entries)
+                    checkout_tab.on_rc_collection_complete(summary)
 
                 # Forward AI consolidation results to Validation & Risk tab
                 ai_consolidation = summary.get("ai_consolidation")
@@ -302,8 +314,10 @@ class ResultController:
                         "Result Collector",
                         "Result collection monitoring stopped."
                     )
+            except Exception as e:
+                logger.error(f"Error in completion UI update: {e}")
 
         try:
             self.context.root.after(0, _update)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to schedule completion update: {e}")

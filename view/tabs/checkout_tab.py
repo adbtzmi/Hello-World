@@ -2632,11 +2632,12 @@ class CheckoutTab(BaseTab):
                 error_str,
             ), tags=(tag,))
 
-    def on_rc_collection_complete(self, summary: dict, entries: dict | None = None):
+    def on_rc_collection_complete(self, summary: dict):
         """
         Called by ResultController when monitoring ends.
-        Resets button states, updates status indicator, and ensures
-        the treeview is populated with final results.
+        Resets button states and updates status indicator.
+        Note: treeview is populated by on_rc_progress_update() which the
+        controller calls BEFORE this method.
         """
         # Stop button state managed by update_checkout_ui_state()
         self._set_checkout_state(CheckoutState.COMPLETED)
@@ -2653,11 +2654,6 @@ class CheckoutTab(BaseTab):
         else:
             self._rc_status_indicator.config(
                 text="⏹ STOPPED", foreground="gray")
-
-        # Bug fix: ensure treeview is populated even if collection was fast
-        # and no progress callbacks fired before completion.
-        if entries:
-            self.on_rc_progress_update(summary, entries)
 
     # ══════════════════════════════════════════════════════════════════════
     # SECTION 7 — MANIFEST-BASED FILE SELECTION (BENTO ↔ Watcher)
