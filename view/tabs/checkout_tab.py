@@ -2683,10 +2683,10 @@ class CheckoutTab(BaseTab):
                 f"📋 Polling for file manifest from "
                 f"{hostname} ({jira_key})..."
             )
-            # Start polling after a short delay (watcher needs time
-            # to scan the workspace + write the manifest)
+            # Start polling after a very short delay — the watcher
+            # writes the manifest almost immediately after scanning.
             self.context.root.after(
-                3000,
+                500,
                 lambda: self._poll_for_manifest(
                     hostname, jira_key, results_base
                 )
@@ -2737,12 +2737,16 @@ class CheckoutTab(BaseTab):
         matches = _glob.glob(manifest_pattern, recursive=True)
 
         if matches:
-            manifest_path = matches[0]
-            results_folder = os.path.dirname(manifest_path)
+            manifest_path = os.path.normpath(matches[0])
+            results_folder = os.path.normpath(os.path.dirname(manifest_path))
             try:
                 with open(manifest_path, "r") as f:
                     manifest = json.load(f)
                 self.log(f"📋 File manifest received from {hostname}")
+                logger.info(
+                    f"Manifest found: {manifest_path} — "
+                    f"selection will be written to: {results_folder}"
+                )
                 self._manifest_poll_count = 0
                 self._show_file_selection_dialog(manifest, hostname,
                                                   job_id, results_folder)
@@ -2751,7 +2755,7 @@ class CheckoutTab(BaseTab):
                 logger.error(f"Manifest read error: {e}")
                 self._manifest_poll_count = 0
         else:
-            # Keep polling every 10 seconds — indefinitely.
+            # Keep polling every 2 seconds — indefinitely.
             # The watcher may need up to 30 min to collect required files
             # before writing the manifest, so a short timeout would cause
             # the popup to never appear.
@@ -2759,16 +2763,16 @@ class CheckoutTab(BaseTab):
                 self._manifest_poll_count = 0
             self._manifest_poll_count += 1
 
-            # Log a status message every ~60 s (every 6th poll at 10 s)
-            if self._manifest_poll_count % 6 == 0:
-                elapsed_min = (self._manifest_poll_count * 10) // 60
+            # Log a status message every ~60 s (every 30th poll at 2 s)
+            if self._manifest_poll_count % 30 == 0:
+                elapsed_min = (self._manifest_poll_count * 2) // 60
                 self.log(
                     f"📋 Still waiting for file manifest from "
                     f"{hostname}… ({elapsed_min} min elapsed)"
                 )
 
             self.context.root.after(
-                10_000,
+                2_000,
                 lambda: self._poll_for_manifest(
                     hostname, job_id, results_base
                 )
@@ -2970,18 +2974,45 @@ class CheckoutTab(BaseTab):
             "timestamp":     datetime.now().isoformat(),
         }
 
+        # Normalize path separators for cross-platform consistency
+        results_folder = os.path.normpath(results_folder)
+
         selection_name = f"file_selection_{hostname}_{job_id}.json"
         selection_path = os.path.join(results_folder, selection_name)
+
+        logger.info(
+            f"File selection: writing to {selection_path} "
+            f"(folder exists={os.path.isdir(results_folder)})"
+        )
 
         try:
             os.makedirs(results_folder, exist_ok=True)
             with open(selection_path, "w") as f:
                 json.dump(selection, f, indent=2)
-            self.log(
-                f"📝 File selection written: {len(selected_keys)} file(s) "
-                f"selected for {hostname}"
-            )
-            logger.info(f"File selection written: {selection_path}")
+
+            # Verify the file was actually written
+            if os.path.isfile(selection_path):
+                fsize = os.path.getsize(selection_path)
+                self.log(
+                    f"📝 File selection written: {len(selected_keys)} file(s) "
+                    f"selected for {hostname}"
+                )
+                logger.info(
+                    f"File selection written OK: {selection_path} "
+                    f"({fsize} bytes)"
+                )
+            else:
+                self.log(
+                    f"⚠ File selection write succeeded but file not found "
+                    f"at {selection_path}"
+                )
+                logger.error(
+                    f"File selection write anomaly: open() succeeded but "
+                    f"isfile() returned False for {selection_path}"
+                )
         except Exception as e:
             self.log(f"⚠ Failed to write file selection: {e}")
-            logger.error(f"File selection write error: {e}")
+            logger.error(
+                f"File selection write error: {e} "
+                f"(path={selection_path})"
+            )
