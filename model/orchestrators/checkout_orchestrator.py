@@ -1406,6 +1406,31 @@ def wait_for_checkout(
                 result["collected_output_folder"] = data["output_folder"]
             return result
 
+        elif state == "collecting":
+            # ── DEADLOCK FIX ──────────────────────────────────────────
+            # The watcher writes "collecting" after SLATE completes,
+            # then blocks waiting for BENTO to write a file_selection
+            # JSON.  If we keep polling here, BENTO never shows the
+            # file-selection dialog → deadlock.
+            #
+            # Return immediately with status="collecting" so that
+            # on_checkout_completed() fires and starts manifest
+            # polling, which shows the dialog, writes the selection
+            # JSON, and unblocks the watcher.  The watcher will then
+            # write "success" once files are copied.
+            elapsed = int(time.time() - start)
+            _log(logger,
+                 f"✓ SLATE completed — watcher collecting files ({elapsed}s)",
+                 log_callback)
+            _phase(logger,
+                   "SLATE done — waiting for file selection…",
+                   log_callback, phase_callback)
+            return {
+                "status":  "collecting",
+                "detail":  data.get("detail", "SLATE completed, collecting results"),
+                "elapsed": elapsed,
+            }
+
         elif state == "failed":
             elapsed = int(time.time() - start)
             detail  = data.get("detail", "Unknown error")
@@ -1782,13 +1807,20 @@ def run_checkout(
              log_callback)
 
     # ── Teams notification ────────────────────────────────────────────
+    # "collecting" means SLATE completed and the watcher is waiting for
+    # BENTO to provide file selection — treat as success for status
+    # purposes so on_checkout_completed() triggers manifest polling.
+    _ok = ("success", "collecting")
     final_status  = ("success"
-                     if all(r["status"] == "success"
+                     if all(r["status"] in _ok
                             for r in all_tc_results)
                      else "partial"
-                     if any(r["status"] == "success"
+                     if any(r["status"] in _ok
                             for r in all_tc_results)
                      else "failed")
+    # Preserve "collecting" so the GUI knows manifest polling is needed
+    if any(r["status"] == "collecting" for r in all_tc_results):
+        final_status = "collecting"
     final_detail  = " | ".join(
         f"{r['label']}:{r['status']}" for r in all_tc_results
     )

@@ -2088,12 +2088,21 @@ class CheckoutTab(BaseTab):
                 f"   {icon} {tc.get('label','?')} ({tc.get('type','?')}): "
                 f"{tc.get('status','?')} in {tc.get('elapsed',0)}s")
 
+        # "COLLECTING" is NOT treated as "still running" — it means
+        # SLATE completed and the watcher is waiting for BENTO to
+        # provide file selection.  We must proceed to start manifest
+        # polling so the file-selection dialog appears.
         running = [lbl for lbl in self._badge_labels.values()
-                   if lbl.cget("text") in ("PENDING", "RUNNING", "COLLECTING")]
+                   if lbl.cget("text") in ("PENDING", "RUNNING")]
         if not running:
             # Determine final state based on results
+            # "collecting" means SLATE completed and watcher is waiting
+            # for BENTO to provide file selection — treat as success
+            # so manifest polling starts and breaks the deadlock.
             any_success = any(
-                r.get("status", "").lower() in ("success", "partial")
+                r.get("status", "").lower() in (
+                    "success", "partial", "collecting"
+                )
                 for r in self._rc_checkout_results.values()
             )
             if any_success:
