@@ -260,13 +260,16 @@ class ResultController:
         """
         self._running = False
 
+        # Capture final entries before the collector is potentially cleaned up
+        final_entries = self.get_entries()
+
         def _update():
             controller = self.context.controller
             if controller and hasattr(controller, "_view"):
                 view = controller._view
                 checkout_tab = getattr(view, "checkout_tab", None)
                 if checkout_tab and hasattr(checkout_tab, "on_rc_collection_complete"):
-                    checkout_tab.on_rc_collection_complete(summary)
+                    checkout_tab.on_rc_collection_complete(summary, final_entries)
 
                 # Forward AI consolidation results to Validation & Risk tab
                 ai_consolidation = summary.get("ai_consolidation")

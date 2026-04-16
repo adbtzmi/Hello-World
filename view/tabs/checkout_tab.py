@@ -27,11 +27,12 @@ class CheckoutState(Enum):
     Checkout state machine for UI control.
     Single source of truth for button enable/disable logic.
     """
-    IDLE = "IDLE"           # No active checkout, ready to start
-    RUNNING = "RUNNING"     # Checkout in progress
-    STOPPING = "STOPPING"   # Stop requested, waiting for cleanup
-    COMPLETED = "COMPLETED" # Checkout finished successfully
-    ERROR = "ERROR"         # Checkout finished with errors
+    IDLE = "IDLE"               # No active checkout, ready to start
+    RUNNING = "RUNNING"         # Checkout in progress
+    COLLECTING = "COLLECTING"   # Checkout done, collecting results
+    STOPPING = "STOPPING"       # Stop requested, waiting for cleanup
+    COMPLETED = "COMPLETED"     # Checkout finished successfully
+    ERROR = "ERROR"             # Checkout finished with errors
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2333,6 +2334,7 @@ class CheckoutTab(BaseTab):
         State Machine Rules (B9: toggle Start/Stop visibility):
         - IDLE: Start visible+enabled, Stop hidden, runtime buttons enabled
         - RUNNING: Start hidden, Stop visible+enabled, runtime buttons enabled
+        - COLLECTING: Start hidden, Stop visible+enabled, progress bar reset
         - STOPPING: Start hidden, Stop visible+disabled, Refresh enabled
         - COMPLETED/ERROR: Start visible+enabled, Stop hidden, runtime buttons enabled
         """
@@ -2342,6 +2344,7 @@ class CheckoutTab(BaseTab):
         status_colors = {
             CheckoutState.IDLE: ("#888888", "IDLE"),
             CheckoutState.RUNNING: ("#0078d4", "RUNNING"),
+            CheckoutState.COLLECTING: ("#0078d4", "COLLECTING"),
             CheckoutState.STOPPING: ("#ca5010", "STOPPING"),
             CheckoutState.COMPLETED: ("#107c10", "COMPLETED"),
             CheckoutState.ERROR: ("#a80000", "ERROR"),
@@ -2369,6 +2372,17 @@ class CheckoutTab(BaseTab):
             self._rc_refresh_btn.state(["!disabled"])
             self._rc_collect_btn.state(["!disabled"])
             self._rc_spool_btn.state(["!disabled"])
+
+        elif state == CheckoutState.COLLECTING:
+            # Checkout done, now collecting results — reset progress bar
+            self.checkout_btn.grid_remove()  # Hide Start
+            self.stop_btn.grid()  # Show Stop (to allow stopping collection)
+            self.stop_btn.state(["!disabled"])
+            self._rc_refresh_btn.state(["!disabled"])
+            self._rc_collect_btn.state(["!disabled"])
+            self._rc_spool_btn.state(["!disabled"])
+            # Reset progress bar — will be driven by on_rc_progress_update()
+            self._checkout_progress['value'] = 0
 
         elif state == CheckoutState.STOPPING:
             self.checkout_btn.grid_remove()  # Hide Start
@@ -2538,7 +2552,7 @@ class CheckoutTab(BaseTab):
         self._rc_status_indicator.config(
             text="🔄 MONITORING", foreground="blue")
         # Stop button state managed by update_checkout_ui_state()
-        self._set_checkout_state(CheckoutState.RUNNING)
+        self._set_checkout_state(CheckoutState.COLLECTING)
 
         rc.start_monitoring(
             mids_file       = mids_path,
@@ -2618,10 +2632,11 @@ class CheckoutTab(BaseTab):
                 error_str,
             ), tags=(tag,))
 
-    def on_rc_collection_complete(self, summary: dict):
+    def on_rc_collection_complete(self, summary: dict, entries: dict | None = None):
         """
         Called by ResultController when monitoring ends.
-        Resets button states and updates status indicator.
+        Resets button states, updates status indicator, and ensures
+        the treeview is populated with final results.
         """
         # Stop button state managed by update_checkout_ui_state()
         self._set_checkout_state(CheckoutState.COMPLETED)
@@ -2638,6 +2653,11 @@ class CheckoutTab(BaseTab):
         else:
             self._rc_status_indicator.config(
                 text="⏹ STOPPED", foreground="gray")
+
+        # Bug fix: ensure treeview is populated even if collection was fast
+        # and no progress callbacks fired before completion.
+        if entries:
+            self.on_rc_progress_update(summary, entries)
 
     # ══════════════════════════════════════════════════════════════════════
     # SECTION 7 — MANIFEST-BASED FILE SELECTION (BENTO ↔ Watcher)
