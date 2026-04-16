@@ -1406,6 +1406,27 @@ def wait_for_checkout(
                 result["collected_output_folder"] = data["output_folder"]
             return result
 
+        elif state == "collecting":
+            # Watcher has finished SLATE and is now collecting workspace
+            # results + waiting for user file selection via manifest.
+            # Return early so BENTO can start manifest polling immediately
+            # (breaks the deadlock where BENTO waits for "success" before
+            # polling, but watcher waits for BENTO's selection before
+            # writing "success").
+            elapsed = int(time.time() - start)
+            _log(logger,
+                 f"✓ SLATE completed in {elapsed}s — "
+                 f"watcher is collecting results…",
+                 log_callback)
+            _phase(logger,
+                   "Collecting results…",
+                   log_callback, phase_callback)
+            return {
+                "status":  "collecting",
+                "detail":  data.get("detail", ""),
+                "elapsed": elapsed,
+            }
+
         elif state == "failed":
             elapsed = int(time.time() - start)
             detail  = data.get("detail", "Unknown error")
@@ -1775,18 +1796,20 @@ def run_checkout(
         if cancel_event and cancel_event.is_set():
             break
 
-        icon = "✓" if tc_result["status"] == "success" else "✗"
+        _ok = tc_result["status"] in ("success", "collecting")
+        icon = "✓" if _ok else "✗"
         _log(logger,
              f"[{icon}] {label}: {tc_result['status']} "
              f"in {tc_result['elapsed']}s",
              log_callback)
 
     # ── Teams notification ────────────────────────────────────────────
+    _ok_set = {"success", "collecting"}
     final_status  = ("success"
-                     if all(r["status"] == "success"
+                     if all(r["status"] in _ok_set
                             for r in all_tc_results)
                      else "partial"
-                     if any(r["status"] == "success"
+                     if any(r["status"] in _ok_set
                             for r in all_tc_results)
                      else "failed")
     final_detail  = " | ".join(

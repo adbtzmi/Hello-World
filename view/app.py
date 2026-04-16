@@ -321,33 +321,59 @@ class BentoApp:
             self.compile_checkout_tab.on_checkout_completed(hostname, result)
 
         # ── Show popup notification for checkout result ────────────────
-        def _show_popup():
-            if status == "SUCCESS":
-                files_str = "\n".join(f"  • {f}" for f in generated_files) if generated_files else "  (none)"
-                msg = (f"Checkout successful!\n\n"
-                       f"Tester: {hostname}\n"
-                       f"Elapsed: {elapsed}s\n"
-                       f"{detail}\n\n"
-                       f"Collected files:\n{files_str}\n\n"
-                       f"Output folder:\n{output_folder or 'N/A'}")
-                messagebox.showinfo("Checkout Success", msg.strip())
-            elif status == "PARTIAL":
-                files_str = "\n".join(f"  • {f}" for f in generated_files) if generated_files else "  (none)"
-                msg = (f"Checkout partially completed.\n\n"
-                       f"Tester: {hostname}\n"
-                       f"Elapsed: {elapsed}s\n"
-                       f"{detail}\n\n"
-                       f"Collected files:\n{files_str}\n\n"
-                       f"Output folder:\n{output_folder or 'N/A'}")
-                messagebox.showwarning("Checkout Partial", msg.strip())
-            else:
-                msg = (f"Checkout {status}.\n\n"
-                       f"Tester: {hostname}\n"
-                       f"Elapsed: {elapsed}s\n"
-                       f"{detail}")
-                messagebox.showerror("Checkout Failed", msg.strip())
+        # When the watcher is still collecting workspace files (any
+        # underlying test-case or MID result has status "collecting"),
+        # suppress the blocking messagebox.  The file-selection dialog
+        # that appears later serves as the user's notification.
+        # A blocking messagebox here would freeze the Tk event loop and
+        # prevent the manifest-poll root.after() callbacks from firing.
+        _still_collecting = False
+        for tc in result.get("test_cases", []):
+            if tc.get("status", "").lower() == "collecting":
+                _still_collecting = True
+                break
+        if not _still_collecting:
+            for mr in mid_results.values():
+                for tc in mr.get("test_cases", []):
+                    if tc.get("status", "").lower() == "collecting":
+                        _still_collecting = True
+                        break
+                if _still_collecting:
+                    break
 
-        self.root.after(0, _show_popup)
+        if _still_collecting:
+            self._log_message(
+                f"📋 Watcher is collecting files for {hostname} — "
+                f"file selection popup will appear shortly…"
+            )
+        else:
+            def _show_popup():
+                if status == "SUCCESS":
+                    files_str = "\n".join(f"  • {f}" for f in generated_files) if generated_files else "  (none)"
+                    msg = (f"Checkout successful!\n\n"
+                           f"Tester: {hostname}\n"
+                           f"Elapsed: {elapsed}s\n"
+                           f"{detail}\n\n"
+                           f"Collected files:\n{files_str}\n\n"
+                           f"Output folder:\n{output_folder or 'N/A'}")
+                    messagebox.showinfo("Checkout Success", msg.strip())
+                elif status == "PARTIAL":
+                    files_str = "\n".join(f"  • {f}" for f in generated_files) if generated_files else "  (none)"
+                    msg = (f"Checkout partially completed.\n\n"
+                           f"Tester: {hostname}\n"
+                           f"Elapsed: {elapsed}s\n"
+                           f"{detail}\n\n"
+                           f"Collected files:\n{files_str}\n\n"
+                           f"Output folder:\n{output_folder or 'N/A'}")
+                    messagebox.showwarning("Checkout Partial", msg.strip())
+                else:
+                    msg = (f"Checkout {status}.\n\n"
+                           f"Tester: {hostname}\n"
+                           f"Elapsed: {elapsed}s\n"
+                           f"{detail}")
+                    messagebox.showerror("Checkout Failed", msg.strip())
+
+            self.root.after(0, _show_popup)
 
     def xml_generation_completed(self, hostname: str, result: dict):
         """Called by CheckoutController when XML-only generation finishes."""

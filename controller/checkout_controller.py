@@ -1063,8 +1063,9 @@ class CheckoutController(object):
                         break
 
                 # Aggregate results
-                success_count = sum(1 for r in mid_results.values() if r.get("status") == "success")
-                error_count   = sum(1 for r in mid_results.values() if r.get("status") != "success")
+                _ok_statuses = ("success", "collecting", "partial")
+                success_count = sum(1 for r in mid_results.values() if r.get("status") in _ok_statuses)
+                error_count   = sum(1 for r in mid_results.values() if r.get("status") not in _ok_statuses)
                 log_callback(
                     f"[SUMMARY] {hostname}: {success_count} success, "
                     f"{error_count} errors out of {len(mid_results)} MID(s)"

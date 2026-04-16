@@ -2092,8 +2092,13 @@ class CheckoutTab(BaseTab):
                    if lbl.cget("text") in ("PENDING", "RUNNING", "COLLECTING")]
         if not running:
             # Determine final state based on results
+            # "collecting" means SLATE succeeded and watcher is gathering
+            # workspace files — treat it as success for UI purposes so
+            # manifest polling can start immediately.
             any_success = any(
-                r.get("status", "").lower() in ("success", "partial")
+                r.get("status", "").lower() in (
+                    "success", "partial", "collecting"
+                )
                 for r in self._rc_checkout_results.values()
             )
             if any_success:
@@ -2676,6 +2681,11 @@ class CheckoutTab(BaseTab):
         whose name is not known to BENTO at poll-start time, so we search
         recursively under ``results_base`` for the manifest file.
 
+        Polls **indefinitely** (every 10 s) because the watcher may need
+        up to 30 minutes to collect required files before it writes the
+        manifest.  Polling stops automatically when the user clicks Stop
+        (checkout state leaves COMPLETED/COLLECTING).
+
         Args:
             hostname     : tester hostname (e.g. "IBIR-0383")
             job_id       : JIRA key (e.g. "TSESSD-14270")
@@ -2683,6 +2693,15 @@ class CheckoutTab(BaseTab):
                            (e.g. P:\\temp\\BENTO\\CHECKOUT_RESULTS\\HOST_ENV\\JIRA)
         """
         import glob as _glob
+
+        # ── Guard: stop polling if user clicked Stop or started a new run ──
+        if self._checkout_state not in (
+            CheckoutState.COMPLETED, CheckoutState.COLLECTING,
+            CheckoutState.IDLE,
+        ):
+            self.log("📋 Manifest poll cancelled (checkout state changed)")
+            self._manifest_poll_count = 0
+            return
 
         manifest_pattern = os.path.join(
             results_base, "**",
@@ -2697,28 +2716,36 @@ class CheckoutTab(BaseTab):
                 with open(manifest_path, "r") as f:
                     manifest = json.load(f)
                 self.log(f"📋 File manifest received from {hostname}")
+                self._manifest_poll_count = 0
                 self._show_file_selection_dialog(manifest, hostname,
                                                   job_id, results_folder)
             except Exception as e:
                 self.log(f"⚠ Error reading manifest: {e}")
                 logger.error(f"Manifest read error: {e}")
+                self._manifest_poll_count = 0
         else:
-            # Keep polling every 5 seconds (up to 5 minutes)
+            # Keep polling every 10 seconds — indefinitely.
+            # The watcher may need up to 30 min to collect required files
+            # before writing the manifest, so a short timeout would cause
+            # the popup to never appear.
             if not hasattr(self, "_manifest_poll_count"):
                 self._manifest_poll_count = 0
             self._manifest_poll_count += 1
 
-            if self._manifest_poll_count < 60:  # 60 * 5s = 5 min
-                self.context.root.after(
-                    5000,
-                    lambda: self._poll_for_manifest(
-                        hostname, job_id, results_base
-                    )
+            # Log a status message every ~60 s (every 6th poll at 10 s)
+            if self._manifest_poll_count % 6 == 0:
+                elapsed_min = (self._manifest_poll_count * 10) // 60
+                self.log(
+                    f"📋 Still waiting for file manifest from "
+                    f"{hostname}… ({elapsed_min} min elapsed)"
                 )
-            else:
-                self.log("⏱ Manifest poll timeout — watcher will use "
-                         "required-only fallback")
-                self._manifest_poll_count = 0
+
+            self.context.root.after(
+                10_000,
+                lambda: self._poll_for_manifest(
+                    hostname, job_id, results_base
+                )
+            )
 
     def _show_file_selection_dialog(self, manifest: dict, hostname: str,
                                      job_id: str, results_folder: str):
