@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import time
 from enum import Enum
 import json
 import logging
@@ -2679,6 +2680,7 @@ class CheckoutTab(BaseTab):
 
             self._manifest_poll_count = 0
             self._manifest_poll_started = True
+            self._manifest_poll_start_ts = time.time()
             self.log(
                 f"📋 Polling for file manifest from "
                 f"{hostname} ({jira_key})..."
@@ -2737,14 +2739,45 @@ class CheckoutTab(BaseTab):
         matches = _glob.glob(manifest_pattern, recursive=True)
 
         if matches:
-            manifest_path = os.path.normpath(matches[0])
+            # When multiple manifests exist (from previous runs), pick the
+            # one written AFTER polling started.  Fall back to newest by
+            # mtime if none qualifies.
+            poll_start = getattr(self, "_manifest_poll_start_ts", 0)
+            fresh = []
+            for m in matches:
+                try:
+                    mt = os.path.getmtime(m)
+                    if mt >= poll_start:
+                        fresh.append((mt, m))
+                except OSError:
+                    pass
+
+            if fresh:
+                # Newest among files written after poll started
+                fresh.sort(key=lambda x: x[0], reverse=True)
+                manifest_path = os.path.normpath(fresh[0][1])
+            else:
+                # Fallback: newest by mtime overall
+                timed = []
+                for m in matches:
+                    try:
+                        timed.append((os.path.getmtime(m), m))
+                    except OSError:
+                        pass
+                if timed:
+                    timed.sort(key=lambda x: x[0], reverse=True)
+                    manifest_path = os.path.normpath(timed[0][1])
+                else:
+                    manifest_path = os.path.normpath(matches[0])
+
             results_folder = os.path.normpath(os.path.dirname(manifest_path))
             try:
                 with open(manifest_path, "r") as f:
                     manifest = json.load(f)
                 self.log(f"📋 File manifest received from {hostname}")
                 logger.info(
-                    f"Manifest found: {manifest_path} — "
+                    f"Manifest found: {manifest_path} "
+                    f"(out of {len(matches)} match(es)) — "
                     f"selection will be written to: {results_folder}"
                 )
                 self._manifest_poll_count = 0
