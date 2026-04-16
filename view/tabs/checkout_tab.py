@@ -206,6 +206,7 @@ class CheckoutTab(BaseTab):
         self._rc_checkout_results: Dict[str, dict] = {}   # hostname -> result
         self._rc_checkout_hostnames: List[str]      = []   # testers used
         self._rc_mids_file: str                     = ""   # auto-generated MIDs.txt path
+        self._manifest_poll_started: bool           = False # guard: only start once
 
         self._init_vars()
         self._build_ui()
@@ -1620,6 +1621,7 @@ class CheckoutTab(BaseTab):
         if not messagebox.askyesno("Confirm Checkout", summary, icon='question'):
             return
 
+        self._manifest_poll_started = False   # reset for new run
         self._set_checkout_state(CheckoutState.RUNNING)
         self.context.controller.checkout_controller.start_checkout(params)
 
@@ -2052,6 +2054,13 @@ class CheckoutTab(BaseTab):
             self._set_badge(hostname, "RUNNING")
         elif "collect" in phase.lower():
             self._set_badge(hostname, "COLLECTING")
+            # Start manifest polling as soon as we know the watcher is
+            # collecting — don't wait for on_checkout_completed() because
+            # wait_for_checkout() now keeps polling until "success"/"failed"
+            # (which only happens AFTER user selects files).
+            if not getattr(self, '_manifest_poll_started', False):
+                self._manifest_poll_started = True
+                self._start_manifest_polling(hostname)
         self._set_phase(hostname, phase)
 
     def on_checkout_completed(self, hostname, result):
@@ -2121,58 +2130,10 @@ class CheckoutTab(BaseTab):
                 # The watcher writes a file_manifest JSON after scanning
                 # the workspace.  Poll for it so we can show the file
                 # selection dialog to the user.
-                try:
-                    jira_key = (
-                        self.context.get_var('issue_var').get().strip().upper()
-                    )
-                    if not jira_key or jira_key.endswith("-"):
-                        # Fallback: extract from TGZ filename
-                        import re as _re
-                        tgz = self.context.get_var(
-                            'checkout_tgz_path').get().strip()
-                        m = _re.search(r'([A-Za-z]+-\d+)',
-                                       os.path.basename(tgz))
-                        jira_key = m.group(1).upper() if m else ""
-
-                    if jira_key:
-                        # Resolve ENV for the primary host
-                        ctrl = self.context.controller
-                        env = ""
-                        if ctrl and hasattr(ctrl, "checkout_controller"):
-                            env = (ctrl.checkout_controller
-                                   ._get_env_for_hostname(primary_host))
-
-                        # Build base search path:
-                        #   CHECKOUT_RESULTS / <host>_<ENV> / <jira_key>
-                        CHECKOUT_RESULTS = (
-                            r"P:\temp\BENTO\CHECKOUT_RESULTS"
-                        )
-                        tester_folder = (
-                            f"{primary_host}_{env.upper()}"
-                            if env else primary_host
-                        )
-                        results_base = os.path.join(
-                            CHECKOUT_RESULTS, tester_folder, jira_key
-                        )
-
-                        self._manifest_poll_count = 0
-                        self.log(
-                            f"📋 Polling for file manifest from "
-                            f"{primary_host} ({jira_key})..."
-                        )
-                        # Start polling after a short delay (watcher
-                        # needs time to scan + write the manifest)
-                        self.context.root.after(
-                            3000,
-                            lambda: self._poll_for_manifest(
-                                primary_host, jira_key, results_base
-                            )
-                        )
-                    else:
-                        self.log("⚠ No JIRA key — skipping manifest poll")
-                except Exception as e:
-                    self.log(f"⚠ Manifest poll setup failed: {e}")
-                    logger.error(f"Manifest poll setup failed: {e}")
+                # Guard: if on_checkout_progress() already started polling
+                # (via the "collecting" phase callback), skip here.
+                if not self._manifest_poll_started:
+                    self._start_manifest_polling(primary_host)
 
     def on_xml_generation_completed(self, hostname, result):
         """Handle XML-only generation completion (distinct from checkout)."""
@@ -2663,6 +2624,72 @@ class CheckoutTab(BaseTab):
     # ══════════════════════════════════════════════════════════════════════
     # SECTION 7 — MANIFEST-BASED FILE SELECTION (BENTO ↔ Watcher)
     # ══════════════════════════════════════════════════════════════════════
+
+    def _start_manifest_polling(self, hostname: str):
+        """
+        Resolve JIRA key + ENV, build the results_base path, and kick off
+        ``_poll_for_manifest()`` after a short delay.
+
+        Called from:
+          • ``on_checkout_progress()`` — as soon as the "collecting" phase
+            fires (earliest possible moment).
+          • ``on_checkout_completed()`` — fallback if the phase callback
+            was never received.
+
+        Guarded by ``self._manifest_poll_started`` so it runs at most once
+        per checkout run.
+        """
+        try:
+            jira_key = (
+                self.context.get_var('issue_var').get().strip().upper()
+            )
+            if not jira_key or jira_key.endswith("-"):
+                # Fallback: extract from TGZ filename
+                import re as _re
+                tgz = self.context.get_var(
+                    'checkout_tgz_path').get().strip()
+                m = _re.search(r'([A-Za-z]+-\d+)',
+                               os.path.basename(tgz))
+                jira_key = m.group(1).upper() if m else ""
+
+            if not jira_key:
+                self.log("⚠ No JIRA key — skipping manifest poll")
+                return
+
+            # Resolve ENV for the hostname
+            ctrl = self.context.controller
+            env = ""
+            if ctrl and hasattr(ctrl, "checkout_controller"):
+                env = (ctrl.checkout_controller
+                       ._get_env_for_hostname(hostname))
+
+            # Build base search path:
+            #   CHECKOUT_RESULTS / <host>_<ENV> / <jira_key>
+            CHECKOUT_RESULTS = r"P:\temp\BENTO\CHECKOUT_RESULTS"
+            tester_folder = (
+                f"{hostname}_{env.upper()}" if env else hostname
+            )
+            results_base = os.path.join(
+                CHECKOUT_RESULTS, tester_folder, jira_key
+            )
+
+            self._manifest_poll_count = 0
+            self._manifest_poll_started = True
+            self.log(
+                f"📋 Polling for file manifest from "
+                f"{hostname} ({jira_key})..."
+            )
+            # Start polling after a short delay (watcher needs time
+            # to scan the workspace + write the manifest)
+            self.context.root.after(
+                3000,
+                lambda: self._poll_for_manifest(
+                    hostname, jira_key, results_base
+                )
+            )
+        except Exception as e:
+            self.log(f"⚠ Manifest poll setup failed: {e}")
+            logger.error(f"Manifest poll setup failed: {e}")
 
     def _poll_for_manifest(self, hostname: str, job_id: str,
                            results_base: str):

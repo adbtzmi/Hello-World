@@ -1373,6 +1373,7 @@ def wait_for_checkout(
     """
     start    = time.time()
     deadline = start + timeout_seconds
+    _collecting_notified = False          # only log/phase once for "collecting"
 
     _phase(logger,
            f"Waiting for SLATE (timeout={timeout_seconds // 60}min)…",
@@ -1409,23 +1410,20 @@ def wait_for_checkout(
         elif state == "collecting":
             # Watcher has finished SLATE and is now collecting workspace
             # results + waiting for user file selection via manifest.
-            # Return early so BENTO can start manifest polling immediately
-            # (breaks the deadlock where BENTO waits for "success" before
-            # polling, but watcher waits for BENTO's selection before
-            # writing "success").
+            # Fire a phase callback so the GUI can start manifest polling
+            # concurrently, but KEEP POLLING — we need to wait for the
+            # watcher to write "success" (after user selects files and
+            # watcher copies them) before declaring checkout complete.
             elapsed = int(time.time() - start)
-            _log(logger,
-                 f"✓ SLATE completed in {elapsed}s — "
-                 f"watcher is collecting results…",
-                 log_callback)
-            _phase(logger,
-                   "Collecting results…",
-                   log_callback, phase_callback)
-            return {
-                "status":  "collecting",
-                "detail":  data.get("detail", ""),
-                "elapsed": elapsed,
-            }
+            if not _collecting_notified:
+                _log(logger,
+                     f"✓ SLATE completed in {elapsed}s — "
+                     f"watcher is collecting results…",
+                     log_callback)
+                _phase(logger,
+                       "Collecting results…",
+                       log_callback, phase_callback)
+                _collecting_notified = True
 
         elif state == "failed":
             elapsed = int(time.time() - start)
@@ -1796,7 +1794,7 @@ def run_checkout(
         if cancel_event and cancel_event.is_set():
             break
 
-        _ok = tc_result["status"] in ("success", "collecting")
+        _ok = tc_result["status"] in ("success",)
         icon = "✓" if _ok else "✗"
         _log(logger,
              f"[{icon}] {label}: {tc_result['status']} "
@@ -1804,7 +1802,7 @@ def run_checkout(
              log_callback)
 
     # ── Teams notification ────────────────────────────────────────────
-    _ok_set = {"success", "collecting"}
+    _ok_set = {"success"}
     final_status  = ("success"
                      if all(r["status"] in _ok_set
                             for r in all_tc_results)
