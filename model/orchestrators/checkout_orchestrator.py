@@ -471,6 +471,7 @@ def generate_slate_xml(
     autostart:     str  = "True",
     attr_overwrites: Optional[list] = None,
     recipe_override: str = "",
+    dib_type:      str  = "",
     logger               = None,
     log_callback         = None,
 ) -> Optional[str]:
@@ -621,8 +622,13 @@ def generate_slate_xml(
             _log(logger, f"Form factor from SOAP: {_form_factor}", log_callback)
 
         # ── Resolve DIB_TYPE now that form_factor is known ────────────
-        dib_type = hw_config.get_dib_type(step, _form_factor) if _form_factor else hw_config.get_dib_type(step, "U.2")
-        _log(logger, f"DIB_TYPE: {dib_type} (step={step}, form_factor={_form_factor or 'U.2 default'})", log_callback)
+        # Caller-provided dib_type (from profile grid) takes priority;
+        # fall back to hardware config lookup when not provided.
+        if not dib_type:
+            dib_type = hw_config.get_dib_type(step, _form_factor) if _form_factor else hw_config.get_dib_type(step, "U.2")
+            _log(logger, f"DIB_TYPE: {dib_type} (from hw_config, step={step}, form_factor={_form_factor or 'U.2 default'})", log_callback)
+        else:
+            _log(logger, f"DIB_TYPE: {dib_type} (from profile grid override)", log_callback)
 
         # ── SAP attribute query (CFGPN + MCTO) ──────────────────────
         cfgpn_attrs = {}
@@ -1633,6 +1639,7 @@ def run_checkout(
     form_factor:     str   = "",
     attr_overwrites: Optional[list] = None,
     recipe_override: str   = "",
+    dib_type:        str   = "",
     log_callback           = None,
     phase_callback         = None,
     cancel_event:    Optional[threading.Event] = None,
@@ -1737,6 +1744,7 @@ def run_checkout(
             autostart         = autostart,
             attr_overwrites   = attr_overwrites,
             recipe_override   = recipe_override,
+            dib_type          = dib_type,
             logger            = logger,
             log_callback      = log_callback,
         )
