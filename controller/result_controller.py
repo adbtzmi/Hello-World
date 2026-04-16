@@ -236,18 +236,36 @@ class ResultController:
         except Exception:
             logger.info(message)
 
+    def _get_checkout_tab(self):
+        """Resolve the CheckoutTab through the nested tab hierarchy.
+
+        BentoApp has ``compile_checkout_tab`` (CompileCheckoutTab) which
+        in turn holds ``checkout_tab`` (CheckoutTab).  Previous code used
+        ``getattr(view, "checkout_tab", None)`` which always returned
+        ``None`` because the attribute lives one level deeper.
+        """
+        try:
+            controller = self.context.controller
+            if not controller or not hasattr(controller, "_view"):
+                return None
+            view = controller._view
+            # checkout_tab is nested inside compile_checkout_tab
+            cct = getattr(view, "compile_checkout_tab", None)
+            if cct:
+                return getattr(cct, "checkout_tab", None)
+            return None
+        except Exception:
+            return None
+
     def _on_progress(self, summary: dict, entries: dict):
         """
         Called by ResultCollector from background thread.
         Relays to CheckoutTab Section 6 via root.after() for thread safety.
         """
         def _update():
-            controller = self.context.controller
-            if controller and hasattr(controller, "_view"):
-                view = controller._view
-                checkout_tab = getattr(view, "checkout_tab", None)
-                if checkout_tab and hasattr(checkout_tab, "on_rc_progress_update"):
-                    checkout_tab.on_rc_progress_update(summary, entries)
+            checkout_tab = self._get_checkout_tab()
+            if checkout_tab and hasattr(checkout_tab, "on_rc_progress_update"):
+                checkout_tab.on_rc_progress_update(summary, entries)
 
         try:
             self.context.root.after(0, _update)
@@ -261,22 +279,33 @@ class ResultController:
         self._running = False
 
         # Capture final entries before the collector is potentially cleaned up
-        final_entries = self.get_entries()
+        try:
+            final_entries = self.get_entries()
+        except Exception as e:
+            logger.error(f"Failed to capture final entries: {e}")
+            final_entries = {}
 
         def _update():
-            controller = self.context.controller
-            if controller and hasattr(controller, "_view"):
-                view = controller._view
-                checkout_tab = getattr(view, "checkout_tab", None)
+            try:
+                checkout_tab = self._get_checkout_tab()
+
+                # Step 1: Populate treeview with final entries FIRST
+                if checkout_tab and final_entries and hasattr(checkout_tab, "on_rc_progress_update"):
+                    checkout_tab.on_rc_progress_update(summary, final_entries)
+
+                # Step 2: Set final state (COMPLETED) and status indicator
                 if checkout_tab and hasattr(checkout_tab, "on_rc_collection_complete"):
-                    checkout_tab.on_rc_collection_complete(summary, final_entries)
+                    checkout_tab.on_rc_collection_complete(summary)
 
                 # Forward AI consolidation results to Validation & Risk tab
                 ai_consolidation = summary.get("ai_consolidation")
                 if ai_consolidation:
-                    validation_tab = getattr(view, "validation_tab", None)
-                    if validation_tab and hasattr(validation_tab, "on_ai_checkout_results"):
-                        validation_tab.on_ai_checkout_results(ai_consolidation, summary)
+                    controller = self.context.controller
+                    if controller and hasattr(controller, "_view"):
+                        view = controller._view
+                        validation_tab = getattr(view, "validation_tab", None)
+                        if validation_tab and hasattr(validation_tab, "on_ai_checkout_results"):
+                            validation_tab.on_ai_checkout_results(ai_consolidation, summary)
 
                 # Show popup notification
                 from tkinter import messagebox
@@ -302,8 +331,10 @@ class ResultController:
                         "Result Collector",
                         "Result collection monitoring stopped."
                     )
+            except Exception as e:
+                logger.error(f"Error in completion UI update: {e}")
 
         try:
             self.context.root.after(0, _update)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to schedule completion update: {e}")
