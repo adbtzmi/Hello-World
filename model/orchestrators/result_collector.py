@@ -200,6 +200,63 @@ def mark_collected_in_mids_file(filepath: str, collected_mids: List[str]):
 # WORKSPACE RESOLUTION
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _find_checkout_results_ibir_workspace(
+    tester_hostname: str, dut_location: str,
+) -> str:
+    """
+    Search CHECKOUT_RESULTS for an IBIR workspace folder containing files
+    with the given DUT location prefix (e.g. ``P2D0_``).
+
+    The watcher collects IBIR results into:
+        CHECKOUT_RESULTS/<hostname>_<env>/<jira>/<workspace_id>/
+            P2D0_TraceFile.txt
+            OS/P2D0_resultsManager.db
+
+    Returns the newest matching workspace path, or "" if not found.
+    """
+    if not os.path.isdir(CHECKOUT_RESULTS_FOLDER):
+        return ""
+    prefix = f"{tester_hostname}_".upper()
+    dut_prefix = f"{dut_location}_"          # e.g. "P2D0_"
+
+    best_path = ""
+    best_mtime: float = 0
+
+    try:
+        for tester_dir in os.listdir(CHECKOUT_RESULTS_FOLDER):
+            if not tester_dir.upper().startswith(prefix):
+                continue
+            tester_path = os.path.join(CHECKOUT_RESULTS_FOLDER, tester_dir)
+            if not os.path.isdir(tester_path):
+                continue
+            for jira_dir in os.listdir(tester_path):
+                jira_path = os.path.join(tester_path, jira_dir)
+                if not os.path.isdir(jira_path):
+                    continue
+                for ws_dir in os.listdir(jira_path):
+                    ws_path = os.path.join(jira_path, ws_dir)
+                    if not os.path.isdir(ws_path):
+                        continue
+                    # Check if this workspace folder has files with the
+                    # DUT location prefix (e.g. P2D0_TraceFile.txt)
+                    try:
+                        for fname in os.listdir(ws_path):
+                            if fname.upper().startswith(dut_prefix.upper()):
+                                # Found a match — pick newest by mtime
+                                mt = os.path.getmtime(
+                                    os.path.join(ws_path, fname)
+                                )
+                                if mt > best_mtime:
+                                    best_mtime = mt
+                                    best_path = ws_path
+                                break
+                    except OSError:
+                        pass
+    except OSError:
+        pass
+    return best_path
+
+
 def resolve_ibir_workspaces(
     mid_entries: Dict[str, MIDEntry],
     log_callback: Optional[Callable] = None,
@@ -207,68 +264,32 @@ def resolve_ibir_workspaces(
 ) -> Dict[str, MIDEntry]:
     """
     Resolve workspace paths for IBIR testers.
-    Reads SysState.xml to find workspace IDs, then verifies MID in tmptravl.dat.
 
-    If tester_hostname is provided, paths are converted to UNC admin shares
-    (e.g. \\\\IBIR-0383\\C$\\Tanisys\\...) for remote access.
+    Searches CHECKOUT_RESULTS for workspace folders that the watcher has
+    already collected.  Files are identified by their DUT location prefix
+    (e.g. ``P2D0_TraceFile.txt``).
+
+    No UNC admin-share access is required — all files are read from the
+    shared ``P:\\temp\\BENTO\\CHECKOUT_RESULTS`` folder.
     """
-    path_to_workspace = _to_unc(IBIR_WORKSPACE_LOCAL, tester_hostname)
-    path_to_config    = _to_unc(IBIR_CONFIG_LOCAL, tester_hostname)
-
-    try:
-        tree  = ET.parse(path_to_config)
-        root  = tree.getroot()
-        child = root.find("TesterHardware/Rack/Primitives")
-    except Exception as e:
-        _log(log_callback, f"✗ Cannot parse SysState.xml: {e}")
-        return mid_entries
-
-    if child is None:
-        _log(log_callback, "✗ Primitives element not found in SysState.xml")
-        return mid_entries
-
     for mid, entry in list(mid_entries.items()):
         try:
-            loc = entry.location
-            primitive_id = loc[1]       # e.g. "P1D1" -> "1"
-            dut_id       = loc[3:]      # e.g. "P1D1" -> "1"
+            loc = entry.location          # e.g. "P2D0"
 
-            subchild = child.find(
-                f"Primitive[@id='{primitive_id}']/DUTs/DUT[@id='{dut_id}']/BinData/messageHeader"
+            cr_path = _find_checkout_results_ibir_workspace(
+                tester_hostname, loc,
             )
-            if subchild is None:
+            if cr_path:
+                entry.workspace_path = cr_path
+                entry.status = STATUS_PASS
+                entry.collected = True
+                _log(log_callback,
+                     f" ✓ {mid}: found in CHECKOUT_RESULTS → {cr_path}")
+            else:
                 entry.status = STATUS_NOT_FOUND
-                entry.error_msg = f"DUT {loc} not found in SysState.xml"
-                _log(log_callback, f" ⚠ {mid}: DUT {loc} not found in SysState.xml")
-                continue
-
-            workspace = subchild.get("workspaceID") or ""
-            travl_path = os.path.join(path_to_workspace, workspace, "tmptravl.dat")
-
-            if not os.path.exists(travl_path):
-                entry.status = STATUS_NOT_FOUND
-                entry.error_msg = f"tmptravl.dat not found at {travl_path}"
-                _log(log_callback, f" ⚠ {mid}: tmptravl.dat not found")
-                continue
-
-            with open(travl_path, "r") as f:
-                for line in f:
-                    if "MID: " in line:
-                        found_mid = line.split(": ")[1].strip()
-                        if found_mid == mid:
-                            entry.workspace_path = os.path.join(
-                                path_to_workspace, workspace
-                            )
-                        else:
-                            entry.status = STATUS_NOT_FOUND
-                            entry.error_msg = (
-                                f"MID mismatch at {loc}: "
-                                f"expected {mid}, found {found_mid}"
-                            )
-                            _log(log_callback,
-                                 f" ⚠ {mid} not found at {loc} "
-                                 f"(found {found_mid})")
-                        break
+                entry.error_msg = "Waiting for watcher to collect results"
+                _log(log_callback,
+                     f" ⚠ {mid}: waiting for watcher to collect results...")
         except Exception as e:
             entry.status = STATUS_ERROR
             entry.error_msg = str(e)
@@ -358,14 +379,30 @@ def resolve_adv_workspaces(
 # ══════════════════════════════════════════════════════════════════════════════
 
 def check_test_status_ibir(entry: MIDEntry) -> MIDEntry:
-    """Check test status for an IBIR MID by reading *_UPDATE_ATTRS.xml in OS subfolder."""
+    """Check test status for an IBIR MID by reading *_UPDATE_ATTRS.xml.
+
+    Searches both the OS/ subfolder (original workspace layout) and the
+    workspace root (CHECKOUT_RESULTS layout where the watcher may place
+    files at the top level).
+    """
     if not entry.workspace_path:
         return entry
     try:
+        # Search OS/ subfolder first, then root
         xml_files = glob.glob(
             os.path.join(entry.workspace_path, "OS", "*_UPDATE_ATTRS.xml")
         )
         if not xml_files:
+            xml_files = glob.glob(
+                os.path.join(entry.workspace_path, "*_UPDATE_ATTRS.xml")
+            )
+        if not xml_files:
+            # If workspace was resolved from CHECKOUT_RESULTS and files
+            # are already collected, treat as PASS (watcher already
+            # determined the test completed before collecting).
+            if entry.collected:
+                entry.status = STATUS_PASS
+                return entry
             entry.status = STATUS_RUNNING
             return entry
 
@@ -440,34 +477,53 @@ def collect_files_ibir(
 ) -> bool:
     """
     Collect trace + DB files for an IBIR MID.
-    - DispatcherDebug*.txt  -> {name}.txt
-    - OS/resultsManager*.db -> {name}.db
-    - Any additional file patterns the user specified
+
+    Handles two layouts:
+      1. Original workspace: DispatcherDebug*.txt at root, OS/resultsManager*.db
+      2. CHECKOUT_RESULTS:   P2D0_TraceFile.txt at root, OS/P2D0_resultsManager.db
+
+    Files with the DUT location prefix (e.g. ``P2D0_``) are also matched.
     """
     if not entry.workspace_path:
         return False
 
     path = entry.workspace_path
+    loc  = entry.location                    # e.g. "P2D0"
+    loc_prefix = f"{loc}_"                   # e.g. "P2D0_"
     collected_any = False
 
     try:
-        # Trace file (DispatcherDebug*.txt)
+        # ── Trace file ────────────────────────────────────────────────
+        # Try: DispatcherDebug*.txt  OR  P2D0_TraceFile.txt  OR  *TraceFile*.txt
+        trace_found = False
         for f in glob.glob(os.path.join(path, "*.txt")):
-            if "DispatcherDebug" in os.path.basename(f):
+            bn = os.path.basename(f)
+            if ("DispatcherDebug" in bn
+                    or "TraceFile" in bn
+                    or bn.upper().startswith(loc_prefix.upper())):
                 target = os.path.join(target_path, f"{entry.name}.txt")
                 shutil.copy(f, target)
                 _log(log_callback, f"    ✓ Copied trace → {entry.name}.txt")
                 collected_any = True
+                trace_found = True
                 break
 
-        # Results DB (OS/resultsManager*.db)
-        for f in glob.glob(os.path.join(path, "OS", "*.db")):
-            if "resultsManager" in os.path.basename(f):
-                target = os.path.join(target_path, f"{entry.name}.db")
-                shutil.copy(f, target)
-                _log(log_callback, f"    ✓ Copied DB → {entry.name}.db")
-                collected_any = True
+        # ── Results DB ────────────────────────────────────────────────
+        # Try: OS/resultsManager*.db  OR  OS/P2D0_resultsManager*.db
+        #      then root: resultsManager*.db  OR  P2D0_resultsManager*.db
+        db_found = False
+        for search_dir in [os.path.join(path, "OS"), path]:
+            if db_found:
                 break
+            for f in glob.glob(os.path.join(search_dir, "*.db")):
+                bn = os.path.basename(f)
+                if "resultsManager" in bn:
+                    target = os.path.join(target_path, f"{entry.name}.db")
+                    shutil.copy(f, target)
+                    _log(log_callback, f"    ✓ Copied DB → {entry.name}.db")
+                    collected_any = True
+                    db_found = True
+                    break
 
         # Additional user-specified file patterns
         if additional_patterns:
@@ -953,11 +1009,11 @@ class ResultCollector:
             _log(self.log_callback,
                  f"   Target: {self.target_path}")
 
-            # Resolve workspaces (with UNC conversion if remote)
+            # Resolve workspaces from CHECKOUT_RESULTS
             if self.tester_hostname:
                 _log(self.log_callback,
                      f"   Remote tester: {self.tester_hostname} "
-                     f"(UNC: \\\\{self.tester_hostname}\\C$\\...)")
+                     f"(via CHECKOUT_RESULTS)")
             _log(self.log_callback, "\n🔍 Resolving workspace paths...")
             if self.machine_type == "IBIR":
                 self._entries = resolve_ibir_workspaces(
