@@ -2811,6 +2811,18 @@ class CheckoutTab(BaseTab):
                 )
             )
 
+    # Known file categories from the watcher's FILE_ALLOW_LIST.
+    # Only these keys get individual checkboxes in the dialog;
+    # everything else is grouped under "Other workspace files".
+    _KNOWN_FILE_KEYS = {
+        "results_db", "dispatcher_debug", "tracefile",
+        "error_log", "test_log", "summary_txt", "summary_zip",
+        "update_xml",
+    }
+
+    # File extensions to exclude from the "other files" group
+    _EXCLUDED_EXTENSIONS = {".py", ".pyc", ".pyo"}
+
     def _show_file_selection_dialog(self, manifest: dict, hostname: str,
                                      job_id: str, results_folder: str):
         """
@@ -2818,15 +2830,56 @@ class CheckoutTab(BaseTab):
         User checks which optional files to collect; required files are
         always selected and greyed out.
 
+        Large manifests (thousands of workspace files) are handled by
+        grouping unknown file keys into a single "Other workspace files"
+        checkbox.  Only known categories from FILE_ALLOW_LIST get
+        individual checkboxes.  Files with .py/.pyc extensions are
+        excluded entirely.
+
         Args:
             manifest       : parsed manifest JSON dict
             hostname       : tester hostname
             job_id         : JIRA key
             results_folder : path to write selection JSON back to
         """
+        files_info = manifest.get("files", [])
+
+        # ── Partition files into known categories vs. "other" ──────────
+        known_entries: list = []      # individual checkboxes
+        other_entries: list = []      # grouped under one checkbox
+        excluded_count = 0
+
+        for fe in files_info:
+            key = fe.get("key", "")
+            # Skip excluded extensions (.py, .pyc, .pyo)
+            ext = os.path.splitext(key)[1].lower()
+            if ext in self._EXCLUDED_EXTENSIONS:
+                excluded_count += 1
+                continue
+            # Also check names for excluded extensions
+            names = fe.get("names", [])
+            if names and all(
+                os.path.splitext(n)[1].lower() in self._EXCLUDED_EXTENSIONS
+                for n in names
+            ):
+                excluded_count += 1
+                continue
+
+            if key in self._KNOWN_FILE_KEYS or fe.get("required", False):
+                known_entries.append(fe)
+            else:
+                other_entries.append(fe)
+
+        logger.info(
+            f"File selection dialog: {len(known_entries)} known, "
+            f"{len(other_entries)} other, {excluded_count} excluded "
+            f"(.py/.pyc) — total manifest entries: {len(files_info)}"
+        )
+
+        # ── Build dialog ──────────────────────────────────────────────
         dlg = tk.Toplevel(self)
         dlg.title(f"Select Files to Collect — {hostname}")
-        dlg.geometry("550x420")
+        dlg.geometry("600x480")
         dlg.resizable(True, True)
         dlg.transient(self.winfo_toplevel())
         dlg.grab_set()
@@ -2864,16 +2917,14 @@ class CheckoutTab(BaseTab):
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Build checkboxes from manifest
+        # ── Known-category checkboxes (individual) ────────────────────
         check_vars: Dict[str, tk.BooleanVar] = {}
-        files_info = manifest.get("files", [])
 
-        for i, file_entry in enumerate(files_info):
+        for file_entry in known_entries:
             key      = file_entry.get("key", "")
             desc     = file_entry.get("desc", key)
             required = file_entry.get("required", False)
             found    = file_entry.get("found", False)
-            count    = file_entry.get("count", 0)
             sizes    = file_entry.get("sizes", [])
             names    = file_entry.get("names", [])
 
@@ -2886,17 +2937,13 @@ class CheckoutTab(BaseTab):
             cb = ttk.Checkbutton(row_frame, variable=var)
             cb.pack(side=tk.LEFT)
 
-            # Required files: always checked, disabled
             if required:
                 var.set(True)
                 cb.config(state="disabled")
-
-            # Not found: unchecked, disabled
             if not found:
                 var.set(False)
                 cb.config(state="disabled")
 
-            # Label with description
             size_str = ""
             if sizes:
                 total = sum(sizes)
@@ -2918,16 +2965,68 @@ class CheckoutTab(BaseTab):
             label_text = (
                 f"{status_icon} {desc}{req_tag}{size_str}{name_str}"
             )
-            lbl = ttk.Label(row_frame, text=label_text, wraplength=450)
+            lbl = ttk.Label(row_frame, text=label_text, wraplength=500)
             lbl.pack(side=tk.LEFT, padx=(5, 0))
 
-        # B15: Total file size summary
+        # ── "Other workspace files" grouped checkbox ──────────────────
+        # Collect keys for the "other" group so we can include/exclude
+        # them all at once when the user toggles the checkbox.
+        other_keys: list = []
+        other_found_count = 0
+        other_total_size  = 0
+        other_total_files = 0
+        for fe in other_entries:
+            k = fe.get("key", "")
+            other_keys.append(k)
+            if fe.get("found", False):
+                other_found_count += 1
+                other_total_size += sum(fe.get("sizes", []))
+                other_total_files += fe.get("count", 0)
+
+        if other_keys:
+            # Separator
+            ttk.Separator(inner, orient="horizontal").pack(
+                fill=tk.X, pady=(8, 4)
+            )
+
+            other_var = tk.BooleanVar(value=False)
+            # Store other_keys on the var for retrieval in callbacks
+            other_var._other_keys = other_keys  # type: ignore[attr-defined]
+
+            row_frame = ttk.Frame(inner)
+            row_frame.pack(fill=tk.X, pady=2)
+
+            cb = ttk.Checkbutton(row_frame, variable=other_var)
+            cb.pack(side=tk.LEFT)
+
+            if other_total_size > 1024 * 1024:
+                o_size = f"{other_total_size / (1024*1024):.1f} MB"
+            elif other_total_size > 1024:
+                o_size = f"{other_total_size / 1024:.1f} KB"
+            else:
+                o_size = f"{other_total_size} B"
+
+            other_label = (
+                f"📁 Other workspace files — "
+                f"{other_found_count} file(s), {o_size}"
+            )
+            if excluded_count:
+                other_label += (
+                    f"  (excluded {excluded_count} .py/.pyc files)"
+                )
+            ttk.Label(
+                row_frame, text=other_label, wraplength=500,
+                foreground="#555",
+            ).pack(side=tk.LEFT, padx=(5, 0))
+        else:
+            other_var = None
+
+        # ── Total file size summary ───────────────────────────────────
         total_size = 0
         total_files = 0
-        for file_entry in files_info:
+        for file_entry in known_entries + other_entries:
             if file_entry.get("found", False):
-                sizes = file_entry.get("sizes", [])
-                total_size += sum(sizes)
+                total_size += sum(file_entry.get("sizes", []))
                 total_files += file_entry.get("count", 0)
         if total_size > 1024 * 1024 * 1024:
             size_summary = f"{total_size / (1024**3):.2f} GB"
@@ -2944,29 +3043,38 @@ class CheckoutTab(BaseTab):
             foreground="#0078d4",
         ).pack(padx=10, pady=(5, 0), anchor="w")
 
-        # Buttons
+        # ── Buttons ───────────────────────────────────────────────────
         btn_frame = ttk.Frame(dlg)
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
 
-        def _on_confirm():
+        def _gather_selected() -> list:
+            """Collect all selected keys including 'other' group."""
             selected = [k for k, v in check_vars.items() if v.get()]
+            if other_var is not None and other_var.get():
+                selected.extend(
+                    getattr(other_var, "_other_keys", [])
+                )
+            return selected
+
+        def _on_confirm():
             self._write_file_selection(
-                selected, hostname, job_id, results_folder
+                _gather_selected(), hostname, job_id, results_folder
             )
             dlg.destroy()
 
         def _on_select_all():
             for key, var in check_vars.items():
                 entry = next(
-                    (f for f in files_info if f.get("key") == key), {}
+                    (f for f in known_entries if f.get("key") == key), {}
                 )
                 if entry.get("found", False):
                     var.set(True)
+            if other_var is not None:
+                other_var.set(True)
 
         def _on_cancel():
-            # Cancel = only required files
             required_keys = [
-                f.get("key", "") for f in files_info
+                f.get("key", "") for f in known_entries
                 if f.get("required", False)
             ]
             self._write_file_selection(
