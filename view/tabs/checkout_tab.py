@@ -2215,12 +2215,6 @@ class CheckoutTab(BaseTab):
         self._rc_refresh_btn.pack(side=tk.LEFT, padx=(0, 3))
         _tip(self._rc_refresh_btn, "Refresh tester status")
         
-        self._rc_collect_btn = ttk.Button(
-            btn_container, text="📁 Collect", width=10,
-            command=self._rc_collect_selected)
-        self._rc_collect_btn.pack(side=tk.LEFT, padx=(0, 3))
-        _tip(self._rc_collect_btn, "Collect results from selected MID(s)")
-        
         self._rc_spool_btn = ttk.Button(
             btn_container, text="📊 Spool", width=10,
             command=self._rc_spool_selected)
@@ -2331,7 +2325,6 @@ class CheckoutTab(BaseTab):
             self.checkout_btn.state(["!disabled"] if (has_testers and has_profile) else ["disabled"])
             self.stop_btn.grid_remove()  # Hide Stop
             self._rc_refresh_btn.state(["!disabled"])
-            self._rc_collect_btn.state(["!disabled"])
             self._rc_spool_btn.state(["!disabled"])
             # B10: Reset progress bar
             self._checkout_progress['value'] = 0
@@ -2341,7 +2334,6 @@ class CheckoutTab(BaseTab):
             self.stop_btn.grid()  # Show Stop
             self.stop_btn.state(["!disabled"])
             self._rc_refresh_btn.state(["!disabled"])
-            self._rc_collect_btn.state(["!disabled"])
             self._rc_spool_btn.state(["!disabled"])
 
         elif state == CheckoutState.COLLECTING:
@@ -2350,7 +2342,6 @@ class CheckoutTab(BaseTab):
             self.stop_btn.grid()  # Show Stop (to allow stopping collection)
             self.stop_btn.state(["!disabled"])
             self._rc_refresh_btn.state(["!disabled"])
-            self._rc_collect_btn.state(["!disabled"])
             self._rc_spool_btn.state(["!disabled"])
             # Reset progress bar — will be driven by on_rc_progress_update()
             self._checkout_progress['value'] = 0
@@ -2360,7 +2351,6 @@ class CheckoutTab(BaseTab):
             self.stop_btn.grid()  # Show Stop (disabled)
             self.stop_btn.state(["disabled"])
             self._rc_refresh_btn.state(["!disabled"])
-            self._rc_collect_btn.state(["disabled"])
             self._rc_spool_btn.state(["disabled"])
 
         elif state == CheckoutState.COMPLETED:
@@ -2368,7 +2358,6 @@ class CheckoutTab(BaseTab):
             self.checkout_btn.state(["!disabled"])
             self.stop_btn.grid_remove()  # Hide Stop
             self._rc_refresh_btn.state(["!disabled"])
-            self._rc_collect_btn.state(["!disabled"])
             self._rc_spool_btn.state(["!disabled"])
             # B10: Fill progress bar to 100% on success
             self._checkout_progress['value'] = 100
@@ -2378,7 +2367,6 @@ class CheckoutTab(BaseTab):
             self.checkout_btn.state(["!disabled"])
             self.stop_btn.grid_remove()  # Hide Stop
             self._rc_refresh_btn.state(["!disabled"])
-            self._rc_collect_btn.state(["!disabled"])
             self._rc_spool_btn.state(["!disabled"])
             # Reset progress bar on error — no misleading green bar
             self._checkout_progress['value'] = 0
@@ -2396,25 +2384,6 @@ class CheckoutTab(BaseTab):
                 rc.refresh_status()
             else:
                 self.log("⚠ Result collector is not running.")
-
-    def _rc_collect_selected(self):
-        """Manually collect files for selected MIDs."""
-        selected = self._rc_tree.selection()
-        if not selected:
-            messagebox.showinfo("Info", "Select one or more MIDs to collect.")
-            return
-        controller = self.context.controller
-        if not controller or not hasattr(controller, "result_controller"):
-            return
-        rc = controller.result_controller
-        if not rc or not rc.is_running():
-            self.log("⚠ Result collector is not running.")
-            return
-        for item_id in selected:
-            values = self._rc_tree.item(item_id, "values")
-            mid = values[0] if values else ""
-            if mid:
-                rc.collect_single(mid)
 
     def _rc_spool_selected(self):
         """Manually spool summary for selected MIDs."""
@@ -2486,7 +2455,7 @@ class CheckoutTab(BaseTab):
             else:
                 loc_str = "P0D0"
             name_str = dut if dut else mid
-            mids_lines.append(f"{mid}  {loc_str}  {name_str}  False")
+            mids_lines.append(f"{mid}  {loc_str}  {name_str}  True")
 
         if not mids_lines:
             self.log("⚠ No MIDs found in profile table — skipping auto-detect.")

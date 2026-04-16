@@ -91,7 +91,7 @@ class ValidationTab(BaseTab):
             self.unlock_gui()
             return
 
-        self.context.controller.validation_controller.generate_validation(
+        self.context.controller.validation_controller.assess_risks(
             issue_key, self._on_validation_generated)
 
     def _on_validation_generated(self, result):
@@ -103,7 +103,7 @@ class ValidationTab(BaseTab):
             self.log(f"✗ Validation generation failed: {error}")
             return
 
-        risk_assessment = result.get('risk_assessment', '')
+        risk_assessment = result.get('assessment', '')
         template_file = result.get('template_file', '')
         issue_key = self.context.get_var('issue_var').get().strip().upper()
 
