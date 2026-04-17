@@ -13,6 +13,7 @@ Tab order:
   6. 🧪 Test Scenarios      (view/tabs/test_scenarios_tab.py)
   7. ⚙️ Compile & Checkout  (view/tabs/compile_checkout_tab.py) ← Combined tab with sub-tabs
   8. 📋 Validation & Risk   (view/tabs/validation_tab.py)
+  9. ✅ PR Review            (view/tabs/pr_review_tab.py)       ← PR Approval pipeline
 
 Compile & Checkout is a combined tab containing TP Compilation and Checkout as sub-tabs.
 Result collection (Task 2) is embedded as Section 6 inside CheckoutTab.
@@ -32,6 +33,7 @@ from view.tabs.implementation_tab import ImplementationTab
 from view.tabs.test_scenarios_tab import TestScenariosTab
 from view.tabs.compile_checkout_tab import CompileCheckoutTab
 from view.tabs.validation_tab import ValidationTab
+from view.tabs.pr_review_tab import PRReviewTab
 from context import AppContext
 
 logger = logging.getLogger("bento_app")
@@ -63,6 +65,7 @@ class BentoApp:
     test_scenarios_tab:    TestScenariosTab
     compile_checkout_tab:  CompileCheckoutTab
     validation_tab:        ValidationTab
+    pr_review_tab:         PRReviewTab
 
     # ──────────────────────────────────────────────────────────────────────
     def __init__(self, root, controller, config, app_title, app_version):
@@ -237,6 +240,8 @@ class BentoApp:
         self.compile_checkout_tab  = CompileCheckoutTab(self.notebook, self.context)
         # 8. Validation & Risk (Phase 3B)
         self.validation_tab        = ValidationTab(self.notebook, self.context)
+        # 9. PR Review (PR Approval pipeline)
+        self.pr_review_tab         = PRReviewTab(self.notebook, self.context)
 
     # ──────────────────────────────────────────────────────────────────────
     # LOG PANEL
