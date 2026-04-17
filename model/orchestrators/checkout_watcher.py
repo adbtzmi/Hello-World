@@ -2199,19 +2199,21 @@ def copy_selected_files(scan_results, selected_keys, dest_dir, logger,
             fname = os.path.basename(src_path)
 
             # ── Rename with P{x}D{y}_ prefix ────────────────────────────
-            # When rename_prefix is set (flat mode / IBIR), rename files so
-            # downstream tools can find them consistently:
+            # When rename_prefix is set (flat mode / IBIR), rename ALL
+            # collected files with the prefix so downstream tools can
+            # identify which primitive/DUT each file belongs to:
             #   DispatcherDebug*.txt → P{x}D{y}_TraceFile.txt
             #   resultsManager.db   → P{x}D{y}_resultsManager.db
-            if rename_prefix and key == "dispatcher_debug":
-                dest_fname = rename_prefix + "TraceFile.txt"
-                logger.info(
-                    "[Manifest] Renaming " + fname
-                    + " -> " + dest_fname
-                    + " (prefix=" + rename_prefix + ")"
-                )
-            elif rename_prefix and key == "results_db":
-                dest_fname = rename_prefix + fname
+            #   summary.zip         → P{x}D{y}_summary.zip
+            #   Tracefile.txt       → P{x}D{y}_TraceFile.txt
+            #   (any other file)    → P{x}D{y}_{original name}
+            if rename_prefix:
+                if key == "dispatcher_debug":
+                    dest_fname = rename_prefix + "TraceFile.txt"
+                elif key == "tracefile":
+                    dest_fname = rename_prefix + "TraceFile.txt"
+                else:
+                    dest_fname = rename_prefix + fname
                 logger.info(
                     "[Manifest] Renaming " + fname
                     + " -> " + dest_fname
