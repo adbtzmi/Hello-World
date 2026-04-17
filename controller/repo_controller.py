@@ -199,12 +199,13 @@ class RepoController:
                         }))
             
             except Exception as e:
-                logger.error(f"clone_repo error: {e}")
-                self.context.log(f"✗ Error cloning repository: {e}")
+                error_msg = str(e)
+                logger.error(f"clone_repo error: {error_msg}")
+                self.context.log(f"✗ Error cloning repository: {error_msg}")
                 if callback:
-                    self.context.root.after(0, lambda: callback({
+                    self.context.root.after(0, lambda _m=error_msg: callback({
                         'success': False,
-                        'error': str(e)
+                        'error': _m
                     }))
             finally:
                 self._running = False
@@ -282,12 +283,13 @@ class RepoController:
                         }))
             
             except Exception as e:
-                logger.error(f"create_feature_branch error: {e}")
-                self.context.log(f"✗ Error creating feature branch: {e}")
+                error_msg = str(e)
+                logger.error(f"create_feature_branch error: {error_msg}")
+                self.context.log(f"✗ Error creating feature branch: {error_msg}")
                 if callback:
-                    self.context.root.after(0, lambda: callback({
+                    self.context.root.after(0, lambda _m=error_msg: callback({
                         'success': False,
-                        'error': str(e)
+                        'error': _m
                     }))
             finally:
                 self._running = False

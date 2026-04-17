@@ -136,12 +136,13 @@ class TestController:
                         self.context.root.after(0, lambda: callback(test_scenarios))
             
             except Exception as e:
-                logger.error(f"generate_tests error: {e}")
-                self.context.log(f"✗ Error generating tests: {e}")
+                error_msg = str(e)
+                logger.error(f"generate_tests error: {error_msg}")
+                self.context.log(f"✗ Error generating tests: {error_msg}")
                 if callback:
-                    self.context.root.after(0, lambda: callback({
+                    self.context.root.after(0, lambda _m=error_msg: callback({
                         'success': False,
-                        'error': str(e)
+                        'error': _m
                     }))
             finally:
                 self._running = False

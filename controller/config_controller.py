@@ -51,10 +51,11 @@ class ConfigController:
                     self._context.root.after(0, lambda: callback(results))
                     
             except Exception as e:
-                logger.error(f"ConfigController.test_config: {e}")
+                error_msg = str(e)
+                logger.error(f"ConfigController.test_config: {error_msg}")
                 if callback:
-                    self._context.root.after(0, lambda: callback({
-                        'error': str(e)
+                    self._context.root.after(0, lambda _m=error_msg: callback({
+                        'error': _m
                     }))
             finally:
                 self._running = False

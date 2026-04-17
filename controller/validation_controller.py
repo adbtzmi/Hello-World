@@ -147,10 +147,9 @@ class ValidationController:
         # Resolve AI client if available
         ai_client = None
         try:
-            controller = self.context.controller
-            if hasattr(controller, '_ai_client'):
-                ai_client = controller._ai_client
-            elif hasattr(self.context, 'ai_client'):
+            if hasattr(self.analyzer, 'ai_client') and self.analyzer.ai_client:
+                ai_client = self.analyzer.ai_client
+            elif hasattr(self.context, 'ai_client') and self.context.ai_client:
                 ai_client = self.context.ai_client
         except Exception:
             pass
