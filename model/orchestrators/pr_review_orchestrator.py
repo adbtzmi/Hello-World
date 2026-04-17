@@ -412,7 +412,7 @@ def search_bitbucket_users(
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
 
-        with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+        with urllib.request.urlopen(req, context=ctx, timeout=20) as resp:
             data = json.loads(resp.read().decode())
 
         users = []

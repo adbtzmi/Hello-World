@@ -118,7 +118,7 @@ class AIGatewayClient:
         """Load AI mode definitions from ai_modes.json"""
         try:
             if os.path.exists(modes_file):
-                with open(modes_file, 'r') as f:
+                with open(modes_file, 'r', encoding='utf-8') as f:
                     self._modes_data = json.load(f)
                     return self._modes_data.get('modes', {})
             else:
