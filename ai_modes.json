@@ -3,7 +3,7 @@
   "_usage": "Each prompt key in config.json maps to a mode key here. The 'system_prompt' is sent as the system/role message to the AI before the user prompt.",
   "models": {
     "analysis": {
-      "name": "gemini-3.0-pro-preview",
+      "name": "gemini-2.5-pro",
       "temperature": 0.7,
       "max_tokens": 2000
     },
