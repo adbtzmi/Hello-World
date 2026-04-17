@@ -2417,7 +2417,9 @@ class CheckoutTab(BaseTab):
                 loc_str = f"P{prim}D0"
             else:
                 loc_str = "P0D0"
-            name_str = dut if dut else mid
+            # Item 17: Use MID serial as the name (more descriptive than DUT number)
+            lot = row.get("LOT", row.get("lot", "")).strip()
+            name_str = f"{lot}_{mid}" if lot else mid
             mids_lines.append(f"{mid}  {loc_str}  {name_str}  True")
 
         if not mids_lines:

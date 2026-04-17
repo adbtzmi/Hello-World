@@ -14,6 +14,7 @@ attachment through PR merge and JIRA closure.
 """
 
 import os
+import webbrowser
 import tkinter as tk
 from tkinter import ttk, scrolledtext, filedialog, messagebox
 from view.tabs.base_tab import BaseTab
@@ -125,12 +126,16 @@ class PRReviewTab(BaseTab):
             row=row, column=2, sticky=tk.W, padx=5)
         row += 1
 
-        # Reviewers
+        # Reviewers (Item 16: Combobox with suggestions from settings)
         ttk.Label(config_frame, text="Reviewers:").grid(
             row=row, column=0, sticky=tk.W, pady=3)
         self._reviewers_var = tk.StringVar(value="")
-        ttk.Entry(config_frame, textvariable=self._reviewers_var,
-                  width=50).grid(row=row, column=1, columnspan=2, sticky="we", pady=3, padx=5)
+        reviewer_suggestions = self._load_reviewer_suggestions()
+        self._reviewers_combo = ttk.Combobox(
+            config_frame, textvariable=self._reviewers_var,
+            values=reviewer_suggestions, width=48)
+        self._reviewers_combo.grid(
+            row=row, column=1, columnspan=2, sticky="we", pady=3, padx=5)
         ttk.Label(config_frame, text="(Comma-separated Bitbucket usernames)",
                   font=('Arial', 8), foreground='gray').grid(
             row=row, column=3, sticky=tk.W, padx=5)
@@ -294,6 +299,8 @@ class PRReviewTab(BaseTab):
 
         ttk.Button(pr_info_frame, text="📋 Copy URL",
                    command=self._copy_pr_url).pack(side=tk.LEFT, padx=5)
+        ttk.Button(pr_info_frame, text="🌐 Open",
+                   command=self._open_pr_in_browser).pack(side=tk.LEFT, padx=2)
 
         # Configure grid weights
         parent.columnconfigure(0, weight=1)
@@ -493,6 +500,15 @@ class PRReviewTab(BaseTab):
             self.root.clipboard_append(url)
             self.show_info("Copied", f"PR URL copied to clipboard:\n{url}")
 
+    def _open_pr_in_browser(self):
+        """Item 20: Open PR URL in the default web browser."""
+        url = self._pr_url_var.get()
+        if url and url != "(none)":
+            webbrowser.open(url)
+        else:
+            self.show_info("No URL", "No PR URL available yet.\n"
+                           "Run the pipeline first to create a PR.")
+
     # ══════════════════════════════════════════════════════════════════════
     # CALLBACKS
     # ══════════════════════════════════════════════════════════════════════
@@ -506,6 +522,12 @@ class PRReviewTab(BaseTab):
             pr_url = result.get("pr_url", "")
             if pr_url:
                 self._pr_url_var.set(pr_url)
+
+            # Item 15: Mark all phases ✅ on success
+            for lbl in self._phase_steps:
+                text = lbl.cget("text")
+                clean = text.lstrip("⬜✅🔄❌ ")
+                lbl.config(text=f"✅ {clean}", foreground='green')
 
             self._append_status(f"\n{'='*60}")
             self._append_status(f"  ✅ PIPELINE COMPLETE")
@@ -521,6 +543,20 @@ class PRReviewTab(BaseTab):
         else:
             error = result.get("error", "Unknown error")
             phases = result.get("phases_completed", [])
+
+            # Item 15: Mark completed phases ✅ and failed phase ❌
+            total_phases = len(self._phase_steps)
+            completed_count = len(phases)
+            for i, lbl in enumerate(self._phase_steps):
+                text = lbl.cget("text")
+                # Strip existing indicator prefix
+                clean = text.lstrip("⬜✅🔄❌ ")
+                if i < completed_count:
+                    lbl.config(text=f"✅ {clean}", foreground='green')
+                elif i == completed_count and i < total_phases:
+                    lbl.config(text=f"❌ {clean}", foreground='red')
+                else:
+                    lbl.config(text=f"⬜ {clean}", foreground='gray')
 
             self._append_status(f"\n{'='*60}")
             self._append_status(f"  ❌ PIPELINE FAILED")
@@ -697,3 +733,24 @@ class PRReviewTab(BaseTab):
         if not current_msg or current_msg.startswith("[") and current_msg.endswith("]"):
             if issue_key and not issue_key.endswith("-"):
                 self._commit_msg_var.set(f"[{issue_key}] Validation updates")
+
+    def _load_reviewer_suggestions(self):
+        """Item 16: Load reviewer suggestions from settings.json.
+
+        Reads 'pr_review.reviewers' list from settings.  Falls back to an
+        empty list if the key is missing or the file cannot be read.
+        """
+        try:
+            import json
+            settings_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..", "..", "settings.json"
+            )
+            with open(settings_path, "r") as f:
+                cfg = json.load(f)
+            reviewers = cfg.get("pr_review", {}).get("reviewers", [])
+            if isinstance(reviewers, list):
+                return reviewers
+        except Exception:
+            pass
+        return []

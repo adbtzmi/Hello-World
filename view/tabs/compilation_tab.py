@@ -24,6 +24,11 @@ UX Improvements Applied:
 
 import os
 import re
+import json
+import glob
+import time
+import datetime
+import threading
 import tkinter as tk
 from tkinter import ttk, scrolledtext, filedialog, messagebox
 import logging
@@ -363,6 +368,8 @@ class CompilationTab(BaseTab):
 
         # Add double-click handler to open the specific folder
         self._history_tree.bind("<Double-1>", lambda e: self._open_release_folder())
+        # Item 19: Right-click context menu for copy
+        self._history_tree.bind("<Button-3>", self._history_context_menu)
 
         self._history_tree.grid(row=1, column=0, sticky="nsew")
         hist_scroll.grid(row=1, column=1, sticky="ns")
@@ -864,7 +871,6 @@ class CompilationTab(BaseTab):
 
         if messagebox.askyesno("Remove Tester(s)", msg):
             # Load current registry to delete correctly
-            import json, os
             registry_path = self.context.config.get("registry_path", r"P:\temp\BENTO\bento_testers.json")
             registry_data = {}
             if os.path.exists(registry_path):
@@ -908,28 +914,22 @@ class CompilationTab(BaseTab):
     def _save_tester_registry(self, registry_data=None):
         """
         Persist tester list to bento_testers.json (both local and shared).
-        Directly ports the logic from legacy app.py.
+
+        Item 18: When ``registry_data`` is None, we now read the existing
+        registry from disk and preserve all original fields instead of
+        reconstructing from the listbox with hardcoded defaults.
         """
-        import json, os
         registry_path = self.context.config.get("registry_path", r"P:\temp\BENTO\bento_testers.json")
         try:
             os.makedirs(os.path.dirname(registry_path), exist_ok=True)
 
-            # If we didn't get explicit data, we reconstruct from listbox (legacy behavior for removals)
             if registry_data is None:
-                registry_data = {}
-                for i in range(self._tester_listbox.size()):
-                    item = self._tester_listbox.get(i)
-                    if " (" in item and item.endswith(")"):
-                        hostname, env = item.split(" (", 1)
-                        env = env[:-1]
-                        # Use defaults for legacy fields if reconstructing from listbox
-                        registry_data[item] = {
-                            "hostname": hostname,
-                            "env": env,
-                            "repo_dir": r"C:\BENTO\adv_ibir_master",
-                            "build_cmd": "make release"
-                        }
+                # Read existing registry to preserve original values
+                if os.path.exists(registry_path):
+                    with open(registry_path, "r") as f:
+                        registry_data = json.load(f)
+                else:
+                    registry_data = {}
 
             with open(registry_path, "w") as f:
                 json.dump(registry_data, f, indent=4)
@@ -1075,10 +1075,6 @@ class CompilationTab(BaseTab):
 
     def _refresh_health(self):
         import os
-        import time
-        import json
-        import datetime
-
         raw_zip = self.context.get_var("compile_raw_zip").get().strip()
         release_tgz = self.context.get_var("compile_release_tgz").get().strip()
 
@@ -1086,12 +1082,11 @@ class CompilationTab(BaseTab):
         # falling back to a sensible default if nothing is selected.
         repo_dir = r"C:\BENTO\adv_ibir_master"
         try:
-            import json as _json
             registry_path = self.context.config.get(
                 "registry_path", r"P:\temp\BENTO\bento_testers.json")
             if os.path.exists(registry_path):
                 with open(registry_path, "r") as _rf:
-                    _reg = _json.load(_rf)
+                    _reg = json.load(_rf)
                 # Try the currently selected tester first
                 sel = self._tester_listbox.curselection()
                 if sel:
@@ -1258,7 +1253,6 @@ class CompilationTab(BaseTab):
         if not tgz_file:
             tgz_file = f"{status} ({elapsed}s)"
 
-        import datetime
         ts = datetime.datetime.now().strftime("%H:%M:%S")
         # A12: Columns now include Status: ("Timestamp", "Status", "JIRA", "Tester", "ENV", "Label", "Output TGZ")
         # Only failures get a color tag; SUCCESS stays default black
@@ -1307,6 +1301,38 @@ class CompilationTab(BaseTab):
             text = c + (arrow if c == col else "")
             self._history_tree.heading(c, text=text,
                                        command=lambda c=c: self._sort_history(c))
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Item 19: RIGHT-CLICK CONTEXT MENU FOR COMPILE HISTORY
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _history_context_menu(self, event):
+        """Show a right-click context menu with Copy Row option."""
+        item_id = self._history_tree.identify_row(event.y)
+        if not item_id:
+            return
+        self._history_tree.selection_set(item_id)
+
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="📋 Copy Row", command=self._copy_history_row)
+        menu.add_command(label="📂 Open Folder", command=self._open_release_folder)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _copy_history_row(self):
+        """Copy the selected history row to clipboard as tab-separated text."""
+        selected = self._history_tree.selection()
+        if not selected:
+            return
+        values = self._history_tree.item(selected[0], "values")
+        cols = ("Timestamp", "Status", "JIRA", "Tester", "ENV", "Label", "Output TGZ")
+        lines = ["\t".join(cols), "\t".join(str(v) for v in values)]
+        text = "\n".join(lines)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.log("📋 History row copied to clipboard")
 
     # ──────────────────────────────────────────────────────────────────────
     # COMPILE HISTORY LOGIC
@@ -1389,10 +1415,6 @@ class CompilationTab(BaseTab):
 
     def _refresh_history_from_disk(self):
         """Matches original _load() logic in gui/app.py."""
-        import glob
-        import os
-        import threading
-
         release_root = self.context.get_var("compile_release_tgz").get().strip()
         if not os.path.isdir(release_root):
             return
@@ -1655,7 +1677,6 @@ class AddTesterDialog:
 
         key = f"{hostname} ({env})"
 
-        import json, os
         registry_path = self.parent_tab.context.config.get("registry_path", r"P:\temp\BENTO\bento_testers.json")
         registry_data = {}
         if os.path.exists(registry_path):

@@ -47,6 +47,9 @@
     "auto_cleanup": true,
     "temp_dir": ""
   },
+  "pr_review": {
+    "reviewers": []
+  },
   "registry_path": "P:\\temp\\BENTO\\bento_testers.json",
   "encryption": {
     "enabled": false,
