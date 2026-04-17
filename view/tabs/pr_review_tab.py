@@ -126,17 +126,35 @@ class PRReviewTab(BaseTab):
             row=row, column=2, sticky=tk.W, padx=5)
         row += 1
 
-        # Reviewers (Item 16: Combobox with suggestions from settings)
+        # Reviewers (Item 16: Autocomplete with Bitbucket API + settings fallback)
         ttk.Label(config_frame, text="Reviewers:").grid(
             row=row, column=0, sticky=tk.W, pady=3)
         self._reviewers_var = tk.StringVar(value="")
-        reviewer_suggestions = self._load_reviewer_suggestions()
-        self._reviewers_combo = ttk.Combobox(
-            config_frame, textvariable=self._reviewers_var,
-            values=reviewer_suggestions, width=48)
-        self._reviewers_combo.grid(
+
+        # Frame to hold the entry + dropdown listbox
+        reviewer_frame = ttk.Frame(config_frame)
+        reviewer_frame.grid(
             row=row, column=1, columnspan=2, sticky="we", pady=3, padx=5)
-        ttk.Label(config_frame, text="(Comma-separated Bitbucket usernames)",
+        reviewer_frame.columnconfigure(0, weight=1)
+
+        self._reviewers_entry = ttk.Entry(
+            reviewer_frame, textvariable=self._reviewers_var, width=48)
+        self._reviewers_entry.grid(row=0, column=0, sticky="we")
+
+        # Autocomplete dropdown (Listbox in a Toplevel — floats over the UI)
+        self._ac_listbox: tk.Listbox | None = None
+        self._ac_toplevel: tk.Toplevel | None = None
+        self._ac_debounce_id: str | None = None
+        self._ac_display_map: dict = {}
+
+        # Bind keystrokes for autocomplete
+        self._reviewers_entry.bind("<KeyRelease>", self._on_reviewer_key)
+        self._reviewers_entry.bind("<FocusOut>", self._hide_autocomplete)
+        self._reviewers_entry.bind("<Escape>", self._hide_autocomplete)
+        self._reviewers_entry.bind("<Down>", self._ac_focus_listbox)
+        self._reviewers_entry.bind("<Return>", self._ac_select_current)
+
+        ttk.Label(config_frame, text="(Type to search Bitbucket users)",
                   font=('Arial', 8), foreground='gray').grid(
             row=row, column=3, sticky=tk.W, padx=5)
         row += 1
@@ -523,6 +541,9 @@ class PRReviewTab(BaseTab):
             if pr_url:
                 self._pr_url_var.set(pr_url)
 
+            # Item 16: Save used reviewers to settings.json for future fallback
+            self._save_used_reviewers()
+
             # Item 15: Mark all phases ✅ on success
             for lbl in self._phase_steps:
                 text = lbl.cget("text")
@@ -623,6 +644,8 @@ class PRReviewTab(BaseTab):
             pr_id = result.get("pr_id", "")
             pr_url = result.get("pr_url", "")
             self._pr_url_var.set(pr_url)
+            # Item 16: Save used reviewers to settings.json for future fallback
+            self._save_used_reviewers()
             self._append_status(f"✓ PR #{pr_id} created: {pr_url}")
             self.show_info("PR Created",
                           f"Pull Request #{pr_id} created!\n\n{pr_url}")
@@ -733,6 +756,186 @@ class PRReviewTab(BaseTab):
         if not current_msg or current_msg.startswith("[") and current_msg.endswith("]"):
             if issue_key and not issue_key.endswith("-"):
                 self._commit_msg_var.set(f"[{issue_key}] Validation updates")
+
+    def _save_used_reviewers(self):
+        """Item 16: Save the current reviewers to settings.json via controller.
+
+        Called after successful PR creation so that used reviewers appear
+        in the static fallback list for future autocomplete.
+        """
+        try:
+            reviewers_str = self._reviewers_var.get().strip()
+            reviewers = [r.strip() for r in reviewers_str.split(",") if r.strip()]
+            if reviewers:
+                ctrl = self._get_controller()
+                if ctrl:
+                    ctrl.save_recent_reviewers(reviewers)
+        except Exception:
+            pass
+
+    # ──────────────────────────────────────────────────────────────────────
+    # REVIEWER AUTOCOMPLETE (Item 16)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _on_reviewer_key(self, event):
+        """Handle keystrokes in the reviewers Entry with 300ms debounce.
+
+        Supports multi-token input (comma-separated usernames).  Only the
+        text after the last comma is used as the search query.
+        """
+        # Ignore navigation / modifier keys
+        if event.keysym in ("Down", "Up", "Left", "Right", "Escape",
+                            "Return", "Tab", "Shift_L", "Shift_R",
+                            "Control_L", "Control_R", "Alt_L", "Alt_R"):
+            return
+
+        # Cancel any pending debounce
+        if self._ac_debounce_id is not None:
+            self.root.after_cancel(self._ac_debounce_id)
+            self._ac_debounce_id = None
+
+        # Extract the current token (text after last comma)
+        full_text = self._reviewers_var.get()
+        parts = full_text.split(",")
+        current_token = parts[-1].strip()
+
+        if len(current_token) < 2:
+            self._hide_autocomplete()
+            return
+
+        # Schedule the API call after 300ms debounce
+        self._ac_debounce_id = self.root.after(
+            300, lambda: self._fire_autocomplete(current_token)
+        )
+
+    def _fire_autocomplete(self, query: str):
+        """Send the autocomplete query to the controller."""
+        ctrl = self._get_controller()
+        if not ctrl:
+            return
+        ctrl.fetch_reviewer_suggestions(query, self._show_autocomplete)
+
+    def _show_autocomplete(self, results):
+        """Callback from controller — display the autocomplete dropdown.
+
+        Args:
+            results: list of dicts with 'username', 'display_name', 'email'.
+        """
+        # Tear down any existing dropdown
+        self._destroy_autocomplete()
+
+        if not results:
+            return
+
+        # Create a Toplevel that floats over the entry
+        entry = self._reviewers_entry
+        x = entry.winfo_rootx()
+        y = entry.winfo_rooty() + entry.winfo_height()
+
+        top = tk.Toplevel(self.root)
+        top.wm_overrideredirect(True)
+        top.wm_geometry(f"+{x}+{y}")
+        top.lift()
+
+        listbox = tk.Listbox(
+            top, width=60, height=min(len(results), 8),
+            font=("Consolas", 9), selectmode=tk.SINGLE,
+        )
+        listbox.pack(fill=tk.BOTH, expand=True)
+
+        self._ac_display_map = {}  # display_text -> username
+        for item in results:
+            uname = item.get("username", "")
+            dname = item.get("display_name", "")
+            email = item.get("email", "")
+            display = f"{uname}  —  {dname}"
+            if email:
+                display += f"  ({email})"
+            listbox.insert(tk.END, display)
+            self._ac_display_map[display] = uname
+
+        listbox.bind("<ButtonRelease-1>", self._ac_on_click)
+        listbox.bind("<Return>", self._ac_on_listbox_return)
+        listbox.bind("<Escape>", self._hide_autocomplete)
+
+        if listbox.size() > 0:
+            listbox.selection_set(0)
+
+        self._ac_toplevel = top
+        self._ac_listbox = listbox
+
+    def _destroy_autocomplete(self):
+        """Destroy the autocomplete Toplevel if it exists."""
+        if self._ac_toplevel is not None:
+            try:
+                self._ac_toplevel.destroy()
+            except Exception:
+                pass
+            self._ac_toplevel = None
+            self._ac_listbox = None
+
+    def _hide_autocomplete(self, event=None):
+        """Hide the autocomplete dropdown (bound to FocusOut / Escape)."""
+        # Small delay so click events on the listbox can fire first
+        self.root.after(150, self._destroy_autocomplete)
+
+    def _ac_focus_listbox(self, event=None):
+        """Move focus into the autocomplete listbox (Down arrow)."""
+        if self._ac_listbox is not None:
+            self._ac_listbox.focus_set()
+            if not self._ac_listbox.curselection():
+                self._ac_listbox.selection_set(0)
+            return "break"
+
+    def _ac_select_current(self, event=None):
+        """Select the currently highlighted listbox item (Return in entry)."""
+        if self._ac_listbox is not None and self._ac_listbox.curselection():
+            self._ac_insert_selection(self._ac_listbox.curselection()[0])
+            return "break"
+
+    def _ac_on_click(self, event):
+        """Handle mouse click on a listbox item."""
+        if self._ac_listbox is None:
+            return
+        sel = self._ac_listbox.nearest(event.y)
+        if sel >= 0:
+            self._ac_insert_selection(sel)
+
+    def _ac_on_listbox_return(self, event):
+        """Handle Return key inside the listbox."""
+        if self._ac_listbox is None:
+            return "break"
+        sel = self._ac_listbox.curselection()
+        if sel:
+            self._ac_insert_selection(sel[0])
+        return "break"
+
+    def _ac_insert_selection(self, index: int):
+        """Insert the selected username into the entry, replacing the
+        current token (text after the last comma)."""
+        if self._ac_listbox is None:
+            return
+
+        display_text = self._ac_listbox.get(index)
+        username = self._ac_display_map.get(display_text, display_text)
+
+        full_text = self._reviewers_var.get()
+        parts = [p.strip() for p in full_text.split(",")]
+
+        # Replace the last (incomplete) token with the selected username
+        if parts:
+            parts[-1] = username
+        else:
+            parts = [username]
+
+        # Rebuild with trailing comma+space so user can type the next reviewer
+        self._reviewers_var.set(", ".join(parts) + ", ")
+
+        # Move cursor to end
+        self._reviewers_entry.icursor(tk.END)
+        self._reviewers_entry.focus_set()
+
+        self._destroy_autocomplete()
 
     def _load_reviewer_suggestions(self):
         """Item 16: Load reviewer suggestions from settings.json.

@@ -16,9 +16,11 @@ All long-running operations run in background threads.
 UI updates are dispatched via root.after() for thread safety.
 """
 
+import json
 import logging
 import os
 import threading
+import time
 from typing import Callable, Dict, List, Optional
 
 from model.orchestrators.pr_review_orchestrator import (
@@ -33,6 +35,7 @@ from model.orchestrators.pr_review_orchestrator import (
     git_get_diff_summary,
     merge_pull_request,
     run_full_pr_pipeline,
+    search_bitbucket_users,
     send_pr_review_notification,
     transition_jira_issue,
 )
@@ -59,6 +62,9 @@ class PRReviewController:
         self._cancel_event = threading.Event()
         self._current_pr_id: Optional[int] = None
         self._current_pr_url: Optional[str] = None
+        # Reviewer autocomplete cache: {query: (timestamp, results)}
+        self._reviewer_cache: Dict[str, tuple] = {}
+        self._reviewer_cache_ttl = 300  # 5 minutes
         logger.info("PRReviewController initialised.")
 
     def is_running(self) -> bool:
@@ -320,6 +326,144 @@ class PRReviewController:
                 "success": False,
                 "error": "Validation controller not available"
             })
+
+    # ──────────────────────────────────────────────────────────────────────
+    # REVIEWER AUTOCOMPLETE
+    # ──────────────────────────────────────────────────────────────────────
+
+    def fetch_reviewer_suggestions(
+        self, query: str, callback: Optional[Callable] = None
+    ):
+        """
+        Search Bitbucket users matching *query* (async, with caching).
+
+        Calls the Bitbucket REST API in a background thread.  Results are
+        cached for ``_reviewer_cache_ttl`` seconds to avoid repeated calls
+        for the same prefix.
+
+        Falls back to filtering the static list from settings.json when
+        Bitbucket credentials are not configured.
+
+        Args:
+            query:    Search string (min 2 chars).
+            callback: Called on the main thread with a list of
+                      ``{"username": ..., "display_name": ..., "email": ...}``
+                      dicts.
+        """
+        if not query or len(query) < 2:
+            if callback:
+                self.context.root.after(0, lambda: callback([]))
+            return
+
+        query_lower = query.lower().strip()
+
+        # ── Check cache ────────────────────────────────────────────────
+        cached = self._reviewer_cache.get(query_lower)
+        if cached:
+            ts, results = cached
+            if time.time() - ts < self._reviewer_cache_ttl:
+                if callback:
+                    self.context.root.after(0, lambda r=results: callback(r))
+                return
+
+        def _work():
+            try:
+                bb_url, bb_user, bb_token = self._get_bitbucket_creds()
+
+                if bb_url and bb_user and bb_token:
+                    # ── Live Bitbucket API search ──────────────────────
+                    results = search_bitbucket_users(
+                        query_lower, bb_url, bb_user, bb_token,
+                        limit=25, log_callback=None,
+                    )
+                else:
+                    # ── Fallback: filter static list from settings.json ─
+                    results = self._filter_static_reviewers(query_lower)
+
+                # Cache the results
+                self._reviewer_cache[query_lower] = (time.time(), results)
+
+                if callback:
+                    self.context.root.after(0, lambda r=results: callback(r))
+
+            except Exception as e:
+                logger.warning(f"Reviewer search failed: {e}")
+                # Fallback to static list on any error
+                results = self._filter_static_reviewers(query_lower)
+                if callback:
+                    self.context.root.after(0, lambda r=results: callback(r))
+
+        threading.Thread(
+            target=_work, daemon=True, name="bento-reviewer-search"
+        ).start()
+
+    def _filter_static_reviewers(self, query: str) -> List[Dict]:
+        """
+        Filter the static reviewer list from settings.json by query.
+
+        Returns list of dicts matching the Bitbucket API format:
+        ``[{"username": "jdoe", "display_name": "jdoe", "email": ""}]``
+        """
+        try:
+            settings_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..", "settings.json"
+            )
+            with open(settings_path, "r") as f:
+                cfg = json.load(f)
+            reviewers = cfg.get("pr_review", {}).get("reviewers", [])
+            if not isinstance(reviewers, list):
+                reviewers = []
+        except Exception:
+            reviewers = []
+
+        return [
+            {"username": r, "display_name": r, "email": ""}
+            for r in reviewers
+            if query.lower() in r.lower()
+        ]
+
+    def save_recent_reviewers(self, reviewer_usernames: List[str]):
+        """
+        Merge *reviewer_usernames* into the ``pr_review.reviewers`` list
+        in settings.json so they appear as suggestions in future sessions.
+
+        Preserves existing entries and avoids duplicates.
+        """
+        if not reviewer_usernames:
+            return
+        try:
+            settings_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..", "settings.json"
+            )
+            with open(settings_path, "r") as f:
+                cfg = json.load(f)
+
+            existing = cfg.get("pr_review", {}).get("reviewers", [])
+            if not isinstance(existing, list):
+                existing = []
+
+            # Merge — add new usernames that aren't already in the list
+            merged = list(existing)
+            for name in reviewer_usernames:
+                name = name.strip()
+                if name and name not in merged:
+                    merged.append(name)
+
+            if "pr_review" not in cfg:
+                cfg["pr_review"] = {}
+            cfg["pr_review"]["reviewers"] = merged
+
+            with open(settings_path, "w") as f:
+                json.dump(cfg, f, indent=2)
+
+            logger.info(
+                f"Saved {len(reviewer_usernames)} reviewer(s) to settings.json: "
+                f"{', '.join(reviewer_usernames)}"
+            )
+        except Exception as e:
+            logger.warning(f"Could not save reviewers to settings.json: {e}")
 
     # ──────────────────────────────────────────────────────────────────────
     # HELPERS

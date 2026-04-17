@@ -22,6 +22,7 @@ import ssl
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
@@ -360,6 +361,77 @@ def git_get_diff_summary(
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. BITBUCKET PULL REQUEST OPERATIONS
 # ══════════════════════════════════════════════════════════════════════════════
+
+def search_bitbucket_users(
+    query: str,
+    bitbucket_base_url: str,
+    bitbucket_username: str,
+    bitbucket_token: str,
+    limit: int = 25,
+    log_callback: Optional[Callable] = None,
+) -> List[Dict[str, str]]:
+    """
+    Search Bitbucket Server users by username, display name, or email.
+
+    Uses Bitbucket REST API 1.0:
+        GET /rest/api/1.0/users?filter=<query>&limit=<limit>
+
+    Args:
+        query:              Search string (min 2 chars recommended).
+        bitbucket_base_url: e.g. "https://bitbucket.micron.com/bbdc/scm"
+        bitbucket_username: Bitbucket username for auth.
+        bitbucket_token:    Bitbucket personal access token.
+        limit:              Max results to return (default 25).
+        log_callback:       Optional logging callback.
+
+    Returns:
+        List of dicts: [{"username": "jdoe", "display_name": "John Doe",
+                         "email": "jdoe@micron.com"}, ...]
+        Returns empty list on error or if query is too short.
+    """
+    if not query or len(query) < 2:
+        return []
+
+    # Normalise base URL (strip trailing /scm if present)
+    base = bitbucket_base_url.rstrip("/")
+    if base.endswith("/scm"):
+        base = base[:-4]
+
+    url = f"{base}/rest/api/1.0/users?filter={urllib.parse.quote(query)}&limit={limit}"
+
+    try:
+        import base64
+        auth_str = f"{bitbucket_username}:{bitbucket_token}"
+        auth_b64 = base64.b64encode(auth_str.encode()).decode()
+
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("Authorization", f"Basic {auth_b64}")
+        req.add_header("Accept", "application/json")
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+
+        users = []
+        for u in data.get("values", []):
+            users.append({
+                "username": u.get("name", u.get("slug", "")),
+                "display_name": u.get("displayName", ""),
+                "email": u.get("emailAddress", ""),
+            })
+
+        _log(log_callback,
+             f"🔍 Bitbucket user search '{query}': {len(users)} result(s)")
+        return users
+
+    except Exception as e:
+        _log(log_callback,
+             f"⚠️ Bitbucket user search failed: {type(e).__name__}: {e}")
+        return []
+
 
 def create_pull_request(
     repo_slug: str,
