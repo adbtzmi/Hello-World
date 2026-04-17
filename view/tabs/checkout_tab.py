@@ -1612,10 +1612,19 @@ class CheckoutTab(BaseTab):
         # Also stop the result-collector monitoring loop (if running)
         self._rc_stop_monitoring()
 
-        # Transition to IDLE so the UI re-enables correctly.
-        # (The completion callback may never fire when the user cancels
-        #  mid-monitoring, so we set IDLE explicitly here.)
-        self._set_checkout_state(CheckoutState.IDLE)
+        # Item 9: Use a delayed fallback instead of instant IDLE transition.
+        # The completion callback (on_checkout_completed) will set COMPLETED
+        # when the orchestrator finishes cleanly.  If the callback never
+        # fires (e.g. user cancels mid-monitoring), this timeout ensures
+        # the UI doesn't stay stuck in STOPPING forever.
+        self.after(5000, self._stop_fallback_to_idle)
+
+    def _stop_fallback_to_idle(self):
+        """Transition STOPPING → IDLE after a timeout, but only if the
+        completion callback hasn't already moved us to COMPLETED/ERROR."""
+        if self._checkout_state == CheckoutState.STOPPING:
+            self.log("⏹ Stop timeout — resetting to IDLE")
+            self._set_checkout_state(CheckoutState.IDLE)
 
     def _collect_params(self):
         from model.checkout_params import (
@@ -2647,9 +2656,11 @@ class CheckoutTab(BaseTab):
         import glob as _glob
 
         # ── Guard: stop polling if user clicked Stop or started a new run ──
+        # Item 10: Removed IDLE from allowed states — manifest polling should
+        # only continue while checkout is COMPLETED or COLLECTING.  IDLE means
+        # the user stopped or a new run hasn't started yet.
         if self._checkout_state not in (
             CheckoutState.COMPLETED, CheckoutState.COLLECTING,
-            CheckoutState.IDLE,
         ):
             self.log("📋 Manifest poll cancelled (checkout state changed)")
             self._manifest_poll_count = 0

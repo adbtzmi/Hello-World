@@ -1218,8 +1218,26 @@ class CompilationTab(BaseTab):
         now_str = datetime.datetime.now().strftime("%H:%M:%S")
         self._health_last_refresh_var.set(f"Auto-refresh active · Last updated: {now_str}")
 
-        # Auto-refresh loop
-        self.after(30000, self._refresh_health)
+        # Auto-refresh loop — only when this tab is visible (Item 8)
+        self._schedule_health_refresh()
+
+    def _schedule_health_refresh(self):
+        """Schedule next health refresh only if the Compilation sub-tab is
+        currently visible.  This avoids wasted I/O when the user is on
+        another tab.  The loop re-checks every 30 s regardless, so switching
+        back to this tab will resume updates within one cycle."""
+        try:
+            parent_nb = self.master                       # sub-notebook
+            if parent_nb and hasattr(parent_nb, 'select'):
+                current_tab = parent_nb.select()          # widget path
+                if str(self) == str(current_tab):
+                    self.after(30000, self._refresh_health)
+                    return
+            # Tab not visible — check again in 30 s but skip the refresh
+            self.after(30000, self._schedule_health_refresh)
+        except Exception:
+            # Fallback: always refresh if we can't determine visibility
+            self.after(30000, self._refresh_health)
 
     # ──────────────────────────────────────────────────────────────────────
     # VIEW CALLBACKS
@@ -1295,6 +1313,13 @@ class CompilationTab(BaseTab):
     # ──────────────────────────────────────────────────────────────────────
 
     def _open_release_folder(self):
+        """Open the release folder for the selected history row.
+
+        Item 13: Uses the Output TGZ path from the tree row to locate the
+        actual folder on disk, instead of guessing the folder name from
+        tester/jira/env columns (which may not match the real directory).
+        Falls back to a fuzzy search when the TGZ path is unavailable.
+        """
         import os
 
         # Get the selected item from the history tree
@@ -1313,36 +1338,51 @@ class CompilationTab(BaseTab):
         values = self._history_tree.item(item_id, "values")
 
         # A12: Column indices shifted by 1 due to new Status column
-        tester = values[3]      # Index 3 is the "Tester" column
-        env = values[4]          # Index 4 is the "ENV" column
-        output_tgz = values[6]  # Index 6 is the "Output TGZ" column
+        tester   = values[3]    # Index 3 is the "Tester" column
+        env      = values[4]    # Index 4 is the "ENV" column
         jira_key = values[2]    # Index 2 is the "JIRA" column
-        folder_name = f"{tester}_{jira_key}_{env}"
+        output_tgz = values[6]  # Index 6 is the "Output TGZ" column
 
         # Get the base RELEASE_TGZ directory
         base_dir = self.context.get_var("compile_release_tgz").get().strip()
 
-        # Look for a matching folder
         target_dir = None
-        if os.path.isdir(base_dir):
-            # First try the exact folder name
-            potential_dir = os.path.join(base_dir, folder_name)
-            if os.path.isdir(potential_dir):
-                target_dir = potential_dir
-            else:
-                # Try to find a folder that starts with the tester name
+
+        # Strategy 1: Derive folder from the Output TGZ path stored in the row.
+        # The TGZ file lives inside the release subfolder, so its parent is
+        # the folder we want to open.
+        if output_tgz and output_tgz.strip():
+            tgz_path = output_tgz.strip()
+            # If it's an absolute path, use its parent directly
+            if os.path.isabs(tgz_path):
+                candidate = os.path.dirname(tgz_path)
+                if os.path.isdir(candidate):
+                    target_dir = candidate
+            # If it's a relative name, look under base_dir for a folder
+            # containing a file with that name
+            if not target_dir and os.path.isdir(base_dir):
                 for item in os.listdir(base_dir):
                     item_path = os.path.join(base_dir, item)
-                    if os.path.isdir(item_path) and item.startswith(f"{tester}_"):
-                        if jira_key in item:
+                    if os.path.isdir(item_path):
+                        if os.path.isfile(os.path.join(item_path, tgz_path)):
                             target_dir = item_path
                             break
+
+        # Strategy 2: Fuzzy match by tester + jira_key in folder name
+        if not target_dir and os.path.isdir(base_dir):
+            for item in os.listdir(base_dir):
+                item_path = os.path.join(base_dir, item)
+                if os.path.isdir(item_path) and tester in item and jira_key in item:
+                    target_dir = item_path
+                    break
 
         # Open the folder if found, otherwise show an error
         if target_dir and os.path.isdir(target_dir):
             os.startfile(target_dir)
         else:
-            self.show_error("Folder Not Found", f"Could not find specific folder for {tester} {jira_key} {env}")
+            self.show_error("Folder Not Found",
+                            f"Could not find release folder for "
+                            f"{tester} / {jira_key} / {env}")
             # Fall back to opening the base directory
             if os.path.isdir(base_dir):
                 os.startfile(base_dir)

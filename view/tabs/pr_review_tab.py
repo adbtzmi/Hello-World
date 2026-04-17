@@ -36,6 +36,16 @@ class PRReviewTab(BaseTab):
         super().__init__(notebook, context, "✅ PR Review")
         self._build_ui()
 
+        # Item 12: Auto-populate commit message when JIRA key changes
+        try:
+            issue_var = self.context.get_var('issue_var')
+            if issue_var:
+                issue_var.trace_add('write', self._auto_populate_commit_message)
+                # Populate immediately if a key is already set
+                self._auto_populate_commit_message()
+        except Exception:
+            pass
+
     def _build_ui(self):
         self.configure(padding="10")
 
@@ -257,11 +267,18 @@ class PRReviewTab(BaseTab):
             lbl.pack(side=tk.LEFT, padx=5)
             self._phase_steps.append(lbl)
 
-        # Status log
+        # Status log header with Clear button (Item 11)
+        log_header = ttk.Frame(progress_frame)
+        log_header.pack(fill=tk.X, pady=(5, 0))
+        ttk.Label(log_header, text="Status Log",
+                  font=('Arial', 9, 'bold')).pack(side=tk.LEFT)
+        ttk.Button(log_header, text="🗑 Clear Log",
+                   command=self._clear_status_log).pack(side=tk.RIGHT)
+
         self._status_text = scrolledtext.ScrolledText(
             progress_frame, height=14, width=80, wrap=tk.WORD,
             state=tk.DISABLED)
-        self._status_text.pack(fill=tk.BOTH, expand=True, pady=5)
+        self._status_text.pack(fill=tk.BOTH, expand=True, pady=(2, 5))
 
         # PR Info row
         pr_info_frame = ttk.Frame(progress_frame)
@@ -653,6 +670,12 @@ class PRReviewTab(BaseTab):
             pass
         return 0
 
+    def _clear_status_log(self):
+        """Item 11: Clear the status log text widget."""
+        self._status_text.configure(state=tk.NORMAL)
+        self._status_text.delete("1.0", tk.END)
+        self._status_text.configure(state=tk.DISABLED)
+
     def _append_status(self, text: str):
         """Append text to the status log (thread-safe via root.after)."""
         def _do():
@@ -662,3 +685,15 @@ class PRReviewTab(BaseTab):
             self._status_text.configure(state=tk.DISABLED)
 
         self.root.after(0, _do)
+
+    def _auto_populate_commit_message(self, *_args):
+        """Item 12: Auto-populate commit message from JIRA key when the
+        commit message field is empty or matches the previous auto-generated
+        pattern.  Triggered by a trace on the issue_var StringVar."""
+        issue_key = self.context.get_var('issue_var').get().strip().upper()
+        current_msg = self._commit_msg_var.get().strip()
+
+        # Only auto-fill if the field is empty or matches the auto pattern
+        if not current_msg or current_msg.startswith("[") and current_msg.endswith("]"):
+            if issue_key and not issue_key.endswith("-"):
+                self._commit_msg_var.set(f"[{issue_key}] Validation updates")
