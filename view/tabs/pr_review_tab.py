@@ -164,7 +164,11 @@ class PRReviewTab(BaseTab):
             row=row, column=0, sticky=tk.W, pady=3)
         self._commit_msg_var = tk.StringVar(value="")
         ttk.Entry(config_frame, textvariable=self._commit_msg_var,
-                  width=50).grid(row=row, column=1, columnspan=2, sticky="we", pady=3, padx=5)
+                  width=50).grid(row=row, column=1, sticky="we", pady=3, padx=5)
+        self._ai_commit_btn = ttk.Button(
+            config_frame, text="✨ AI Generate",
+            command=self._generate_ai_commit_message)
+        self._ai_commit_btn.grid(row=row, column=2, sticky=tk.W, padx=5)
         row += 1
 
         # Validation Doc Path
@@ -772,6 +776,57 @@ class PRReviewTab(BaseTab):
                     ctrl.save_recent_reviewers(reviewers)
         except Exception:
             pass
+
+    # ──────────────────────────────────────────────────────────────────────
+    # AI COMMIT MESSAGE GENERATION
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _generate_ai_commit_message(self):
+        """Handle the '✨ AI Generate' button click.
+
+        Calls the controller to generate a commit message from the git diff
+        using the AI Gateway.  Disables the button while running.
+        """
+        ctrl = self._get_controller()
+        if not ctrl:
+            return
+
+        issue_key = self._get_issue_key()
+        if not issue_key:
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "Missing Issue Key",
+                "Please enter a JIRA Issue Key first.",
+                parent=self.root,
+            )
+            return
+
+        # Disable button and show progress
+        self._ai_commit_btn.configure(state="disabled", text="⏳ Generating...")
+        self._append_status("🤖 Generating AI commit message...")
+
+        ctrl.generate_ai_commit_message(issue_key, self._on_ai_commit_result)
+
+    def _on_ai_commit_result(self, result: dict):
+        """Callback from controller with the AI-generated commit message."""
+        # Re-enable button
+        self._ai_commit_btn.configure(state="normal", text="✨ AI Generate")
+
+        if result.get("success"):
+            message = result["message"]
+            # Take only the first line for the commit message field
+            first_line = message.split("\n")[0].strip()
+            self._commit_msg_var.set(first_line)
+            self._append_status(f"✅ AI commit message set: {first_line}")
+        else:
+            error = result.get("error", "Unknown error")
+            self._append_status(f"⚠️ AI commit message failed: {error}")
+            from tkinter import messagebox
+            messagebox.showerror(
+                "AI Commit Message",
+                f"Failed to generate commit message:\n{error}",
+                parent=self.root,
+            )
 
     # ──────────────────────────────────────────────────────────────────────
     # REVIEWER AUTOCOMPLETE (Item 16)

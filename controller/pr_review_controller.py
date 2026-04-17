@@ -27,6 +27,7 @@ from model.orchestrators.pr_review_orchestrator import (
     add_jira_comment,
     attach_file_to_jira,
     create_pull_request,
+    generate_commit_message,
     get_jira_reporter,
     get_pr_version,
     get_pull_request_status,
@@ -475,6 +476,54 @@ class PRReviewController:
             )
         except Exception as e:
             logger.warning(f"Could not save reviewers to settings.json: {e}")
+
+    # ──────────────────────────────────────────────────────────────────────
+    # AI COMMIT MESSAGE GENERATION
+    # ──────────────────────────────────────────────────────────────────────
+
+    def generate_ai_commit_message(
+        self, issue_key: str, callback: Optional[Callable] = None
+    ):
+        """
+        Generate a commit message using AI based on the current git diff.
+
+        Runs in a background thread.  The callback receives a dict with
+        ``{"success": True, "message": "..."}`` or
+        ``{"success": False, "error": "..."}``.
+        """
+        def _work():
+            try:
+                repo_path = self.workflow.get_workflow_step("REPOSITORY_PATH")
+                if not repo_path:
+                    self._callback(callback, {
+                        "success": False,
+                        "error": "No repository path in workflow"
+                    })
+                    return
+
+                ai_client = getattr(self.analyzer, "ai_client", None)
+                if not ai_client:
+                    self._callback(callback, {
+                        "success": False,
+                        "error": "AI client not available — load credentials first"
+                    })
+                    return
+
+                result = generate_commit_message(
+                    repo_path=repo_path,
+                    issue_key=issue_key or "UNKNOWN",
+                    ai_client=ai_client,
+                    log_callback=self._log,
+                )
+                self._callback(callback, result)
+
+            except Exception as e:
+                logger.error(f"AI commit message error: {e}", exc_info=True)
+                self._callback(callback, {"success": False, "error": str(e)})
+
+        threading.Thread(
+            target=_work, daemon=True, name="bento-ai-commit-msg"
+        ).start()
 
     # ──────────────────────────────────────────────────────────────────────
     # HELPERS

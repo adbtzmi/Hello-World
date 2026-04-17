@@ -358,6 +358,109 @@ def git_get_diff_summary(
         return "(unable to get diff)"
 
 
+def generate_commit_message(
+    repo_path: str,
+    issue_key: str,
+    ai_client: Any,
+    log_callback: Optional[Callable] = None,
+) -> Dict[str, Any]:
+    """
+    Generate a commit message using AI based on the current git diff.
+
+    Gets the actual diff content (truncated to ~4000 chars) and sends it
+    to the AI Gateway to produce a concise, conventional commit message.
+
+    Args:
+        repo_path:    Path to the local git repository.
+        issue_key:    JIRA issue key (e.g. "TSESSD-14270") to prefix the message.
+        ai_client:    An ``AIGatewayClient`` instance with ``chat_completion()``.
+        log_callback: Optional logging callback.
+
+    Returns:
+        ``{"success": True, "message": "<commit msg>"}`` or
+        ``{"success": False, "error": "<reason>"}``.
+    """
+    try:
+        # 1. Get the diff content (actual changes, not just stat)
+        diff_text = _run_git(
+            ["git", "diff", "HEAD"],
+            repo_path, log_callback,
+        ).strip()
+
+        if not diff_text:
+            # Try staged changes if working tree is clean
+            diff_text = _run_git(
+                ["git", "diff", "--cached"],
+                repo_path, log_callback,
+            ).strip()
+
+        if not diff_text:
+            return {"success": False, "error": "No changes detected in repository"}
+
+        # 2. Also get the stat summary for context
+        stat_text = _run_git(
+            ["git", "diff", "--stat", "HEAD"],
+            repo_path, log_callback,
+        ).strip()
+
+        # 3. Truncate diff to avoid exceeding token limits
+        max_diff_chars = 4000
+        truncated = len(diff_text) > max_diff_chars
+        diff_snippet = diff_text[:max_diff_chars]
+        if truncated:
+            diff_snippet += "\n\n... (diff truncated)"
+
+        # 4. Build the AI prompt
+        prompt = (
+            f"Generate a concise git commit message for the following changes.\n"
+            f"The JIRA issue key is: {issue_key}\n\n"
+            f"Rules:\n"
+            f"- Start with [{issue_key}] prefix\n"
+            f"- First line: max 72 characters, imperative mood (e.g. 'Add', 'Fix', 'Update')\n"
+            f"- Optionally add a blank line followed by bullet points for details\n"
+            f"- Be specific about what changed, not why\n"
+            f"- Do NOT include markdown formatting or code fences\n"
+            f"- Return ONLY the commit message text, nothing else\n\n"
+            f"File change summary:\n{stat_text}\n\n"
+            f"Diff:\n{diff_snippet}"
+        )
+
+        _log(log_callback, "🤖 Generating commit message with AI...")
+
+        # 5. Call the AI Gateway
+        result = ai_client.chat_completion(
+            messages=[{"role": "user", "content": prompt}],
+            task_type="analysis",
+        )
+
+        if not result.get("success"):
+            error = result.get("error", "Unknown AI error")
+            return {"success": False, "error": f"AI generation failed: {error}"}
+
+        # 6. Extract the generated message
+        response = result.get("response", {})
+        choices = response.get("choices", [])
+        if not choices:
+            return {"success": False, "error": "AI returned empty response"}
+
+        message = choices[0].get("message", {}).get("content", "").strip()
+        if not message:
+            return {"success": False, "error": "AI returned empty message"}
+
+        # Clean up: remove any markdown code fences the AI might add
+        if message.startswith("```"):
+            lines = message.split("\n")
+            lines = [l for l in lines if not l.startswith("```")]
+            message = "\n".join(lines).strip()
+
+        _log(log_callback, f"✅ AI commit message generated ({len(message)} chars)")
+        return {"success": True, "message": message}
+
+    except Exception as e:
+        _log(log_callback, f"⚠️ Commit message generation failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. BITBUCKET PULL REQUEST OPERATIONS
 # ══════════════════════════════════════════════════════════════════════════════
