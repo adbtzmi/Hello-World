@@ -57,6 +57,17 @@ class PRReviewTab(BaseTab):
             canvas.itemconfig(self._canvas_window, width=event.width)
         canvas.bind("<Configure>", _on_canvas_resize)
 
+        # Mousewheel scrolling (match compilation/checkout tabs)
+        def _mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        self._inner_frame.bind(
+            "<Enter>",
+            lambda _: canvas.bind_all("<MouseWheel>", _mousewheel))
+        self._inner_frame.bind(
+            "<Leave>",
+            lambda _: canvas.unbind_all("<MouseWheel>"))
+
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
@@ -417,23 +428,39 @@ class PRReviewTab(BaseTab):
             self._validation_doc_var.set(filepath)
 
     def _auto_detect_validation_doc(self):
-        """Auto-detect validation doc from workflow or current directory."""
+        """Auto-detect validation doc from workflow, repo path, or CWD."""
         issue_key = self._get_issue_key()
         if not issue_key:
             return
 
-        # Check common patterns
-        candidates = [
+        # Build list of base filenames to look for
+        basenames = [
             f"Validation_{issue_key}.docx",
             f"{issue_key}_validation.docx",
             "template_validation.docx",
         ]
 
-        for candidate in candidates:
-            if os.path.exists(candidate):
-                self._validation_doc_var.set(candidate)
-                self._append_status(f"✓ Found validation doc: {candidate}")
-                return
+        # Build list of directories to search (CWD + workflow output + repo)
+        search_dirs = [os.getcwd()]
+        try:
+            wf_ctrl = getattr(self.context.controller, "workflow_controller", None)
+            if wf_ctrl:
+                repo_path = wf_ctrl.get_workflow_step("REPOSITORY_PATH")
+                if repo_path:
+                    search_dirs.append(repo_path)
+                output_dir = wf_ctrl.get_workflow_step("OUTPUT_DIR")
+                if output_dir:
+                    search_dirs.append(output_dir)
+        except Exception:
+            pass
+
+        for base_dir in search_dirs:
+            for name in basenames:
+                candidate = os.path.join(base_dir, name)
+                if os.path.exists(candidate):
+                    self._validation_doc_var.set(candidate)
+                    self._append_status(f"✓ Found validation doc: {candidate}")
+                    return
 
         self._append_status("⚠ No validation document found automatically")
         self.show_info("Not Found",

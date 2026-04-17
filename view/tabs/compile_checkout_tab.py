@@ -88,3 +88,47 @@ class CompileCheckoutTab(BaseTab):
         """Relay to checkout sub-tab."""
         if self.checkout_tab:
             self.checkout_tab.on_checkout_progress(hostname, phase)
+
+    # ── Additional relays for checkout sub-tab callbacks ──────────────────
+
+    def on_profile_data_loaded(self, profile_rows):
+        """Relay to checkout sub-tab."""
+        if self.checkout_tab:
+            self.checkout_tab.on_profile_data_loaded(profile_rows)
+
+    def on_crt_grid_loaded(self, crt_data):
+        """Relay to checkout sub-tab."""
+        if self.checkout_tab:
+            self.checkout_tab.on_crt_grid_loaded(crt_data)
+
+    def on_lot_lookup_completed(self, row_idx, cfgpn, mcto,
+                                form_factor="", material_desc=""):
+        """Relay to checkout sub-tab."""
+        if self.checkout_tab:
+            self.checkout_tab.on_lot_lookup_completed(
+                row_idx, cfgpn, mcto, form_factor, material_desc)
+
+    def on_mid_verify_completed(self, row_idx, result):
+        """Relay to checkout sub-tab."""
+        if self.checkout_tab:
+            self.checkout_tab.on_mid_verify_completed(row_idx, result)
+
+    def on_xml_imported(self, data):
+        """Relay to checkout sub-tab."""
+        if self.checkout_tab:
+            self.checkout_tab.on_xml_imported(data)
+
+    def on_autofill_completed(self, mid, cfgpn, fw_ver):
+        """Relay to checkout sub-tab."""
+        if self.checkout_tab:
+            self.checkout_tab.on_autofill_completed(mid, cfgpn, fw_ver)
+
+    def on_rc_progress_update(self, summary, entries):
+        """Relay result-collection progress to checkout sub-tab."""
+        if self.checkout_tab:
+            self.checkout_tab.on_rc_progress_update(summary, entries)
+
+    def on_rc_collection_complete(self, summary):
+        """Relay result-collection completion to checkout sub-tab."""
+        if self.checkout_tab:
+            self.checkout_tab.on_rc_collection_complete(summary)

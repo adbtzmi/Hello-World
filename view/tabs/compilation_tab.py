@@ -29,55 +29,9 @@ from tkinter import ttk, scrolledtext, filedialog, messagebox
 import logging
 
 from view.tabs.base_tab import BaseTab
+from view.widgets.tooltip import ToolTip as _ToolTip, tip as _tip
 
 logger = logging.getLogger("bento_app")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Tooltip helper (shared pattern with checkout_tab)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class _ToolTip:
-    """Lightweight balloon tooltip for any widget."""
-
-    def __init__(self, widget, text: str, delay: int = 500):
-        self._widget = widget
-        self._text   = text
-        self._delay  = delay
-        self._id     = None
-        self._tw     = None
-        widget.bind("<Enter>",  self._schedule, add="+")
-        widget.bind("<Leave>",  self._cancel,   add="+")
-        widget.bind("<Button>", self._cancel,   add="+")
-
-    def _schedule(self, _=None):
-        self._cancel()
-        self._id = self._widget.after(self._delay, self._show)
-
-    def _cancel(self, _=None):
-        if self._id:
-            self._widget.after_cancel(self._id)
-            self._id = None
-        if self._tw:
-            self._tw.destroy()
-            self._tw = None
-
-    def _show(self):
-        x = self._widget.winfo_rootx() + 20
-        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
-        self._tw = tw = tk.Toplevel(self._widget)
-        tw.wm_overrideredirect(True)
-        tw.wm_geometry(f"+{x}+{y}")
-        tw.attributes("-topmost", True)
-        tk.Label(
-            tw, text=self._text, justify=tk.LEFT,
-            relief=tk.SOLID, borderwidth=1,
-            font=("Segoe UI", 8),
-            padx=6, pady=4, wraplength=340,
-        ).pack()
-
-
-def _tip(widget, text: str):
-    _ToolTip(widget, text)
 
 
 class CompilationTab(BaseTab):
@@ -919,10 +873,34 @@ class CompilationTab(BaseTab):
                         registry_data = json.load(f)
                 except Exception: pass
 
-            for key in testers_to_remove:
-                if key in registry_data:
-                    del registry_data[key]
-                    self.log(f"[Tester Removed] {key}")
+            # Match by display label OR by hostname+env inside the value
+            for display_label in testers_to_remove:
+                if display_label in registry_data:
+                    del registry_data[display_label]
+                    self.log(f"[Tester Removed] {display_label}")
+                else:
+                    # Fallback: parse "HOSTNAME (ENV)" and match against
+                    # registry values that store hostname/env fields
+                    _h, _e = "", ""
+                    if " (" in display_label and display_label.endswith(")"):
+                        _h, _e = display_label.split(" (", 1)
+                        _e = _e[:-1]
+                    matched_key = None
+                    for rk, rv in registry_data.items():
+                        if isinstance(rv, dict):
+                            rh = rv.get("hostname", "")
+                            re_ = rv.get("env", "")
+                        elif isinstance(rv, list):
+                            rh = rv[0] if len(rv) > 0 else ""
+                            re_ = rv[1] if len(rv) > 1 else ""
+                        else:
+                            rh, re_ = "", ""
+                        if rh == _h and re_ == _e:
+                            matched_key = rk
+                            break
+                    if matched_key:
+                        del registry_data[matched_key]
+                        self.log(f"[Tester Removed] {display_label}")
 
             self._save_tester_registry(registry_data)
             self._refresh_testers()
@@ -1103,7 +1081,36 @@ class CompilationTab(BaseTab):
 
         raw_zip = self.context.get_var("compile_raw_zip").get().strip()
         release_tgz = self.context.get_var("compile_release_tgz").get().strip()
-        repo_dir = r"C:\BENTO\adv_ibir_master" # Default as per original
+
+        # Resolve repo_dir from the first selected tester's registry entry,
+        # falling back to a sensible default if nothing is selected.
+        repo_dir = r"C:\BENTO\adv_ibir_master"
+        try:
+            import json as _json
+            registry_path = self.context.config.get(
+                "registry_path", r"P:\temp\BENTO\bento_testers.json")
+            if os.path.exists(registry_path):
+                with open(registry_path, "r") as _rf:
+                    _reg = _json.load(_rf)
+                # Try the currently selected tester first
+                sel = self._tester_listbox.curselection()
+                if sel:
+                    sel_label = self._tester_listbox.get(sel[0])
+                    entry = _reg.get(sel_label)
+                    if entry:
+                        if isinstance(entry, dict):
+                            repo_dir = entry.get("repo_dir", repo_dir)
+                        elif isinstance(entry, list) and len(entry) > 2:
+                            repo_dir = entry[2]
+                elif _reg:
+                    # No selection — use the first entry
+                    first = next(iter(_reg.values()))
+                    if isinstance(first, dict):
+                        repo_dir = first.get("repo_dir", repo_dir)
+                    elif isinstance(first, list) and len(first) > 2:
+                        repo_dir = first[2]
+        except Exception:
+            pass  # keep default
 
         # 1. Folder Reachability
         if os.path.isdir(raw_zip):

@@ -71,8 +71,16 @@ class CompileController:
                 data = json.load(f)
             result = []
             for val in data.values():
-                hostname = val.get("hostname", "")
-                env      = val.get("env", "")
+                # Support both dict format {"hostname":..., "env":...}
+                # and legacy list format ["HOSTNAME", "ENV", ...]
+                if isinstance(val, dict):
+                    hostname = val.get("hostname", "")
+                    env      = val.get("env", "")
+                elif isinstance(val, list) and len(val) >= 2:
+                    hostname = val[0]
+                    env      = val[1]
+                else:
+                    continue
                 if hostname and env:
                     result.append((hostname, env))
             return result
@@ -89,8 +97,15 @@ class CompileController:
             with open(registry_path, "r") as f:
                 data = json.load(f)
             for val in data.values():
-                if val.get("hostname", "").upper() == hostname.upper():
-                    return val.get("env", "")
+                if isinstance(val, dict):
+                    h = val.get("hostname", "")
+                    e = val.get("env", "")
+                elif isinstance(val, list) and len(val) >= 2:
+                    h, e = val[0], val[1]
+                else:
+                    continue
+                if h.upper() == hostname.upper():
+                    return e
         except Exception as e:
             logger.error(f"CompileController._get_env_for_hostname: {e}")
         return ""
