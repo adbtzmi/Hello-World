@@ -398,6 +398,7 @@ def search_bitbucket_users(
         base = base[:-4]
 
     url = f"{base}/rest/api/1.0/users?filter={urllib.parse.quote(query)}&limit={limit}"
+    _log(log_callback, f"🔍 Bitbucket user search URL: {url}")
 
     try:
         import base64
