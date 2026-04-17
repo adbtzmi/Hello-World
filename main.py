@@ -54,7 +54,7 @@ def main():
             with open(config_path, "r") as f:
                 config = json.load(f)
         else:
-            logger.warning(f"settings.json not found at {config_path} — using defaults")
+            logger.warning(f"settings.json not found at {config_path} - using defaults")
     except Exception as e:
         logger.error(f"Could not load settings.json: {e}")
 
