@@ -402,19 +402,19 @@ def search_bitbucket_users(
 
     try:
         import base64
-        auth_str = f"{bitbucket_username}:{bitbucket_token}"
-        auth_b64 = base64.b64encode(auth_str.encode()).decode()
+        auth_string = f"{bitbucket_username}:{bitbucket_token}"
+        auth_header = base64.b64encode(auth_string.encode("utf-8")).decode("utf-8")
 
-        req = urllib.request.Request(url, method="GET")
-        req.add_header("Authorization", f"Basic {auth_b64}")
-        req.add_header("Accept", "application/json")
+        headers = {
+            "Authorization": f"Basic {auth_header}",
+            "Content-Type": "application/json",
+        }
 
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(url, headers=headers)
+        ssl_context = ssl._create_unverified_context()
 
-        with urllib.request.urlopen(req, context=ctx, timeout=20) as resp:
-            data = json.loads(resp.read().decode())
+        resp = urllib.request.urlopen(req, context=ssl_context, timeout=30)
+        data = json.loads(resp.read().decode("utf-8"))
 
         users = []
         for u in data.get("values", []):
