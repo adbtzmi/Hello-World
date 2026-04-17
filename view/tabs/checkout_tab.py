@@ -1630,9 +1630,10 @@ class CheckoutTab(BaseTab):
         """
         Stop the active checkout run with confirmation dialog.
         Prevents accidental stops and logs the user action.
+        Works during both RUNNING and COLLECTING states.
         """
-        # Confirmation dialog for safety
-        if self._checkout_state != CheckoutState.RUNNING:
+        # Confirmation dialog for safety — allow stop during RUNNING or COLLECTING
+        if self._checkout_state not in (CheckoutState.RUNNING, CheckoutState.COLLECTING):
             return
             
         response = messagebox.askyesno(

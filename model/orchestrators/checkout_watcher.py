@@ -31,6 +31,7 @@ import argparse
 import shutil
 import threading
 import traceback
+import glob
 import xml.etree.ElementTree as ET
 from datetime import datetime
 # pathlib is NOT available on Python 2.7 — use os.path throughout
@@ -61,9 +62,24 @@ try:
 except ImportError:
     # Fallback defaults when running standalone (tester machine without model package)
     TESTER_REGISTRY = {
-        "ABIT": {"hostname": "IBIR-0383",    "env": "ABIT"},
-        "SFN2": {"hostname": "MPT3HVM-0156", "env": "SFN2"},
-        "CNFG": {"hostname": "CTOWTST-0031", "env": "CNFG"},
+        "ABIT": {
+            "hostname": "IBIR-0383",
+            "env": "ABIT",
+            "workspace_folder": r"C:\Tanisys\DNA2\User\Workspace",
+            "workspace_mode": "flat",   # subfolders directly under workspace
+        },
+        "SFN2": {
+            "hostname": "MPT3HVM-0156",
+            "env": "SFN2",
+            "workspace_folder": r"C:\test_program\Rack0",
+            "workspace_mode": "primitive_dut",  # Primitive*/DUT* subfolders
+        },
+        "CNFG": {
+            "hostname": "CTOWTST-0031",
+            "env": "CNFG",
+            "workspace_folder": r"C:\Tanisys\DNA2\User\Workspace",
+            "workspace_mode": "flat",
+        },
     }
     LOCK_MAX_AGE_SECONDS  = 1800
     LOG_DIR               = r"C:\BENTO\logs"
@@ -135,7 +151,7 @@ POLL_INTERVAL_SECONDS = 10
 # ── CONFIRMED PATHS ───────────────────────────────────────────────────────────
 CHECKOUT_QUEUE_FOLDER   = r"P:\temp\BENTO\CHECKOUT_QUEUE"
 CHECKOUT_RESULTS_FOLDER = r"P:\temp\BENTO\CHECKOUT_RESULTS"
-SLATE_HOT_FOLDER        = r"C:\test_program\playground_queue"
+SLATE_WORKSPACE_FOLDER  = r"C:\Tanisys\DNA2\User\Workspace"
 SLATE_LOG_PATH          = r"C:\test_program\logs\slate_system.log"
 SLATE_RESULTS_FOLDER    = r"C:\test_program\results"
 SLATE_PLAYGROUND_FOLDER = r"C:\test_program\playground"
@@ -143,6 +159,74 @@ SLATE_PLAYGROUND_FOLDER = r"C:\test_program\playground"
 MAX_RETRIES        = 20
 MAX_PROCESSED_SIZE = 500
 HEARTBEAT_EVERY    = 30
+
+# ── MANIFEST-BASED FILE SELECTION ─────────────────────────────────────────────
+# Allow-list of files that MAY be collected from the tester workspace.
+# Each entry defines:
+#   key       — unique string identifier (used in manifest & selection JSON)
+#   subpath   — relative path inside the workspace folder (supports glob *)
+#   required  — if True, always copied regardless of user selection
+#   desc      — human-readable description shown in BENTO GUI
+#
+# The watcher scans the workspace for these files after test completion,
+# writes a manifest JSON listing which ones actually exist, and waits for
+# BENTO to write back a selection JSON before copying.
+# ──────────────────────────────────────────────────────────────────────────────
+FILE_ALLOW_LIST = [
+    {
+        "key":      "results_db",
+        "subpath":  "OS/resultsManager.db",
+        "required": True,
+        "desc":     "Results database (SQLite) — primary test results",
+    },
+    {
+        "key":      "tracefile",
+        "subpath":  "Tracefile.txt",
+        "required": False,
+        "desc":     "Trace log — detailed test execution trace (MPT3 only)",
+    },
+    {
+        "key":      "dispatcher_debug",
+        "subpath":  "DispatcherDebug*.txt",
+        "required": False,
+        "desc":     "Dispatcher debug log — slot dispatch details",
+    },
+    {
+        "key":      "summary_txt",
+        "subpath":  "OS/summary.txt",
+        "required": False,
+        "desc":     "Test summary text — pass/fail overview",
+    },
+    {
+        "key":      "summary_zip",
+        "subpath":  "OS/summary.zip",
+        "required": True,
+        "desc":     "Summary archive — compressed summary package",
+    },
+    {
+        "key":      "update_attrs_xml",
+        "subpath":  "OS/*_UPDATE_ATTRS.xml",
+        "required": False,
+        "desc":     "Update attributes XML — MAM attribute updates",
+    },
+    {
+        "key":      "test_log",
+        "subpath":  "OS/test_log.txt",
+        "required": False,
+        "desc":     "Test log — high-level test execution log",
+    },
+    {
+        "key":      "error_log",
+        "subpath":  "OS/error_log.txt",
+        "required": False,
+        "desc":     "Error log — captured errors during test",
+    },
+]
+
+# Timeout for BENTO to respond with a selection JSON (seconds).
+# If no selection arrives within this window, only required files are copied.
+MANIFEST_SELECTION_TIMEOUT = 300   # 5 minutes
+MANIFEST_POLL_INTERVAL     = 5    # check every 5 seconds
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -158,6 +242,9 @@ T_CREATE_TEMP_TRAVEL = 3.0    # Create Temp Traveler
 T_CREATE_PLAYGROUND  = 10.0   # Create Playground — allocates test slots
 T_LOAD_RECIPE        = 5.0    # Load Recipe — reads recipe from disk
 T_RUN_TEST           = 2.0    # Run Test — just a trigger click
+T_LOAD_PROFILE       = 5.0    # Load Profile — GUI processes the XML profile
+T_FILE_DIALOG_SETTLE = 2.0    # pause for file dialog to fully render
+T_AFTER_MENU_CLICK   = 1.0    # pause after clicking a menu item
 
 SLATE_TITLE_RE  = r".*SSD Tester Engineering GUI.*"
 SLATE_BACKEND   = "win32"     # WinForms app — win32 backend confirmed
@@ -242,32 +329,8 @@ def _is_xml_valid(xml_path, logger):
         return False
 
 
-# ── STEP 8 — Copy XML to SLATE hot folder ────────────────────────────────────
-def launch_slate_via_hot_folder(xml_path, logger):
-    """
-    Copy XML to SLATE hot folder.
-    AUTO-CREATES C:\\test_program\\playground_queue if it doesn't exist.
-    """
-    # ── AUTO-CREATE hot folder ────────────────────────────────────────
-    try:
-        if not os.path.isdir(SLATE_HOT_FOLDER):
-            os.makedirs(SLATE_HOT_FOLDER)
-        logger.info("[OK] SLATE hot folder ready: " + SLATE_HOT_FOLDER)
-    except Exception as e:
-        logger.error(
-            "[FAIL] Cannot create SLATE hot folder "
-            + SLATE_HOT_FOLDER + ": " + str(e)
-        )
-        return False
-
-    dest = os.path.join(SLATE_HOT_FOLDER, os.path.basename(xml_path))
-    try:
-        shutil.copy2(xml_path, dest)
-        logger.info("[OK] XML -> SLATE hot folder: " + dest)
-        return True
-    except Exception as e:
-        logger.error("[FAIL] Hot folder copy failed: " + str(e))
-        return False
+# (launch_slate_via_hot_folder removed — XML is loaded directly from
+#  CHECKOUT_QUEUE_FOLDER, no intermediate copy to playground_queue needed)
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -295,8 +358,7 @@ def _safe_desktop_windows(backend="win32"):
         try:
             return Desktop(backend=backend).windows()  # type: ignore[operator]
         except Exception:
-            import time as _t
-            _t.sleep(0.3)
+            time.sleep(0.3)
 
     # Fallback: enumerate handles via ctypes, wrap individually
     import ctypes
@@ -677,9 +739,11 @@ def _click_slate_button(win, auto_id, label, wait_after, required=False):
         return False
 
 
-# Sentinel: holds the last fatal popup text captured by _dismiss_slate_popups.
-# slate_gui_trigger() checks this after Create Playground to detect failures
-# like "Failed to Create Lot Cache" (Critical Attribute mismatch).
+# ── Fatal popup sentinel ─────────────────────────────────────────────────────
+# When _dismiss_slate_popups() encounters a fatal popup (e.g. "Failed to
+# Create Lot Cache"), it stores the full error text here so that callers
+# like slate_gui_trigger() can include it in the failure status message.
+# This avoids the popup being silently dismissed and the error being lost.
 _last_fatal_popup_text = ""
 
 
@@ -713,6 +777,10 @@ def _dismiss_slate_popups(win):
     global _last_fatal_popup_text
     time.sleep(T_POPUP_SETTLE)
 
+    # "Profile Finished", "Loaded DUT", and "Success" are included here
+    # because _wait_for_dut_load_popup() is detect-only — it does NOT
+    # dismiss.  After detection, the caller invokes _dismiss_slate_popups()
+    # to dismiss the DUT-load popup.
     dismiss_title_keywords = [
         "Error", "Warning", "Confirm", "Overwrite",
         "Exist", "Replace", "Alert", "Question", "Notice",
@@ -728,7 +796,7 @@ def _dismiss_slate_popups(win):
     slate_title = win.window_text()
 
     try:
-        all_windows = _safe_desktop_windows(backend="win32")
+        all_windows = Desktop(backend="win32").windows()  # type: ignore[operator]
         for w in all_windows:
             try:
                 title = w.window_text().strip()
@@ -929,44 +997,35 @@ def _log_all_visible_windows(logger=None):
 def slate_gui_trigger(xml_path, timeout=60):
     """
     Drive SLATE (SSD Tester Engineering GUI) through the checkout workflow
-    up to Create Playground via pywinauto GUI automation.
+    using Profile → LoadProfile menu automation.
 
-    The checkout process ends at Create Playground — there is NO Load Recipe
-    or Run Test step. Memory collection is triggered separately after this
-    function returns True.
+    Instead of manually filling fields and clicking buttons one by one
+    (Run Recipe Selection → Get Manudata → Create Temp Traveler →
+    Create Playground), this function uses the GUI's built-in
+    "LoadProfile" feature which handles everything automatically.
 
-    This function is called in process_checkout_xml() AFTER the XML has
-    been copied to C:\\test_program\\playground_queue and BEFORE
-    PlaygroundCompletionMonitor.wait() is called.
-
-    ════════════════════════════════════════════════════════
-    PHASE 1 — AUTOFILL FIELDS FROM XML
-    ════════════════════════════════════════════════════════
-    Parses the checkout XML to extract:
-      • LotNo  → txtLotNo  (auto_id confirmed)
-      • MID    → txtMID    (auto_id confirmed)
-      • path   → txtTestJobArchive (auto_id confirmed)
+    The XML is loaded directly from CHECKOUT_QUEUE_FOLDER — no
+    intermediate copy to playground_queue is needed.
 
     ════════════════════════════════════════════════════════
-    PHASE 2 — BUTTON WORKFLOW (ends at Create Playground)
+    WORKFLOW — PROFILE → LOADPROFILE
     ════════════════════════════════════════════════════════
-    All auto_ids confirmed from slate_full_controls_win32.txt:
-      Step 1: btnRunRecipeSelect  "Run Recipe Selection" (optional)
-      Step 2: btnGetManuData      "Get Manudata"          (optional)
-      Step 3: btnCreateTempTravel "Create Temp Traveler"  (optional)
-      Step 4: btnCreatePlayground "Create Playground"     (REQUIRED — FINAL)
-
-    NOTE: btnLoadRecipe and btnRunTest exist in SLATE but are NOT used
-    during checkout. Checkout ends at playground creation.
+    1. Connect to SLATE window
+    2. Use the passed-in xml_path directly from CHECKOUT_QUEUE
+    3. Open Profile menu → click "LoadProfile"
+    4. Handle the file dialog: type the XML path and confirm
+    5. SLATE automatically runs all steps:
+       Recipe Selection → Get Manudata → Create Temp Traveler
+       → Create Playground
 
     Args:
-        xml_path : str or Path — full path to XML already in playground_queue
+        xml_path : str or Path — full path to XML in CHECKOUT_QUEUE_FOLDER
         timeout  : int  — seconds to wait for SLATE window/elements
                           (used for element waits; connect uses CONNECT_TIMEOUT)
 
     Returns:
-        True  — Playground created; PlaygroundCompletionMonitor can confirm
-        False — a REQUIRED step failed; caller should retry or mark failed
+        True  — Load Profile succeeded; PlaygroundCompletionMonitor can confirm
+        False — a step failed; caller should retry or mark failed
 
     Raises:
         Nothing — all exceptions are caught and logged; returns False on any error.
@@ -978,9 +1037,80 @@ def slate_gui_trigger(xml_path, timeout=60):
         )
         return False
 
+    # Clear any previous fatal popup text before starting
+    global _last_fatal_popup_text
+    _last_fatal_popup_text = ""
+
     xml_path = str(xml_path)
     xml_name = os.path.basename(xml_path)
-    log.info("\U0001f916 slate_gui_trigger -> " + xml_name)
+    log.info("\U0001f916 slate_gui_trigger (Load Profile) -> " + xml_name)
+
+    # ════════════════════════════════════════════════════════
+    # PRE-CONNECT: Dismiss any leftover popups from a previous failed attempt.
+    # If a prior slate_gui_trigger() crashed (e.g. TypeError), the "Profile
+    # Finished Successfully" popup may still be on screen, blocking SLATE.
+    # We scan and dismiss ALL popup-like windows BEFORE connecting to SLATE.
+    # ════════════════════════════════════════════════════════
+    try:
+        _pre_dismiss_keywords = [
+            "Error", "Warning", "Confirm", "Overwrite", "Exist", "Replace",
+            "Alert", "Question", "Notice", "Success", "Complete", "Done",
+            "Information", "Info", "Finished", "Profile", "Loaded",
+            "DUT", "Load", "Recipe", "Selection", "Manudata",
+            "Traveler", "Playground", "Created", "Result",
+            "Manufacturing", "Data",
+        ]
+        _pre_btn_order = ["OK", "Yes", "Overwrite", "Replace", "Continue", "Close"]
+        all_windows = _safe_desktop_windows(backend="win32")
+        for w in all_windows:
+            try:
+                title = w.window_text().strip()
+                if not title:
+                    continue
+                if "SSD Tester Engineering GUI" in title:
+                    continue
+                if not any(kw.lower() in title.lower() for kw in _pre_dismiss_keywords):
+                    continue
+                log.info(
+                    "  \U0001f9f9 Pre-connect: dismissing leftover popup: '"
+                    + title + "'"
+                )
+                for btn_text in _pre_btn_order:
+                    try:
+                        btn = w.child_window(title=btn_text, class_name="Button")
+                        if btn.exists(timeout=1) and btn.is_enabled():
+                            btn.click_input()
+                            time.sleep(0.5)
+                            log.info(
+                                "  \u2705 Pre-connect: dismissed '" + title
+                                + "' with '" + btn_text + "'"
+                            )
+                            break
+                    except Exception:
+                        continue
+                else:
+                    # No button found — try Enter
+                    try:
+                        w.set_focus()
+                        time.sleep(0.2)
+                        pw_keyboard.send_keys("{ENTER}")  # type: ignore[union-attr]
+                        time.sleep(0.5)
+                        log.info(
+                            "  \u2705 Pre-connect: dismissed '" + title
+                            + "' with Enter key"
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+    except Exception as pre_err:
+        log.debug(
+            "  Pre-connect popup scan error (non-fatal): "
+            + type(pre_err).__name__ + ": " + str(pre_err)
+        )
+
+    # Brief pause to let GUI settle after any pre-connect dismissals
+    time.sleep(0.5)
 
     # ════════════════════════════════════════════════════════
     # CONNECT TO SLATE
@@ -1021,7 +1151,6 @@ def slate_gui_trigger(xml_path, timeout=60):
         log.error("     Is 'SSD Tester Engineering GUI' running on this machine?")
 
         # ── Enumerate ALL visible top-level windows for diagnosis ──────────
-        # Uses module-level `log` — slate_gui_trigger() has no logger param
         _log_all_visible_windows(logger=None)
 
         return False
@@ -1029,319 +1158,1478 @@ def slate_gui_trigger(xml_path, timeout=60):
     # ── Dismiss any startup popups before touching anything ───────────────
     _dismiss_slate_popups(win)
 
-    # ── Navigate to the correct tab ───────────────────────────────────────
-    _ensure_slate_tab_active(win)
-
     # ════════════════════════════════════════════════════════
-    # PHASE 1 — FETCH LATEST XML FROM PLAYGROUND QUEUE
-    # Scans C:\test_program\playground_queue and picks ONLY
-    # the newest .xml file by modification time.
-    # No menu / dialog interaction — just resolve the path
-    # and parse fields for downstream use.
+    # RESOLVE XML PATH — use the passed-in xml_path directly
+    # from CHECKOUT_QUEUE_FOLDER (no hot folder copy needed)
     # ════════════════════════════════════════════════════════
-    log.info("  \U0001f4cb Phase 1: Fetch latest XML from playground_queue")
-    log.info("  \U0001f4c2 Profile folder: " + SLATE_HOT_FOLDER)
+    log.info("  \U0001f4cb Resolving XML profile path...")
 
     latest_xml = None
-    try:
-        xmls = [
-            os.path.join(SLATE_HOT_FOLDER, f)
-            for f in os.listdir(SLATE_HOT_FOLDER)
-            if f.lower().endswith(".xml")
-        ]
-        if xmls:
-            latest_xml = max(xmls, key=os.path.getmtime)
-            log.info(
-                "  \U0001f4cb Latest XML in playground_queue ("
-                + str(len(xmls)) + " found): " + os.path.basename(latest_xml)
-            )
-        else:
+
+    # PRIORITY 1: Use the passed-in xml_path directly from CHECKOUT_QUEUE
+    if os.path.isfile(xml_path):
+        latest_xml = xml_path
+        log.info("  \U0001f4cb Using XML directly from CHECKOUT_QUEUE: " + latest_xml)
+
+    # PRIORITY 2: Fall back to scanning CHECKOUT_QUEUE_FOLDER for latest XML
+    if latest_xml is None:
+        try:
+            xmls = [
+                os.path.join(CHECKOUT_QUEUE_FOLDER, f)
+                for f in os.listdir(CHECKOUT_QUEUE_FOLDER)
+                if f.lower().endswith(".xml")
+                and not f.endswith(".checkout_status")
+                and not f.endswith(".checkout_lock")
+            ]
+            if xmls:
+                latest_xml = max(xmls, key=os.path.getmtime)
+                log.info(
+                    "  \U0001f4cb Fallback: Latest XML in CHECKOUT_QUEUE ("
+                    + str(len(xmls)) + " found): "
+                    + os.path.basename(latest_xml)
+                )
+            else:
+                log.warning(
+                    "  \u26a0\ufe0f No .xml files found in " + CHECKOUT_QUEUE_FOLDER
+                )
+        except Exception as scan_err:
             log.warning(
-                "  \u26a0\ufe0f No .xml files found in " + SLATE_HOT_FOLDER
-                + " — falling back to passed-in xml_path"
+                "  \u26a0\ufe0f Could not scan " + CHECKOUT_QUEUE_FOLDER
+                + ": " + str(scan_err)
             )
-    except Exception as scan_err:
-        log.warning(
-            "  \u26a0\ufe0f Could not scan " + SLATE_HOT_FOLDER
-            + ": " + str(scan_err) + " — falling back to passed-in xml_path"
-        )
 
     if latest_xml is None:
-        latest_xml = xml_path
-        log.info("  \U0001f4cb Using passed-in xml_path: " + latest_xml)
-    else:
-        log.info("  \U0001f4cb Selected XML: " + latest_xml)
+        log.error("  \u274c No XML file found to load!")
+        return False
 
-    # Parse the selected XML for field values used by autofill + Phase 2
-    fields = _parse_xml_for_slate_fields(latest_xml)
+    log.info("  \U0001f4cb Selected XML for Load Profile: " + latest_xml)
 
-    if fields is None:
+    # ════════════════════════════════════════════════════════
+    # LOAD PROFILE VIA PROFILE MENU
+    # Profile → LoadProfile opens a file dialog.
+    # We type the XML path into the dialog and confirm.
+    # SLATE then automatically runs all checkout steps:
+    #   Recipe Selection → Get Manudata → Create Temp Traveler
+    #   → Create Playground
+    # ════════════════════════════════════════════════════════
+    log.info("  \U0001f4cb Opening Profile menu -> LoadProfile...")
+
+    # ── Step 1: Open the Profile menu and click LoadProfile ────────────────
+    try:
+        # Method A: Use menu_select() for WinForms menu bar
+        # SLATE's menu bar has "Profile" (not "File") with item "LoadProfile"
+        try:
+            win.menu_select("Profile->LoadProfile")
+            log.info("  \u2705 Menu selected: Profile -> LoadProfile (menu_select)")
+            time.sleep(T_AFTER_MENU_CLICK)
+        except Exception as menu_err_a:
+            # Method A2: Try with space in menu item name
+            try:
+                win.menu_select("Profile->Load Profile")
+                log.info("  \u2705 Menu selected: Profile -> Load Profile (menu_select)")
+                time.sleep(T_AFTER_MENU_CLICK)
+            except Exception as menu_err_b:
+                log.warning(
+                    "  \u26a0\ufe0f menu_select('Profile->LoadProfile') failed: "
+                    + str(menu_err_a) + " / " + str(menu_err_b)
+                    + " — trying keyboard shortcut"
+                )
+                # Method B: Use Alt+P keyboard shortcut to open Profile menu,
+                # then navigate to LoadProfile
+                try:
+                    win.set_focus()
+                    time.sleep(0.3)
+                    pw_keyboard.send_keys("%p")  # type: ignore[union-attr]  # Alt+P for Profile
+                    time.sleep(T_AFTER_MENU_CLICK)
+
+                    # Click "LoadProfile" — try 'l' accelerator key first
+                    pw_keyboard.send_keys("l")  # type: ignore[union-attr]
+                    time.sleep(T_AFTER_MENU_CLICK)
+                    log.info("  \u2705 Menu opened via Alt+P -> L keyboard shortcut")
+                except Exception as kb_err:
+                    log.error(
+                        "  \u274c Cannot open Profile -> LoadProfile menu: "
+                        + str(kb_err)
+                    )
+                    return False
+
+    except Exception as e:
         log.error(
-            "  \u274c Phase 1: Could not parse XML fields from "
-            + latest_xml + " — cannot autofill"
+            "  \u274c Profile menu interaction failed: "
+            + type(e).__name__ + ": " + str(e)
         )
         return False
 
-    # ── Autofill SLATE GUI fields from parsed XML data ─────────────────
-    # Confirmed auto_ids from slate_full_controls_win32.txt:
-    #   txtLotNo           — Lot No input
-    #   txtMID             — MID input
-    #   txtTestJobArchive  — Test Job Archive path (receives the XML path)
-    #   txtRecipeFile      — Recipe File path (optional)
-    log.info("  \U0001f4dd Autofilling SLATE fields from XML data...")
+    # ── Step 2: Handle the file dialog ─────────────────────────────────────
+    # The "Load Profile" menu item opens a standard Windows file dialog
+    # (Open File dialog). We need to:
+    #   a) Wait for the dialog to appear
+    #   b) Type the XML file path into the filename field
+    #   c) Click Open / press Enter
+    log.info("  \U0001f4cb Waiting for file dialog...")
+    time.sleep(T_FILE_DIALOG_SETTLE)
 
-    # LotNo (required)
-    _set_slate_field(
-        win, auto_id="txtLotNo",
-        value=fields.get("lot_no", ""),
-        required=True
-    )
+    file_dialog_found = False
+    try:
+        # Look for the Open file dialog — standard Windows dialog titles
+        dialog_titles = ["Open", "LoadProfile", "Load Profile", "Select Profile", "Browse"]
+        file_dlg = None
 
-    # MID (required)
-    _set_slate_field(
-        win, auto_id="txtMID",
-        value=fields.get("mid", ""),
-        required=True
-    )
+        for dlg_title in dialog_titles:
+            try:
+                file_dlg = app.window(title_re=".*" + dlg_title + ".*")
+                if file_dlg.exists(timeout=5):
+                    log.info(
+                        "  \U0001f50d Found file dialog: '"
+                        + file_dlg.window_text() + "'"
+                    )
+                    file_dialog_found = True
+                    break
+            except Exception:
+                continue
 
-    # Test Job Archive — receives the XML file path so SLATE can read it
-    _set_slate_field(
-        win, auto_id="txtTestJobArchive",
-        value=fields.get("test_job_archive", latest_xml),
-        required=True
-    )
+        # Fallback: search all top-level windows for a dialog
+        if not file_dialog_found:
+            try:
+                all_windows = _safe_desktop_windows(backend=SLATE_BACKEND)
+                for w in all_windows:
+                    try:
+                        title = w.window_text()
+                        if title and any(
+                            kw.lower() in title.lower()
+                            for kw in ["Open", "Load", "Profile", "Browse", "Select"]
+                        ):
+                            # Check if it looks like a file dialog
+                            # (has an Edit control for filename)
+                            try:
+                                edit = w.child_window(class_name="Edit")
+                                if edit.exists(timeout=2):
+                                    file_dlg = w
+                                    file_dialog_found = True
+                                    log.info(
+                                        "  \U0001f50d Found file dialog (Desktop scan): '"
+                                        + title + "'"
+                                    )
+                                    break
+                            except Exception:
+                                continue
+                    except Exception:
+                        continue
+            except Exception as scan_err:
+                log.warning(
+                    "  \u26a0\ufe0f Desktop scan for file dialog failed: "
+                    + str(scan_err)
+                )
 
-    # Recipe File (optional — only set if the XML contained a RecipeFile element)
-    recipe_file = fields.get("recipe_file", "")
-    if recipe_file:
-        _set_slate_field(
-            win, auto_id="txtRecipeFile",
-            value=recipe_file,
-            required=False
-        )
+        if not file_dialog_found or file_dlg is None:
+            log.error(
+                "  \u274c File dialog not found after clicking LoadProfile. "
+                "Ensure SLATE has a Profile -> LoadProfile menu item."
+            )
+            # Try pressing Escape to close any partial menu state
+            try:
+                pw_keyboard.send_keys("{ESCAPE}")  # type: ignore[union-attr]
+            except Exception:
+                pass
+            return False
 
-    # ── Temp Traveler Attributes (optional) ────────────────────────────
-    # For each attribute parsed from the XML's <TempTraveler> section,
-    # fill Section combobox + Attr Name + Attr Value, then click Add.
-    # Confirmed auto_ids from slate_full_controls_win32.txt:
-    #   cboTempTravelSection     — Section combobox
-    #   txtTempTravelAttrName    — Attr Name textbox
-    #   txtTempTravelAttrValue   — Attr Value textbox
-    #   btnTempTravelerAddAttr   — Add button
-    temp_traveler = fields.get("temp_traveler", [])
-    if temp_traveler:
+        # ── Type the XML path into the filename field ──────────────────────
+        # Standard Windows file dialogs have an Edit control with
+        # class_name="Edit" for the filename input.
+        # The combo box for filename typically has auto_id="1148" or
+        # class_name="ComboBoxEx32" with a child Edit.
         log.info(
-            "  \U0001f4dd Filling " + str(len(temp_traveler))
-            + " Temp Traveler attribute(s)..."
+            "  \U0001f4dd Typing XML path into file dialog: "
+            + latest_xml
         )
-        for idx, tt_attr in enumerate(temp_traveler):
-            section = tt_attr.get("Section", "")
-            attr_name = tt_attr.get("Name", "")
-            attr_value = tt_attr.get("Value", "")
-            log.info(
-                "    [" + str(idx + 1) + "/" + str(len(temp_traveler))
-                + "] Section='" + section
-                + "' Name='" + attr_name
-                + "' Value='" + attr_value + "'"
+
+        filename_set = False
+
+        # Strategy A: Find the Edit control directly in the dialog
+        try:
+            # Try the standard filename combo box (auto_id 1148 in Windows dialogs)
+            try:
+                fname_combo = file_dlg.child_window(
+                    class_name="ComboBoxEx32"
+                )
+                if fname_combo.exists(timeout=3):
+                    fname_edit = fname_combo.child_window(class_name="Edit")
+                    if fname_edit.exists(timeout=2):
+                        fname_edit.set_focus()
+                        fname_edit.set_edit_text(latest_xml)
+                        time.sleep(T_AFTER_FIELD_SET)
+                        filename_set = True
+                        log.info("  \u2705 Filename set via ComboBoxEx32 -> Edit")
+            except Exception:
+                pass
+
+            # Strategy B: Find any Edit control in the dialog
+            if not filename_set:
+                try:
+                    fname_edit = file_dlg.child_window(class_name="Edit")
+                    if fname_edit.exists(timeout=3):
+                        fname_edit.set_focus()
+                        fname_edit.set_edit_text(latest_xml)
+                        time.sleep(T_AFTER_FIELD_SET)
+                        filename_set = True
+                        log.info("  \u2705 Filename set via Edit control")
+                except Exception:
+                    pass
+
+            # Strategy C: Use keyboard to type the path
+            if not filename_set:
+                try:
+                    file_dlg.set_focus()
+                    time.sleep(0.3)
+                    # Ctrl+A to select all, then type the path
+                    pw_keyboard.send_keys("^a")  # type: ignore[union-attr]
+                    time.sleep(0.1)
+                    pw_keyboard.send_keys(  # type: ignore[union-attr]
+                        latest_xml, with_spaces=True
+                    )
+                    time.sleep(T_AFTER_FIELD_SET)
+                    filename_set = True
+                    log.info("  \u2705 Filename typed via keyboard")
+                except Exception as kb_err:
+                    log.error(
+                        "  \u274c Cannot type filename: " + str(kb_err)
+                    )
+
+            if not filename_set:
+                log.error(
+                    "  \u274c Could not set filename in file dialog"
+                )
+                # Close the dialog
+                try:
+                    pw_keyboard.send_keys("{ESCAPE}")  # type: ignore[union-attr]
+                except Exception:
+                    pass
+                return False
+
+        except Exception as e:
+            log.error(
+                "  \u274c File dialog filename entry failed: "
+                + type(e).__name__ + ": " + str(e)
             )
             try:
-                # Set Section combobox
-                _set_slate_combobox(
-                    win, auto_id="cboTempTravelSection",
-                    value=section, required=False
-                )
-                # Set Attr Name
-                _set_slate_field(
-                    win, auto_id="txtTempTravelAttrName",
-                    value=attr_name, required=False
-                )
-                # Set Attr Value
-                _set_slate_field(
-                    win, auto_id="txtTempTravelAttrValue",
-                    value=attr_value, required=False
-                )
-                # Click Add button
-                _click_slate_button(
-                    win, auto_id="btnTempTravelerAddAttr",
-                    label="Add", wait_after=0.5, required=False
-                )
-            except Exception as tt_err:
-                log.warning(
-                    "    \u26a0\ufe0f Temp Traveler attr " + str(idx + 1)
-                    + " failed: " + str(tt_err) + " — continuing"
-                )
+                pw_keyboard.send_keys("{ESCAPE}")  # type: ignore[union-attr]
+            except Exception:
+                pass
+            return False
 
-    # ── DUT Location Panel Clicks ────────────────────────────────────────
-    # Click the DUT slot panels in the SLATE grid to select/activate them.
-    # SLATE grid layout: 4 rows (prim 0-3) × 32 columns (slot 1-32)
-    # Panel auto_id pattern: pnlDUT_{rack}_{prim}_{slot}
-    #   rack  = 1 (always — single rack)
-    #   prim  = primitive from DutLocation
-    #   slot  = dut + 1 from DutLocation (1-indexed, 1-32)
-    # New CAT format: DutLocation="1,0,32" → pnlDUT_1_0_33
-    #   (tester_flag=1, primitive=0, dut=32)
-    # Old format:     DutLocation="0,0"    → pnlDUT_1_0_1
-    #   (row=0, col=0)
-    dut_locations = fields.get("dut_locations", [])
-    if dut_locations:
-        log.info(
-            "  \U0001f4dd Clicking " + str(len(dut_locations))
-            + " DUT location panel(s) in SLATE grid..."
-        )
-        for idx, loc in enumerate(dut_locations):
-            try:
-                parts = loc.split(",")
-                if len(parts) == 3:
-                    # New CAT format: "tester_flag,primitive,dut"
-                    # tester_flag: 1=NEOSEM, 0=ADVANTEST
-                    tester_flag = int(parts[0].strip())
-                    row = int(parts[1].strip())
-                    col = int(parts[2].strip())
-                elif len(parts) == 2:
-                    # Old format: "row,col" — backward compatible
-                    row = int(parts[0].strip())
-                    col = int(parts[1].strip())
-                else:
-                    log.warning(
-                        "    \u26a0\ufe0f Invalid DutLocation format: '"
-                        + loc + "' — expected 'flag,prim,dut' or 'row,col', skipping"
-                    )
-                    continue
-                # SLATE panels are 1-indexed for slot (column)
-                slot = col + 1
-                panel_id = "pnlDUT_1_" + str(row) + "_" + str(slot)
-                log.info(
-                    "    [" + str(idx + 1) + "/" + str(len(dut_locations))
-                    + "] DutLocation='" + loc
-                    + "' -> panel auto_id='" + panel_id + "'"
-                )
+        # ── Click Open / press Enter to confirm ───────────────────────────
+        log.info("  \U0001f7e2 Confirming file selection...")
+        try:
+            # Try clicking the "Open" button first
+            open_clicked = False
+            for btn_text in ["&Open", "Open", "OK", "Load"]:
                 try:
-                    panel = win.child_window(auto_id=panel_id)
-                    if panel.exists(timeout=3):
-                        panel.click_input()
-                        time.sleep(0.3)
-                        log.info(
-                            "      \u2705 Clicked " + panel_id
-                        )
-                    else:
-                        log.warning(
-                            "      \u26a0\ufe0f Panel " + panel_id
-                            + " not found — skipping"
-                        )
-                except Exception as click_err:
-                    log.warning(
-                        "      \u26a0\ufe0f Click failed for " + panel_id
-                        + ": " + str(click_err) + " — continuing"
+                    open_btn = file_dlg.child_window(
+                        title=btn_text, class_name="Button"
                     )
-            except (ValueError, IndexError) as parse_err:
-                log.warning(
-                    "    \u26a0\ufe0f Cannot parse DutLocation '"
-                    + loc + "': " + str(parse_err) + " — skipping"
-                )
-    else:
-        log.info("  \u23ed No DUT locations in XML — skipping panel clicks")
+                    if open_btn.exists(timeout=2) and open_btn.is_enabled():
+                        open_btn.click_input()
+                        open_clicked = True
+                        log.info(
+                            "  \u2705 Clicked '" + btn_text
+                            + "' button in file dialog"
+                        )
+                        break
+                except Exception:
+                    continue
 
-    log.info(
-        "  \u2705 Phase 1 complete — XML resolved & fields autofilled: "
-        + os.path.basename(latest_xml)
-    )
+            # Fallback: press Enter
+            if not open_clicked:
+                pw_keyboard.send_keys("{ENTER}")  # type: ignore[union-attr]
+                log.info("  \u2705 Pressed Enter to confirm file dialog")
 
-    _dismiss_slate_popups(win)
+        except Exception as e:
+            log.warning(
+                "  \u26a0\ufe0f Could not click Open button: " + str(e)
+                + " — pressing Enter as fallback"
+            )
+            try:
+                pw_keyboard.send_keys("{ENTER}")  # type: ignore[union-attr]
+            except Exception:
+                pass
 
-    # ════════════════════════════════════════════════════════
-    # PHASE 2 — BUTTON WORKFLOW
-    # Checkout ends at Create Playground — NO Load Recipe / Run Test.
-    # Steps: Recipe Selection → Get Manudata → Create Temp Traveler
-    #        → Create Playground → DONE
-    # ════════════════════════════════════════════════════════
-    log.info("  \U0001f4cb Phase 2: Button workflow (up to Create Playground)")
-
-    # ── Step 1: Run Recipe Selection (optional) ───────────────────────────
-    log.info("  \u2500\u2500 Step 1/4: Run Recipe Selection")
-    ok = _click_slate_button(
-        win,
-        auto_id    = "btnRunRecipeSelect",
-        label      = "Run Recipe Selection",
-        wait_after = T_RUN_RECIPE_SEL,
-        required   = False
-    )
-    if not ok:
-        log.warning("    \u26a0\ufe0f Run Recipe Selection failed — continuing")
-    _dismiss_slate_popups(win)
-
-    # ── Step 2: Get Manudata (optional) ──────────────────────────────────
-    log.info("  \u2500\u2500 Step 2/4: Get Manudata")
-    ok = _click_slate_button(
-        win,
-        auto_id    = "btnGetManuData",
-        label      = "Get Manudata",
-        wait_after = T_GET_MANUDATA,
-        required   = False
-    )
-    if not ok:
-        log.warning("    \u26a0\ufe0f Get Manudata failed — continuing")
-    _dismiss_slate_popups(win)
-
-    # ── Step 3: Create Temp Traveler (optional) ───────────────────────────
-    log.info("  \u2500\u2500 Step 3/4: Create Temp Traveler")
-    ok = _click_slate_button(
-        win,
-        auto_id    = "btnCreateTempTravel",
-        label      = "Create Temp Traveler",
-        wait_after = T_CREATE_TEMP_TRAVEL,
-        required   = False
-    )
-    if not ok:
-        log.warning("    \u26a0\ufe0f Create Temp Traveler failed — continuing")
-    _dismiss_slate_popups(win)
-
-    # ── Step 4: Create Playground (REQUIRED — FINAL STEP) ─────────────────
-    log.info("  \u2500\u2500 Step 4/4: Create Playground  [REQUIRED — FINAL STEP]")
-
-    # Clear any previous fatal popup text before clicking Create Playground
-    global _last_fatal_popup_text
-    _last_fatal_popup_text = ""
-
-    if not _click_slate_button(
-        win,
-        auto_id    = "btnCreatePlayground",
-        label      = "Create Playground",
-        wait_after = T_CREATE_PLAYGROUND,
-        required   = True
-    ):
-        log.error("  \u274c Create Playground FAILED — aborting workflow")
-        return False
-
-    # Check for fatal popups AFTER Create Playground — this catches
-    # "Failed to Create Lot Cache" (Critical Attribute mismatch) and
-    # similar errors that SLATE shows as modal dialogs.
-    fatal_text = _dismiss_slate_popups(win)
-    if fatal_text:
+    except Exception as e:
         log.error(
-            "  \u274c FATAL popup after Create Playground — "
-            "playground was NOT created!\n"
-            "  Error: " + fatal_text
+            "  \u274c File dialog handling failed: "
+            + type(e).__name__ + ": " + str(e)
         )
         return False
 
-    # Also check the global sentinel in case the popup was caught
-    # by a concurrent dismiss call or appeared slightly delayed
+    # ════════════════════════════════════════════════════════
+    # LOAD PROFILE COMPLETE
+    # Profile loaded via menu + file dialog.
+    # SLATE will automatically run all checkout steps:
+    #   Recipe Selection → Get Manudata → Create Temp Traveler
+    #   → Create Playground
+    #
+    # IMPORTANT: Do NOT wait for the "DUT load" popup here!
+    # The popup detection is handled by _wait_for_dut_load_popup()
+    # which is called AFTER slate_gui_trigger() returns.
+    # ════════════════════════════════════════════════════════
+
+    # ── Wait for LoadProfile to complete and show the DUT load popup ──
+    # The "Profile Finished Successfully" / "Loaded DUT: X,Y,Z" popup
+    # signals that SLATE has finished processing the profile and the
+    # workspace folder has been created.
+    #
+    # We wait for it HERE (inside slate_gui_trigger) instead of in
+    # process_checkout_xml because the popup appears while the SLATE
+    # window is still active and accessible via pywinauto.
+    log.info("  \U0001f4cb Waiting for LoadProfile to complete (DUT load popup)...")
+    
+    # Give SLATE time to process the profile (Recipe Selection, Manudata,
+    # Temp Traveler, Playground creation) before checking for the popup.
+    # Typical processing time: 30-60 seconds.
+    time.sleep(5)  # Initial settle time
+    
+    popup_ok = _wait_for_dut_load_popup(
+        timeout=T_DUT_LOAD_TIMEOUT,
+        poll_interval=T_DUT_LOAD_POLL,
+    )
+
+    if not popup_ok:
+        # popup_ok=False means either timeout OR empty "Loaded DUT:"
+        # Both are definitive failures.
+        if _last_fatal_popup_text:
+            fail_msg = (
+                "DUT load popup detected but EMPTY — no DUTs were loaded. "
+                "Detail: " + _last_fatal_popup_text[:500]
+            )
+        else:
+            fail_msg = (
+                "DUT load popup was NOT detected (timed out after "
+                + str(T_DUT_LOAD_TIMEOUT) + "s). "
+                "SLATE did not produce a 'Loaded DUT' confirmation."
+            )
+        log.error("  \u274c " + fail_msg)
+        return False
+
+    # ── Check for fatal popups that may have appeared during LoadProfile ──
+    # A fatal popup (e.g. "Failed to Create Lot Cache") may have been
+    # dismissed by _dismiss_slate_popups() during the LoadProfile process.
+    # Check the global sentinel to see if one was captured.
     if _last_fatal_popup_text:
         log.error(
-            "  \u274c FATAL popup detected during Create Playground:\n"
+            "  \u274c FATAL popup detected during LoadProfile:\n"
             "  " + _last_fatal_popup_text
         )
         return False
 
-    # ════════════════════════════════════════════════════════
-    # CHECKOUT ENDS HERE — no Load Recipe / Run Test.
-    # The checkout process on the tester ends at Create Playground.
-    # Memory collection will be triggered separately after this returns.
-    # ════════════════════════════════════════════════════════
-
-    log.info("  \u2705 \u2705 \u2705 slate_gui_trigger COMPLETE — Playground CREATED!")
+    log.info(
+        "  \u2705 \u2705 \u2705 slate_gui_trigger COMPLETE — "
+        "Profile loaded + DUT load popup confirmed!"
+    )
     log.info("      XML: " + xml_name)
     return True
+
+
+# ── WAIT FOR DUT LOAD POPUP ──────────────────────────────────────────────────
+# After LoadProfile, SLATE processes the XML and eventually shows a
+# "Loaded DUT" / "DUT load successful" popup.  This popup signals that
+# the workspace folder has been created.
+T_DUT_LOAD_POLL    = 10       # poll every 10 seconds
+T_DUT_LOAD_TIMEOUT = 600     # give up after 10 minutes
+
+
+def _wait_for_dut_load_popup(timeout=None, poll_interval=None):
+    """
+    Poll Desktop windows until a popup whose title contains DUT-load
+    keywords appears.  Detection only — dismissal is handled by
+    _dismiss_slate_popups() which is called by the caller after this
+    function returns True.
+
+    Uses Desktop(backend="win32").windows() directly — the proven working
+    approach from the old checkout_watcher.
+
+    Args:
+        timeout       : int — max seconds to wait (default: T_DUT_LOAD_TIMEOUT)
+        poll_interval : float — seconds between polls (default: T_DUT_LOAD_POLL)
+
+    Returns:
+        True  — popup detected (caller must dismiss via _dismiss_slate_popups)
+        False — timed out, OR popup had empty "Loaded DUT:" (no playground)
+    """
+    global _last_fatal_popup_text
+
+    if timeout is None:
+        timeout = T_DUT_LOAD_TIMEOUT
+    if poll_interval is None:
+        poll_interval = T_DUT_LOAD_POLL
+
+    if not _PYWINAUTO_AVAILABLE:
+        log.warning("[DUT Popup] pywinauto not available — cannot detect popup")
+        return False
+
+    # ── Success keywords — broad match like the old working watcher ────────
+    # SLATE may use different casing/phrasing — match broadly.
+    success_keywords = [
+        "dut load successful",
+        "dut loaded",
+        "load successful",
+        "loaded dut",
+        "profile finished",
+    ]
+
+    log.info(
+        "  \u23f3 Waiting for 'Dut load successful' popup "
+        "(timeout=" + str(timeout) + "s, poll=" + str(poll_interval) + "s)..."
+    )
+
+    start = time.time()
+    while (time.time() - start) < timeout:
+        try:
+            # Use Desktop(backend="win32").windows() directly — proven working
+            all_windows = Desktop(backend="win32").windows()  # type: ignore[operator]
+            for w in all_windows:
+                try:
+                    title = w.window_text().strip()
+                    if not title:
+                        continue
+
+                    # Check if this window title matches any success keyword
+                    title_lower = title.lower()
+                    if not any(kw in title_lower for kw in success_keywords):
+                        continue
+
+                    # ── Found a matching popup! ──────────────────────────
+
+                    # Extract body text from Static children for logging
+                    # and empty-DUT detection.
+                    body_text_full = ""
+                    try:
+                        for child in w.children():
+                            try:
+                                if child.class_name() == "Static":
+                                    ct = child.window_text().strip()
+                                    if ct:
+                                        body_text_full += ct + "\n"
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
+
+                    # Build a descriptive label for log messages.
+                    # Prefer "Loaded DUT: 0,2,5" from body over the
+                    # generic title "Profile Finished Successfully".
+                    loaded_dut_line = ""
+                    loaded_dut_content = ""
+                    for bline in body_text_full.splitlines():
+                        stripped = bline.strip()
+                        if stripped.lower().startswith("loaded dut"):
+                            loaded_dut_line = stripped
+                            parts = stripped.split(":", 1)
+                            if len(parts) > 1:
+                                loaded_dut_content = parts[1].strip()
+                            break
+                    popup_label = loaded_dut_line if loaded_dut_line else title
+
+                    log.info(
+                        "  \u2705 'Dut load successful' popup detected: '"
+                        + popup_label + "'"
+                    )
+
+                    # ── Check for empty "Loaded DUT:" — treat as FAILURE ─
+                    # "Profile Finished Successfully" with "Loaded DUT:" but
+                    # NO actual DUT locations means the playground was NOT
+                    # created.  Return False so process_checkout_xml marks
+                    # it as failed instead of proceeding to collect results.
+                    try:
+
+                        is_empty_dut = (
+                            not loaded_dut_content
+                            and (
+                                "profile finished" in title_lower
+                                or "loaded dut" in title_lower
+                                or any(
+                                    "loaded dut" in bl.lower()
+                                    for bl in body_text_full.splitlines()
+                                )
+                            )
+                        )
+
+                        if is_empty_dut:
+                            # Set the fatal popup sentinel so callers know
+                            # this was a definitive failure (not a timeout).
+                            _last_fatal_popup_text = (
+                                title + " — NO DUTs loaded! "
+                                "Profile finished but no DUT locations were "
+                                "assigned. Playground was NOT created."
+                            )
+                            log.error(
+                                "  \u274c 'Loaded DUT:' is EMPTY — "
+                                "no DUTs were loaded into the playground. "
+                                "This means the profile/lot failed to load."
+                            )
+                            log.error(
+                                "  Popup title: '" + title + "'"
+                            )
+                            if body_text_full.strip():
+                                log.error(
+                                    "  Popup body:\n"
+                                    + body_text_full.strip()
+                                )
+                            return False
+                    except Exception as empty_check_err:
+                        log.debug(
+                            "  Empty DUT check error (non-fatal): "
+                            + str(empty_check_err)
+                        )
+
+                    # ── Dismiss the popup ─────────────────────────────
+                    # The window `w` from Desktop().windows() is an
+                    # HwndWrapper — child_window() does NOT work on it.
+                    # Use Application().connect(handle=) to get a proper
+                    # wrapper, then ctypes as fallback.
+                    dismissed = False
+
+                    # Method 1: Re-connect via Application to get a
+                    # proper DialogWrapper that supports child_window().
+                    try:
+                        popup_handle = w.handle
+                        popup_app = Application(backend="win32").connect(
+                            handle=popup_handle
+                        )
+                        popup_dlg = popup_app.window(handle=popup_handle)
+                        for btn_text in ["OK", "&OK", "Yes", "&Yes",
+                                         "Continue", "Close"]:
+                            try:
+                                btn = popup_dlg.child_window(
+                                    title=btn_text,
+                                    class_name="Button"
+                                )
+                                if btn.exists(timeout=2) and btn.is_enabled():
+                                    btn.click_input()
+                                    time.sleep(0.5)
+                                    log.info(
+                                        "  \u2705 Dismissed '" + popup_label
+                                        + "' via button '" + btn_text
+                                        + "' (App.connect)"
+                                    )
+                                    dismissed = True
+                                    break
+                            except Exception:
+                                continue
+                    except Exception as m1_err:
+                        log.debug(
+                            "  Dismiss Method 1 (App.connect) error: "
+                            + str(m1_err)
+                        )
+
+                    # Method 2: ctypes Win32 API — FindWindowExW to
+                    # locate the Button child, then send BM_CLICK.
+                    if not dismissed:
+                        try:
+                            import ctypes
+                            from ctypes import wintypes
+                            _user32 = ctypes.windll.user32
+                            _FindWindowExW = _user32.FindWindowExW
+                            _FindWindowExW.argtypes = [
+                                wintypes.HWND, wintypes.HWND,
+                                wintypes.LPCWSTR, wintypes.LPCWSTR,
+                            ]
+                            _FindWindowExW.restype = wintypes.HWND
+                            _SendMsg = _user32.SendMessageW
+                            _SendMsg.argtypes = [
+                                wintypes.HWND, wintypes.UINT,
+                                wintypes.WPARAM, wintypes.LPARAM,
+                            ]
+                            _SendMsg.restype = wintypes.LPARAM
+                            BM_CLICK = 0x00F5
+                            parent_hwnd = w.handle
+                            for btn_text in ["OK", "&OK", "Yes", "&Yes"]:
+                                btn_hwnd = _FindWindowExW(
+                                    parent_hwnd, None, "Button", btn_text
+                                )
+                                if btn_hwnd:
+                                    _SendMsg(btn_hwnd, BM_CLICK, 0, 0)
+                                    time.sleep(0.5)
+                                    log.info(
+                                        "  \u2705 Dismissed '" + popup_label
+                                        + "' via BM_CLICK '" + btn_text
+                                        + "' (ctypes)"
+                                    )
+                                    dismissed = True
+                                    break
+                            # Try first Button child regardless of text
+                            if not dismissed:
+                                btn_hwnd = _FindWindowExW(
+                                    parent_hwnd, None, "Button", None
+                                )
+                                if btn_hwnd:
+                                    _SendMsg(btn_hwnd, BM_CLICK, 0, 0)
+                                    time.sleep(0.5)
+                                    log.info(
+                                        "  \u2705 Dismissed '" + popup_label
+                                        + "' via BM_CLICK first Button"
+                                        " (ctypes)"
+                                    )
+                                    dismissed = True
+                        except Exception as m2_err:
+                            log.debug(
+                                "  Dismiss Method 2 (ctypes) error: "
+                                + str(m2_err)
+                            )
+
+                    # Method 3: PostMessage WM_CLOSE to the popup
+                    if not dismissed:
+                        try:
+                            import ctypes
+                            WM_CLOSE = 0x0010
+                            ctypes.windll.user32.PostMessageW(
+                                w.handle, WM_CLOSE, 0, 0
+                            )
+                            time.sleep(0.5)
+                            log.info(
+                                "  \u2705 Dismissed '" + popup_label
+                                + "' via WM_CLOSE"
+                            )
+                            dismissed = True
+                        except Exception as m3_err:
+                            log.warning(
+                                "  \u26a0\ufe0f Could not dismiss '"
+                                + popup_label + "': " + str(m3_err)
+                            )
+
+                    return True
+
+                except Exception:
+                    continue
+
+        except Exception as e:
+            log.debug(
+                "  _wait_for_dut_load_popup scan error: " + str(e)
+            )
+
+        elapsed = int(time.time() - start)
+        if elapsed > 0 and elapsed % 30 == 0:
+            log.info(
+                "  \u23f3 Still waiting for 'Dut load successful'... "
+                + str(elapsed) + "/" + str(timeout) + "s"
+            )
+
+        time.sleep(poll_interval)
+
+    log.error(
+        "  \u274c Timed out after " + str(timeout)
+        + "s waiting for 'Dut load successful' popup"
+    )
+    return False
+
+
+# ── WORKSPACE RESULT COLLECTION ───────────────────────────────────────────────
+# How long to wait (seconds) for both result files to appear in the workspace.
+# The test may take a while after LoadProfile before files are generated.
+T_COLLECT_POLL_INTERVAL = 15      # check every 15 seconds
+T_COLLECT_TIMEOUT       = 1800    # give up after 30 minutes
+
+
+# ════════════════════════════════════════════════════════════════════════
+# MANIFEST-BASED FILE SELECTION — CORE FUNCTIONS
+#
+# Flow:
+#   1. Watcher calls scan_available_files() after test completion
+#      → scans workspace for allow-listed files that actually exist
+#   2. Watcher calls write_manifest() → writes JSON to CHECKOUT_RESULTS
+#      so BENTO GUI can read it
+#   3. BENTO GUI displays available files to user, user selects which
+#      optional files to collect, BENTO writes selection JSON back
+#   4. Watcher calls read_user_selection() → reads selection JSON
+#   5. Watcher calls copy_selected_files() → copies only selected
+#      (+ all required) files to the output folder
+#
+# If BENTO does not respond within MANIFEST_SELECTION_TIMEOUT, only
+# required files are copied (safe default).
+# ════════════════════════════════════════════════════════════════════════
+
+def scan_available_files(workspace_dir, logger):
+    """
+    Recursively scan the workspace directory for ALL files.
+
+    Every file found is included in the results.  Files that match an
+    entry in FILE_ALLOW_LIST inherit its ``key``, ``required`` flag, and
+    friendly ``desc``.  All other files are listed as optional with their
+    relative path used as the key.
+
+    Args:
+        workspace_dir : str — absolute path to the workspace folder
+                        (e.g. C:\\Tanisys\\DNA2\\User\\Workspace\\WS_20260409_...)
+        logger        : logging.Logger
+
+    Returns:
+        list of dict — each dict contains:
+            key      : str   — allow-list key or relative path
+            subpath  : str   — relative path from workspace root
+            required : bool  — True only for allow-list required entries
+            desc     : str   — human-readable description
+            found    : bool  — always True (file exists on disk)
+            paths    : list  — [absolute path]
+            sizes    : list  — [file size in bytes]
+            names    : list  — [basename]
+    """
+    import fnmatch as _fnmatch
+
+    # ── Step 1: Build lookup from FILE_ALLOW_LIST ──────────────────────
+    # Map (normalised subpath pattern) -> allow-list entry so we can
+    # match discovered files against known entries.
+    _allow_map = {}          # subpath_pattern -> entry dict
+    _allow_matched = {}      # subpath_pattern -> list of result dicts (filled below)
+    for entry in FILE_ALLOW_LIST:
+        _allow_map[entry["subpath"]] = entry
+        _allow_matched[entry["subpath"]] = []
+
+    # ── Step 2: Walk the entire workspace recursively ──────────────────
+    results = []
+    seen_paths = set()       # avoid duplicates
+
+    for dirpath, _dirnames, filenames in os.walk(workspace_dir):
+        for fname in filenames:
+            full_path = os.path.join(dirpath, fname)
+            if not os.path.isfile(full_path):
+                continue
+
+            # Compute relative path (forward-slash normalised)
+            rel_path = os.path.relpath(full_path, workspace_dir).replace("\\", "/")
+
+            if rel_path in seen_paths:
+                continue
+            seen_paths.add(rel_path)
+
+            # File size
+            try:
+                fsize = os.path.getsize(full_path)
+            except OSError:
+                fsize = 0
+
+            # ── Check if this file matches any allow-list entry ────────
+            matched_entry = None
+            for pattern, entry in _allow_map.items():
+                # Normalise pattern separators
+                norm_pattern = pattern.replace("\\", "/")
+                # Try exact match first (e.g. "OS/resultsManager.db")
+                if _fnmatch.fnmatch(rel_path, norm_pattern):
+                    matched_entry = entry
+                    break
+                # Fallback: match basename only (MPT3 stores files at root)
+                if "/" in norm_pattern:
+                    base_pattern = norm_pattern.rsplit("/", 1)[-1]
+                    if _fnmatch.fnmatch(fname, base_pattern):
+                        matched_entry = entry
+                        break
+                else:
+                    if _fnmatch.fnmatch(fname, norm_pattern):
+                        matched_entry = entry
+                        break
+
+            if matched_entry:
+                key      = matched_entry["key"]
+                required = matched_entry["required"]
+                desc     = matched_entry.get("desc", fname)
+                # Track that this allow-list entry was matched
+                _allow_matched[matched_entry["subpath"]].append(full_path)
+            else:
+                key      = rel_path
+                required = False
+                desc     = fname
+
+            results.append({
+                "key":      key,
+                "subpath":  rel_path,
+                "required": required,
+                "desc":     desc,
+                "found":    True,
+                "paths":    [full_path],
+                "sizes":    [fsize],
+                "names":    [fname],
+            })
+
+    # ── Step 3: Add allow-list entries that were NOT found ─────────────
+    # So the manifest shows them as "not found" (especially required ones)
+    for pattern, entry in _allow_map.items():
+        if _allow_matched[pattern]:
+            continue   # already matched — skip
+        results.append({
+            "key":      entry["key"],
+            "subpath":  entry["subpath"],
+            "required": entry["required"],
+            "desc":     entry.get("desc", ""),
+            "found":    False,
+            "paths":    [],
+            "sizes":    [],
+            "names":    [],
+        })
+
+    # ── Logging summary ───────────────────────────────────────────────
+    found_count = sum(1 for e in results if e["found"])
+    total_count = len(results)
+    total_size  = sum(s for e in results for s in e["sizes"])
+    if total_size > 1024 * 1024:
+        size_str = "%.1f MB" % (total_size / (1024.0 * 1024.0))
+    elif total_size > 1024:
+        size_str = "%.1f KB" % (total_size / 1024.0)
+    else:
+        size_str = str(total_size) + " B"
+    logger.info(
+        "[Manifest] Recursive scan complete: "
+        + str(found_count) + " files found, "
+        + str(total_count) + " entries total, "
+        + size_str + " on disk"
+    )
+
+    return results
+
+
+def write_manifest(scan_results, job_id, hostname, env, dest_dir, logger):
+    """
+    Write a JSON manifest listing available files for BENTO to read.
+
+    The manifest is written to:
+        <dest_dir>/file_manifest_<hostname>_<job_id>.json
+
+    BENTO GUI polls CHECKOUT_RESULTS for manifest files and displays
+    the available files to the user for selection.
+
+    Args:
+        scan_results : list — output from scan_available_files()
+        job_id       : str  — JIRA key or job identifier
+        hostname     : str  — tester hostname
+        env          : str  — tester environment (ABIT, SFN2, etc.)
+        dest_dir     : str  — output directory (usually CHECKOUT_RESULTS/...)
+        logger       : logging.Logger
+
+    Returns:
+        str — path to the written manifest file, or "" on error
+    """
+    manifest = {
+        "job_id":    job_id,
+        "hostname":  hostname,
+        "env":       env,
+        "timestamp": datetime.now().isoformat(),
+        "files":     [],
+    }
+
+    for entry in scan_results:
+        manifest["files"].append({
+            "key":      entry["key"],
+            "subpath":  entry.get("subpath", entry["key"]),
+            "desc":     entry["desc"],
+            "required": entry["required"],
+            "found":    entry["found"],
+            "count":    len(entry["paths"]),
+            "sizes":    entry["sizes"],
+            "names":    entry.get("names", [os.path.basename(p) for p in entry["paths"]]),
+        })
+
+    # Ensure destination directory exists
+    try:
+        if not os.path.isdir(dest_dir):
+            os.makedirs(dest_dir)
+    except OSError as e:
+        logger.error("[Manifest] Cannot create dest dir: " + str(e))
+        return ""
+
+    manifest_name = "file_manifest_" + hostname + "_" + job_id + ".json"
+    manifest_path = os.path.join(dest_dir, manifest_name)
+
+    try:
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2)
+        logger.info("[Manifest] Written: " + manifest_path)
+        return manifest_path
+    except Exception as e:
+        logger.error("[Manifest] Write failed: " + str(e))
+        return ""
+
+
+def read_user_selection(job_id, hostname, dest_dir, logger,
+                        timeout=MANIFEST_SELECTION_TIMEOUT,
+                        poll_interval=MANIFEST_POLL_INTERVAL):
+    """
+    Wait for BENTO GUI to write back a selection JSON file.
+
+    BENTO writes:
+        <dest_dir>/file_selection_<hostname>_<job_id>.json
+    containing:
+        {
+            "job_id": "TSESSD-14270",
+            "selected_keys": ["results_db", "tracefile", "dispatcher_debug"]
+        }
+
+    Required files are ALWAYS included even if the user omits them.
+
+    Args:
+        job_id        : str  — JIRA key or job identifier
+        hostname      : str  — tester hostname
+        dest_dir      : str  — directory to poll for selection file
+        logger        : logging.Logger
+        timeout       : int  — max seconds to wait (default: MANIFEST_SELECTION_TIMEOUT)
+        poll_interval : int  — seconds between polls (default: MANIFEST_POLL_INTERVAL)
+
+    Returns:
+        list of str — selected file keys (always includes required keys)
+        None        — on timeout (caller should fall back to required-only)
+    """
+    selection_name = "file_selection_" + hostname + "_" + job_id + ".json"
+    selection_path = os.path.join(dest_dir, selection_name)
+
+    if timeout <= 0:
+        logger.info(
+            "[Manifest] Waiting for user selection: " + selection_name
+            + " (no timeout — waiting until user confirms)"
+        )
+    else:
+        logger.info(
+            "[Manifest] Waiting for user selection: " + selection_name
+            + " (timeout=" + str(timeout) + "s)"
+        )
+
+    start = time.time()
+    while True:
+        elapsed = time.time() - start
+
+        if os.path.isfile(selection_path):
+            try:
+                with open(selection_path, "r") as f:
+                    data = json.load(f)
+
+                selected_keys = data.get("selected_keys", [])
+                logger.info(
+                    "[Manifest] User selection received: "
+                    + str(selected_keys)
+                    + " (after " + str(int(elapsed)) + "s)"
+                )
+
+                # Always include required keys (match by allow-list key)
+                for entry in FILE_ALLOW_LIST:
+                    if entry["required"] and entry["key"] not in selected_keys:
+                        selected_keys.append(entry["key"])
+                        logger.info(
+                            "[Manifest] Auto-added required key: " + entry["key"]
+                        )
+
+                # Clean up selection file after reading
+                try:
+                    os.remove(selection_path)
+                except OSError:
+                    pass
+
+                return selected_keys
+
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                logger.warning(
+                    "[Manifest] Invalid selection file: " + str(e)
+                    + " — waiting for valid file..."
+                )
+
+        # timeout <= 0 means wait indefinitely (no timeout)
+        if timeout > 0 and elapsed >= timeout:
+            logger.warning(
+                "[Manifest] Selection timeout after " + str(int(elapsed))
+                + "s — falling back to required-only files"
+            )
+            return None
+
+        # Periodic heartbeat log so user knows watcher is still alive
+        if int(elapsed) > 0 and int(elapsed) % 60 == 0:
+            logger.info(
+                "[Manifest] Still waiting for user selection... ("
+                + str(int(elapsed)) + "s)"
+            )
+
+        time.sleep(poll_interval)
+
+
+def copy_selected_files(scan_results, selected_keys, dest_dir, logger,
+                        rename_prefix=""):
+    """
+    Copy selected (and all required) files from workspace to dest_dir.
+
+    Files are matched by their ``key`` field from scan_available_files().
+    For allow-listed files the key is a short name (e.g. "results_db");
+    for all other workspace files the key is the relative path
+    (e.g. "OS/resultsManager.db", "Traces/debug.log").
+
+    Args:
+        scan_results  : list — output from scan_available_files()
+        selected_keys : list of str — keys chosen by user (allow-list key or rel path)
+        dest_dir      : str  — destination folder
+        logger        : logging.Logger
+        rename_prefix : str  — e.g. "P2D1_"; when non-empty, DispatcherDebug*.txt
+                        files are renamed to <prefix>TraceFile.txt (e.g. P2D1_TraceFile.txt)
+
+    Returns:
+        (copied_names, copied_count) — list of copied filenames, total count
+    """
+    # Build the effective key set: selected + all required
+    effective_keys = set(selected_keys) if selected_keys else set()
+    for entry in FILE_ALLOW_LIST:
+        if entry["required"]:
+            effective_keys.add(entry["key"])
+
+    # Ensure destination directory exists
+    try:
+        if not os.path.isdir(dest_dir):
+            os.makedirs(dest_dir)
+    except OSError as e:
+        logger.error("[Manifest] Cannot create dest dir: " + str(e))
+        return [], 0
+
+    copied_names = []
+    copied_count = 0
+
+    for entry in scan_results:
+        key = entry["key"]
+        if key not in effective_keys:
+            logger.debug("[Manifest] Skipping (not selected): " + key)
+            continue
+
+        if not entry["found"]:
+            if entry["required"]:
+                logger.warning(
+                    "[Manifest] Required file NOT found: " + key
+                    + " (" + entry.get("subpath", key) + ")"
+                )
+            continue
+
+        for src_path in entry["paths"]:
+            fname = os.path.basename(src_path)
+
+            # ── Rename with P{x}D{y}_ prefix ────────────────────────────
+            # When rename_prefix is set (flat mode / IBIR), rename files so
+            # downstream tools can find them consistently:
+            #   DispatcherDebug*.txt → P{x}D{y}_TraceFile.txt
+            #   resultsManager.db   → P{x}D{y}_resultsManager.db
+            if rename_prefix and key == "dispatcher_debug":
+                dest_fname = rename_prefix + "TraceFile.txt"
+                logger.info(
+                    "[Manifest] Renaming " + fname
+                    + " -> " + dest_fname
+                    + " (prefix=" + rename_prefix + ")"
+                )
+            elif rename_prefix and key == "results_db":
+                dest_fname = rename_prefix + fname
+                logger.info(
+                    "[Manifest] Renaming " + fname
+                    + " -> " + dest_fname
+                    + " (prefix=" + rename_prefix + ")"
+                )
+            else:
+                dest_fname = fname
+
+            # Preserve subdirectory structure from the relative path
+            subpath = entry.get("subpath", key)
+            rel_parts = subpath.replace("\\", "/").split("/")
+            if len(rel_parts) > 1:
+                # File is in a subdirectory — create it in dest
+                sub_dir = os.path.join(dest_dir, *rel_parts[:-1])
+                try:
+                    if not os.path.isdir(sub_dir):
+                        os.makedirs(sub_dir)
+                except OSError:
+                    sub_dir = dest_dir  # fallback to flat copy
+                dest_path = os.path.join(sub_dir, dest_fname)
+            else:
+                dest_path = os.path.join(dest_dir, dest_fname)
+
+            try:
+                shutil.copy2(src_path, dest_path)
+                copied_names.append(dest_fname)
+                copied_count += 1
+                logger.info(
+                    "[Manifest] Copied: " + fname
+                    + " -> " + dest_fname
+                    + " (" + key + ")"
+                )
+            except Exception as e:
+                logger.error(
+                    "[Manifest] Failed to copy " + fname + ": " + str(e)
+                )
+
+    logger.info(
+        "[Manifest] Total copied: " + str(copied_count)
+        + " file(s) -> " + dest_dir
+    )
+    return copied_names, copied_count
+
+
+def _get_workspace_info(env):
+    """
+    Return (workspace_folder, workspace_mode) for the given environment.
+
+    Workspace modes:
+      "flat"           — subfolders directly under workspace_folder
+                         (e.g. C:\\Tanisys\\DNA2\\User\\Workspace\\<lot_folder>)
+      "primitive_dut"  — the workspace IS the DUT folder itself; search
+                         Primitive*/DUT* for the latest modified DUT folder
+                         (e.g. C:\\test_program\\Rack0\\Primitive2\\DUT5)
+
+    Falls back to SLATE_WORKSPACE_FOLDER / "flat" if env not in registry.
+    """
+    try:
+        cfg = TESTER_REGISTRY[env]
+        folder = cfg.get("workspace_folder", SLATE_WORKSPACE_FOLDER)
+        mode   = cfg.get("workspace_mode", "flat")
+        return folder, mode
+    except (KeyError, TypeError):
+        return SLATE_WORKSPACE_FOLDER, "flat"
+
+
+def _find_latest_workspace_dir(workspace_folder, workspace_mode, logger):
+    """
+    Find the most recently modified workspace directory.
+
+    For "flat" mode:
+      Scans workspace_folder for the latest modified subfolder.
+      Returns e.g. C:\\Tanisys\\DNA2\\User\\Workspace\\<lot_folder>
+
+    For "primitive_dut" mode:
+      The workspace IS the DUT folder itself.  Scans all
+      workspace_folder/Primitive*/DUT* directories and returns the
+      latest modified DUT folder.
+      Returns e.g. C:\\test_program\\Rack0\\Primitive2\\DUT5
+
+    Returns the full path to the workspace directory, or None if not found.
+    """
+    latest_dir  = None
+    latest_time = 0
+
+    if workspace_mode == "primitive_dut":
+        # The workspace IS the DUT* folder — find the latest one.
+        # E.g. C:\test_program\Rack0\Primitive2\DUT5
+        dut_pattern = os.path.join(workspace_folder, "Primitive*", "DUT*")
+        dut_dirs = glob.glob(dut_pattern)
+        if not dut_dirs:
+            logger.warning(
+                "[Collect] No Primitive*/DUT* folders found in "
+                + workspace_folder
+            )
+            return None
+
+        for dut_dir in dut_dirs:
+            if not os.path.isdir(dut_dir):
+                continue
+            try:
+                mtime = os.path.getmtime(dut_dir)
+                if mtime > latest_time:
+                    latest_time = mtime
+                    latest_dir  = dut_dir
+            except OSError:
+                continue
+
+        if latest_dir is None:
+            logger.warning(
+                "[Collect] No DUT* folders found in "
+                + workspace_folder + "/Primitive*/"
+            )
+    else:
+        # Flat mode — subfolders directly under workspace_folder
+        try:
+            for entry in os.listdir(workspace_folder):
+                full = os.path.join(workspace_folder, entry)
+                if not os.path.isdir(full):
+                    continue
+                mtime = os.path.getmtime(full)
+                if mtime > latest_time:
+                    latest_time = mtime
+                    latest_dir  = full
+        except OSError as e:
+            logger.error(
+                "[Collect] Cannot scan workspace folder: " + str(e)
+            )
+            return None
+
+        if latest_dir is None:
+            logger.warning(
+                "[Collect] No workspace subfolders found in "
+                + workspace_folder
+            )
+
+    return latest_dir
+
+
+def _collect_workspace_results(jira_key, hostname, env, logger, xml_path=""):
+    """
+    After a successful LoadProfile, find the most recently modified workspace
+    folder, then use the MANIFEST-BASED FILE SELECTION flow to let BENTO
+    users choose which files to collect.
+
+    Supports two workspace layouts:
+      - "flat" (IBIR-0383/ABIT): C:\\Tanisys\\DNA2\\User\\Workspace\\<lot>
+      - "primitive_dut" (MPT3HVM-0156/SFN2): C:\\test_program\\Rack0\\Primitive*\\DUT*\\<lot>
+
+    Flow:
+      1. Determine workspace folder + mode from TESTER_REGISTRY
+      2. Find latest workspace subfolder
+      3. Poll until REQUIRED files appear (resultsManager.db, Tracefile.txt)
+      4. Scan ALL allow-listed files via scan_available_files()
+      5. Write manifest JSON for BENTO GUI to read
+      6. Wait for user selection JSON from BENTO (with timeout)
+      7. Copy selected + required files via copy_selected_files()
+
+    If BENTO does not respond within MANIFEST_SELECTION_TIMEOUT, only
+    required files are copied (safe default — no data loss).
+
+    Returns (collected_file_names, dest_dir) on success, or (None, None) on
+    timeout/error.
+    """
+    workspace_folder, workspace_mode = _get_workspace_info(env)
+
+    if not os.path.isdir(workspace_folder):
+        logger.warning(
+            "[Collect] Workspace folder not found: " + workspace_folder
+        )
+        return None, None
+
+    logger.info(
+        "[Collect] Workspace folder: " + workspace_folder
+        + " (mode=" + workspace_mode + ")"
+    )
+
+    # ── Find the most recently modified workspace subfolder ────────────
+    latest_dir = _find_latest_workspace_dir(
+        workspace_folder, workspace_mode, logger
+    )
+    if latest_dir is None:
+        return None, None
+
+    workspace_name = os.path.basename(latest_dir)
+    logger.info("[Collect] Latest workspace: " + latest_dir)
+
+    # ── Build destination folder ──────────────────────────────────────
+    tester_folder = ""
+    if hostname and env:
+        tester_folder = hostname + "_" + env.upper()
+    elif hostname:
+        tester_folder = hostname
+    elif env:
+        tester_folder = env.upper()
+
+    # For primitive_dut mode, use PRIMITIVE{x}/DUT{y} subfolder structure
+    # instead of the raw workspace_name (which is just "DUT7").
+    # E.g. latest_dir = C:\test_program\Rack0\Primitive2\DUT7
+    #   → dest subfolder = PRIMITIVE2\DUT7
+    import re as _re
+    _prim_num = "0"
+    _dut_num  = "0"
+    _rename_prefix = ""
+    if workspace_mode == "primitive_dut":
+        # Extract primitive and DUT folder names from the path
+        _prim_match = _re.search(r'(?i)[/\\](primitive(\d+))[/\\]', latest_dir)
+        _dut_match  = _re.search(r'(?i)[/\\](DUT(\d+))\s*$', latest_dir)
+        _prim_name  = _prim_match.group(1).upper() if _prim_match else "PRIMITIVE0"
+        _dut_name   = _dut_match.group(1).upper() if _dut_match else workspace_name.upper()
+        if _prim_match:
+            _prim_num = _prim_match.group(2)
+        if _dut_match:
+            _dut_num = _dut_match.group(2)
+        _rename_prefix = "P" + _prim_num + "D" + _dut_num + "_"
+        dest_subfolder = os.path.join(_prim_name, _dut_name)
+    else:
+        # ── Flat mode (IBIR): extract Primitive/DUT from checkout XML ──
+        # The XML contains DutLocation="tester_flag,primitive,dut" which
+        # is the authoritative source for the DUT position.
+        # Workspace folder names (e.g. ANSKR20285608083800-2-0) use a
+        # DIFFERENT numbering scheme and must NOT be used for the prefix.
+        _xml_dut_extracted = False
+        if xml_path and os.path.isfile(xml_path):
+            try:
+                _xtree = ET.parse(xml_path)
+                _xroot = _xtree.getroot()
+                _mat_info = _xroot.find("MaterialInfo")
+                if _mat_info is not None:
+                    for _attr_el in _mat_info.findall("Attribute"):
+                        _loc_val = _attr_el.get("DutLocation", "").strip()
+                        if _loc_val:
+                            _loc_parts = _loc_val.split(",")
+                            if len(_loc_parts) == 3:
+                                _prim_num = _loc_parts[1].strip()
+                                _dut_num  = _loc_parts[2].strip()
+                                _rename_prefix = "P" + _prim_num + "D" + _dut_num + "_"
+                                _xml_dut_extracted = True
+                                logger.info(
+                                    "[Collect] Flat mode — extracted Primitive="
+                                    + _prim_num + ", DUT=" + _dut_num
+                                    + " from XML DutLocation: " + _loc_val
+                                )
+                            break  # use first MaterialInfo entry
+            except Exception as _xml_err:
+                logger.warning(
+                    "[Collect] Could not parse DutLocation from XML: "
+                    + str(_xml_err)
+                )
+
+        # Fallback: extract from workspace folder name if XML not available
+        if not _xml_dut_extracted:
+            _flat_match = _re.search(r'-(\d+)-(\d+)$', workspace_name)
+            if _flat_match:
+                _prim_num = _flat_match.group(1)
+                _dut_num  = _flat_match.group(2)
+                _rename_prefix = "P" + _prim_num + "D" + _dut_num + "_"
+                logger.info(
+                    "[Collect] Flat mode — extracted Primitive="
+                    + _prim_num + ", DUT=" + _dut_num
+                    + " from workspace name (fallback): " + workspace_name
+                )
+            else:
+                logger.info(
+                    "[Collect] Flat mode — could not extract Primitive/DUT "
+                    "from workspace name: " + workspace_name
+                    + " — no rename prefix will be applied"
+                )
+        dest_subfolder = workspace_name
+
+    if tester_folder:
+        dest_dir = os.path.join(
+            CHECKOUT_RESULTS_FOLDER, tester_folder, jira_key, dest_subfolder
+        )
+    else:
+        dest_dir = os.path.join(
+            CHECKOUT_RESULTS_FOLDER, jira_key, dest_subfolder
+        )
+
+    # ── MANIFEST-BASED FILE SELECTION (all workspace modes) ───────────
+    # Poll until REQUIRED files appear, then use manifest-based selection
+    # so the BENTO user can choose which files to collect.
+    #
+    # For primitive_dut (MPT/ADV): all required files must appear
+    # For flat (IBIR): results_db + dispatcher_debug are required
+    if workspace_mode == "primitive_dut":
+        required_entries = [e for e in FILE_ALLOW_LIST if e["required"]]
+    else:
+        # Flat mode (IBIR): results_db + dispatcher_debug are required
+        _flat_required_keys = {"results_db", "dispatcher_debug"}
+        required_entries = [
+            e for e in FILE_ALLOW_LIST
+            if e["key"] in _flat_required_keys
+        ]
+    required_found   = {e["key"]: False for e in required_entries}
+
+    logger.info(
+        "[Collect] Waiting for required files to appear in workspace...\n"
+        "          Workspace : " + latest_dir + "\n"
+        "          Required  : " + ", ".join(
+            e["key"] + " (" + e["subpath"] + ")"
+            for e in required_entries
+        ) + "\n"
+        "          Timeout   : " + str(T_COLLECT_TIMEOUT) + "s "
+        "(poll every " + str(T_COLLECT_POLL_INTERVAL) + "s)"
+    )
+
+    start_time = time.time()
+
+    while True:
+        elapsed = time.time() - start_time
+
+        # Check each required file
+        for entry in required_entries:
+            if required_found[entry["key"]]:
+                continue
+            pattern = os.path.join(latest_dir, entry["subpath"])
+            matched = glob.glob(pattern)
+            # Fallback: if subpath has a directory prefix (e.g. "OS/"),
+            # also try the filename directly in the workspace root.
+            if not matched and "/" in entry["subpath"]:
+                root_name = entry["subpath"].rsplit("/", 1)[-1]
+                root_pattern = os.path.join(latest_dir, root_name)
+                matched = glob.glob(root_pattern)
+            if any(os.path.isfile(m) for m in matched):
+                required_found[entry["key"]] = True
+                logger.info(
+                    "[Collect] \u2705 " + entry["key"] + " appeared "
+                    "(after " + str(int(elapsed)) + "s)"
+                )
+
+        # All required found — proceed
+        if all(required_found.values()):
+            logger.info(
+                "[Collect] All required files found after "
+                + str(int(elapsed)) + "s"
+            )
+            break
+
+        # Timeout check
+        if elapsed >= T_COLLECT_TIMEOUT:
+            missing = [k for k, v in required_found.items() if not v]
+            logger.warning(
+                "[Collect] \u26a0\ufe0f Timed out after " + str(int(elapsed))
+                + "s. Missing required: " + ", ".join(missing)
+            )
+            # If NO required files found at all, give up
+            if not any(required_found.values()):
+                return None, None
+            # Otherwise proceed with what we have
+            break
+
+        time.sleep(T_COLLECT_POLL_INTERVAL)
+
+    # ── Step 3: Scan ALL allow-listed files ────────────────────────────
+    logger.info("[Collect] Scanning workspace for all allow-listed files...")
+    scan_results = scan_available_files(latest_dir, logger)
+
+    found_count = sum(1 for e in scan_results if e["found"])
+    total_count = len(scan_results)
+    logger.info(
+        "[Collect] Scan complete: " + str(found_count) + "/"
+        + str(total_count) + " allow-listed files found"
+    )
+
+    # ── Step 4: Write manifest for BENTO GUI ──────────────────────────
+    manifest_path = write_manifest(
+        scan_results, jira_key, hostname, env, dest_dir, logger
+    )
+    if not manifest_path:
+        logger.warning(
+            "[Collect] Could not write manifest — "
+            "falling back to required-only copy"
+        )
+        # Fall through to copy required files only
+        selected_keys = None
+    else:
+        # ── Step 5: Wait for user selection from BENTO ────────────────
+        # timeout=0 means wait indefinitely until user clicks OK
+        selected_keys = read_user_selection(
+            jira_key, hostname, dest_dir, logger,
+            timeout=0,
+            poll_interval=MANIFEST_POLL_INTERVAL,
+        )
+
+    # ── Step 6: Copy selected + required files ────────────────────────
+    if selected_keys is None:
+        # Timeout or manifest error — copy only required files
+        selected_keys = [e["key"] for e in FILE_ALLOW_LIST if e["required"]]
+        logger.info(
+            "[Collect] Using required-only fallback: "
+            + str(selected_keys)
+        )
+
+    # For flat mode (IBIR), always include dispatcher_debug — it is the
+    # primary trace file (DispatcherDebug*.txt) and will be renamed to
+    # P{x}D{y}_TraceFile.txt by copy_selected_files().
+    if workspace_mode != "primitive_dut" and "dispatcher_debug" not in selected_keys:
+        selected_keys.append("dispatcher_debug")
+        logger.info(
+            "[Collect] Auto-added dispatcher_debug for flat mode "
+            "(IBIR trace file)"
+        )
+
+    copied_names, copied_count = copy_selected_files(
+        scan_results, selected_keys, dest_dir, logger,
+        rename_prefix=_rename_prefix,
+    )
+
+    if copied_count > 0:
+        logger.info(
+            "[Collect] \u2705 Copied " + str(copied_count)
+            + " file(s) to " + dest_dir
+        )
+        return copied_names, dest_dir
+    else:
+        logger.warning("[Collect] No files were copied.")
+        return None, None
 
 
 # ── PLAYGROUND COMPLETION MONITOR ─────────────────────────────────────────────
@@ -1647,16 +2935,21 @@ def process_checkout_xml(xml_path, env, logger):
     """
     Full pipeline for one checkout XML.
 
-    Checkout ends at Create Playground — NO Load Recipe / Run Test.
+    Uses LoadProfile button — SLATE handles all steps automatically.
+    XML is loaded directly from CHECKOUT_QUEUE_FOLDER (no hot folder copy).
 
     Steps:
       1. Validate XML integrity
       2. Write in_progress status
-      3. Copy XML -> SLATE hot folder (AUTO-CREATED)
-      3b. Drive SLATE GUI up to Create Playground via slate_gui_trigger()
-      4. Confirm playground creation (PlaygroundCompletionMonitor)
-      5. Memory collection for all DUTs immediately after playground created
-      6. Write success/failed status -> orchestrator wakes up
+      3. Click LoadProfile in SLATE GUI via slate_gui_trigger()
+         — XML is loaded directly from CHECKOUT_QUEUE_FOLDER
+         → SLATE runs all steps internally (Recipe Selection, Manudata,
+           Temp Traveler, Playground, Load Recipe, etc.)
+      3b. Wait for "DUT load" popup (signals workspace creation)
+          → Then poll workspace for resultsManager.db + DispatcherDebug*.txt
+          → Copy both files to CHECKOUT_RESULTS folder
+      4. Write success/failed status -> orchestrator wakes up
+         (success = workspace result files copied to CHECKOUT_RESULTS)
     """
     fname    = os.path.basename(xml_path)
     jira_key = _parse_jira_from_xml_name(fname)
@@ -1683,23 +2976,11 @@ def process_checkout_xml(xml_path, env, logger):
     # Step 2: Write in_progress
     write_status(xml_path, "in_progress", "Checkout started by watcher")
 
-    # Step 3: Copy to SLATE hot folder (auto-creates folder)
-    ok = launch_slate_via_hot_folder(xml_path, logger)
-    if not ok:
-        write_status(
-            xml_path, "failed",
-            "Cannot copy XML to " + SLATE_HOT_FOLDER
-        )
-        logger.info(
-            "[<<] Checkout FAILED for " + fname
-            + " — returning to poll loop for next XML"
-        )
-        return
-
     # ════════════════════════════════════════════════════════════════════
-    # Step 3b: Drive SLATE GUI to load and start the test  [NEW]
+    # Step 3: Click LoadProfile in SLATE — GUI does everything automatically
+    #         until "Dut load successful" popup appears
+    #         XML is loaded directly from CHECKOUT_QUEUE (no hot folder copy)
     # ════════════════════════════════════════════════════════════════════
-    dest_xml = os.path.join(SLATE_HOT_FOLDER, os.path.basename(xml_path))
 
     # Pre-flight: confirm pywinauto is available before attempting GUI automation
     if not _PYWINAUTO_AVAILABLE:
@@ -1730,7 +3011,7 @@ def process_checkout_xml(xml_path, env, logger):
             _log_all_visible_windows(logger=logger)
 
         try:
-            gui_success = slate_gui_trigger(dest_xml, timeout=60)
+            gui_success = slate_gui_trigger(xml_path, timeout=60)
         except Exception as e:
             logger.error(
                 "  slate_gui_trigger raised unexpectedly: "
@@ -1770,46 +3051,67 @@ def process_checkout_xml(xml_path, env, logger):
         )
         return
     # ════════════════════════════════════════════════════════════════════
-    # END Step 3b — slate_gui_trigger() returned True = playground created
+    # END Step 3b — slate_gui_trigger() returned True
+    # The DUT load popup has been detected and dismissed inside
+    # slate_gui_trigger(), confirming that SLATE finished processing
+    # and the workspace folder has been created.
     # ════════════════════════════════════════════════════════════════════
 
-    # Step 4: Confirm playground creation via secondary detection
-    # slate_gui_trigger() already waited for btnCreatePlayground to return,
-    # but we run PlaygroundCompletionMonitor as a secondary confirmation
-    # that the playground was actually written to disk / logged by SLATE.
-    logger.info("[~] Confirming playground creation...")
-    monitor = PlaygroundCompletionMonitor(xml_path, logger, timeout_minutes=30)
-    success = monitor.wait_for_completion()
+    # ── Step 3c: Write "collecting" status so BENTO can start manifest
+    #    polling immediately (breaks the deadlock where BENTO waits for
+    #    "success" before polling, but watcher waits for BENTO's selection
+    #    before writing "success").
+    write_status(
+        xml_path, "collecting",
+        "SLATE completed — collecting workspace results"
+    )
+    logger.info("[~] Status written: collecting (SLATE done, starting file collection)")
 
-    if not success:
+    logger.info("[~] Collecting workspace results (resultsManager.db + DispatcherDebug*.txt)...")
+    collected_files, results_folder = _collect_workspace_results(
+        jira_key, hostname, env, logger, xml_path=xml_path
+    )
+    if not collected_files:
         write_status(
             xml_path, "failed",
-            "Playground creation could not be confirmed "
-            "(method=" + monitor.completion_method + ")"
+            "Workspace result collection failed — "
+            "resultsManager.db and/or DispatcherDebug*.txt not found"
         )
-        logger.error("[FAIL] Playground creation failed/timed out: " + fname)
+        logger.error("[FAIL] Workspace result collection failed: " + fname)
         logger.info(
             "[<<] Checkout FAILED for " + fname
             + " — returning to poll loop for next XML"
         )
         return
 
-    logger.info(
-        "[OK] Playground created via " + monitor.completion_method
-        + ": " + fname
-    )
+    logger.info("[OK] Workspace results collected successfully: " + fname)
 
-    # Step 5: Write success status -> orchestrator wakes up
+    # Step 4: Write success status -> orchestrator wakes up
+    # Checkout is considered successful once the workspace result files
+    # (resultsManager.db + DispatcherDebug*.txt) have been copied to
+    # CHECKOUT_RESULTS.
     write_status(
         xml_path, "success",
-        "Checkout complete (playground created via "
-        + monitor.completion_method + ")"
+        "Checkout complete (workspace results collected)",
+        collected_files=collected_files,
+        output_folder=results_folder or "",
     )
     logger.info("[OK] Status written: success - " + fname)
     logger.info(
         "[<<] Checkout COMPLETE for " + fname
         + " — returning to poll loop for next XML"
     )
+
+
+def _iter_queue_files(suffix):
+    """Yield (filepath, filename) for all files matching *suffix* in the
+    CHECKOUT_QUEUE tree (supports both new subfolder layout and legacy flat)."""
+    if not os.path.isdir(CHECKOUT_QUEUE_FOLDER):
+        return
+    for root, _dirs, files in os.walk(CHECKOUT_QUEUE_FOLDER):
+        for fname in files:
+            if fname.endswith(suffix):
+                yield os.path.join(root, fname), fname
 
 
 def _cleanup_all_checkout_locks_on_startup(logger):
@@ -1832,14 +3134,9 @@ def _cleanup_all_checkout_locks_on_startup(logger):
     fresh lock (only minutes old) from the previous watcher run survives the
     age-gated cleanup and blocks every subsequent poll.
     """
-    if not os.path.isdir(CHECKOUT_QUEUE_FOLDER):
-        return
     removed = 0
     try:
-        for fname in os.listdir(CHECKOUT_QUEUE_FOLDER):
-            if not fname.endswith(".checkout_lock"):
-                continue
-            lock_path = os.path.join(CHECKOUT_QUEUE_FOLDER, fname)
+        for lock_path, fname in _iter_queue_files(".checkout_lock"):
             try:
                 age = int(time.time() - os.path.getmtime(lock_path))
                 os.remove(lock_path)
@@ -1874,15 +3171,10 @@ def _cleanup_stale_checkout_locks(logger):
     For startup cleanup (previous process locks), use
     _cleanup_all_checkout_locks_on_startup() instead.
     """
-    if not os.path.isdir(CHECKOUT_QUEUE_FOLDER):
-        return
     now = time.time()
     removed = 0
     try:
-        for fname in os.listdir(CHECKOUT_QUEUE_FOLDER):
-            if not fname.endswith(".checkout_lock"):
-                continue
-            lock_path = os.path.join(CHECKOUT_QUEUE_FOLDER, fname)
+        for lock_path, fname in _iter_queue_files(".checkout_lock"):
             try:
                 age = now - os.path.getmtime(lock_path)
                 if age > LOCK_MAX_AGE_SECONDS:
@@ -1924,18 +3216,11 @@ def _cleanup_stale_checkout_status_on_startup(logger):
         timeout. A status file older than 30 min still at 'in_progress' means
         the process that wrote it is certainly no longer running.
     """
-    if not os.path.isdir(CHECKOUT_QUEUE_FOLDER):
-        return
-
     reset_count = 0
     logger.info("Startup: scanning for orphaned in_progress checkout status files...")
 
     try:
-        for fname in os.listdir(CHECKOUT_QUEUE_FOLDER):
-            if not fname.endswith(".checkout_status"):
-                continue
-
-            status_path = os.path.join(CHECKOUT_QUEUE_FOLDER, fname)
+        for status_path, fname in _iter_queue_files(".checkout_status"):
             try:
                 age = time.time() - os.path.getmtime(status_path)
                 if age <= LOCK_MAX_AGE_SECONDS:
@@ -1984,6 +3269,111 @@ def _cleanup_stale_checkout_status_on_startup(logger):
         logger.info("Startup: no orphaned checkout status files found.")
 
 
+# ── LISTFILES HANDLER (for BENTO GUI remote file browser) ─────────────────────
+def _handle_listfiles_requests(logger):
+    """
+    Process any pending .listfiles request JSON files in CHECKOUT_QUEUE.
+
+    Protocol:
+      1. BENTO GUI writes:  CHECKOUT_QUEUE/listfiles_<hostname>_<ts>.json
+         containing {"command": "listfiles", "path": "C:\\...", "hostname": "..."}
+      2. This handler reads the request, lists the local directory, and writes
+         the result to:  CHECKOUT_RESULTS/listfiles_<hostname>_<ts>.json
+         containing {"status": "ok", "path": "...", "entries": [...]}
+      3. BENTO GUI polls for the result file and displays it.
+
+    This allows the BENTO GUI to browse files on the tester machine without
+    needing direct UNC/C$ admin share access (which requires net use auth).
+    """
+    if not os.path.isdir(CHECKOUT_QUEUE_FOLDER):
+        return
+
+    for fname in os.listdir(CHECKOUT_QUEUE_FOLDER):
+        if not fname.startswith("listfiles_") or not fname.endswith(".json"):
+            continue
+
+        req_path = os.path.join(CHECKOUT_QUEUE_FOLDER, fname)
+        resp_path = os.path.join(CHECKOUT_RESULTS_FOLDER, fname)
+
+        try:
+            with open(req_path, "r") as f:
+                request = json.load(f)
+        except Exception as e:
+            logger.warning("[listfiles] Cannot read request " + fname + ": " + str(e))
+            # Remove bad request
+            try:
+                os.remove(req_path)
+            except OSError:
+                pass
+            continue
+
+        if request.get("command") != "listfiles":
+            continue
+
+        target_path = request.get("path", "")
+        logger.info("[listfiles] Request for: " + target_path)
+
+        # Build response
+        response = {"status": "ok", "path": target_path, "entries": []}
+
+        try:
+            if not os.path.isdir(target_path):
+                response["status"] = "error"
+                response["error"] = "Directory not found: " + target_path
+            else:
+                entries = []
+                for name in sorted(os.listdir(target_path)):
+                    full = os.path.join(target_path, name)
+                    try:
+                        if os.path.isdir(full):
+                            entries.append({
+                                "name": name,
+                                "type": "folder",
+                                "size": 0,
+                            })
+                        else:
+                            try:
+                                size = os.path.getsize(full)
+                            except OSError:
+                                size = 0
+                            entries.append({
+                                "name": name,
+                                "type": "file",
+                                "size": size,
+                            })
+                    except OSError:
+                        entries.append({
+                            "name": name,
+                            "type": "file",
+                            "size": 0,
+                        })
+                response["entries"] = entries
+                logger.info(
+                    "[listfiles] Listed " + str(len(entries))
+                    + " entries in " + target_path
+                )
+        except OSError as e:
+            response["status"] = "error"
+            response["error"] = str(e)
+            logger.error("[listfiles] Error listing " + target_path + ": " + str(e))
+
+        # Write response
+        try:
+            if not os.path.isdir(CHECKOUT_RESULTS_FOLDER):
+                os.makedirs(CHECKOUT_RESULTS_FOLDER)
+            with open(resp_path, "w") as f:
+                json.dump(response, f, indent=2)
+            logger.info("[listfiles] Response written: " + resp_path)
+        except OSError as e:
+            logger.error("[listfiles] Cannot write response: " + str(e))
+
+        # Remove request file
+        try:
+            os.remove(req_path)
+        except OSError:
+            pass
+
+
 # ── MAIN WATCH LOOP ───────────────────────────────────────────────────────────
 def watch(env, logger):
     """
@@ -2018,45 +3408,32 @@ def watch(env, logger):
     except Exception as e:
         logger.warning("Startup cleanup error: " + str(e))
 
+    # ── Determine this watcher's queue subfolder ─────────────────────────────
+    # New structure: CHECKOUT_QUEUE/<hostname>/<jira_key>/*.xml
+    # The watcher scans its own hostname subfolder for all jira subfolders.
+    watcher_queue = os.path.join(CHECKOUT_QUEUE_FOLDER, hostname) if hostname else CHECKOUT_QUEUE_FOLDER
+
     # ── Snapshot pre-existing XMLs (path-based, clock-skew safe) ─────────────
-    # Record the exact set of XML paths that exist RIGHT NOW along with their
-    # modification times. Any XML that arrives after this snapshot OR any
-    # pre-existing XML that gets replaced (new mtime) is processed normally.
+    # Record the exact set of XML paths that exist RIGHT NOW and skip only
+    # those. Any XML that arrives after this snapshot is processed normally.
     # This replaces the broken mtime vs watcher_start_time comparison which
     # fails when the local PC clock and tester clock differ.
-    #
-    # IMPORTANT: Only skip pre-existing XMLs that already have a terminal
-    # status (.checkout_status with "success" or "failed"). XMLs without a
-    # status file or with "queued"/"in_progress" status are eligible for
-    # processing — they may have been generated before the watcher started
-    # and are waiting to be picked up.
     pre_existing = set()
-    if os.path.isdir(CHECKOUT_QUEUE_FOLDER):
-        for _f in os.listdir(CHECKOUT_QUEUE_FOLDER):
-            if _f.lower().endswith(".xml") and ".checkout_" not in _f:
-                _xml_path = os.path.join(CHECKOUT_QUEUE_FOLDER, _f)
-                # Check if this XML already has a terminal status
-                _status_path = _xml_path + ".checkout_status"
-                _has_terminal_status = False
-                if os.path.exists(_status_path):
-                    try:
-                        with open(_status_path, "r") as _sf:
-                            _status_data = json.load(_sf)
-                        _st = _status_data.get("status", "")
-                        if _st in ("success", "failed"):
-                            _has_terminal_status = True
-                    except Exception:
-                        pass
-                if _has_terminal_status:
-                    pre_existing.add(_xml_path)
-                else:
-                    logger.info(
-                        "Startup: will process pre-existing XML (no terminal status): " + _f
-                    )
+    if os.path.isdir(watcher_queue):
+        for _jira_dir in os.listdir(watcher_queue):
+            _jira_path = os.path.join(watcher_queue, _jira_dir)
+            if not os.path.isdir(_jira_path):
+                # Also check root-level XMLs for backward compatibility
+                if _jira_dir.lower().endswith(".xml") and ".checkout_" not in _jira_dir:
+                    pre_existing.add(os.path.join(watcher_queue, _jira_dir))
+                continue
+            for _f in os.listdir(_jira_path):
+                if _f.lower().endswith(".xml") and ".checkout_" not in _f:
+                    pre_existing.add(os.path.join(_jira_path, _f))
         logger.info(
             "Startup: ignoring "
             + str(len(pre_existing))
-            + " pre-existing XML(s) with terminal status."
+            + " pre-existing XML(s) already in queue."
         )
 
     logger.info(
@@ -2067,6 +3444,7 @@ def watch(env, logger):
     # ── State ─────────────────────────────────────────────────────────────────
     processed       = set()   # completed XMLs (success or permanent fail)
     retry_counts    = {}      # xml_path -> int, retry attempt counter
+    skipped_logged  = set()   # XMLs already logged as skipped (avoid log spam)
     heartbeat_count = 0
     HEARTBEAT_EVERY = 30      # log "still watching" every 30 polls = 5 min at 10s/poll
 
@@ -2093,19 +3471,42 @@ def watch(env, logger):
                     + " retrying=" + str(len(retry_counts))
                 )
                 processed = _prune_processed(processed, logger)
+                # Also prune skipped_logged for XMLs that no longer exist
+                skipped_logged = {p for p in skipped_logged if os.path.isfile(p)}
 
             # Self-heal stale locks every poll — clears locks left by a
             # crashed watcher within one poll cycle, not 30 minutes.
             _cleanup_stale_checkout_locks(logger)
 
-            # ── Scan for new XMLs (sorted = FIFO by timestamp in filename) ──
-            for fname in sorted(os.listdir(CHECKOUT_QUEUE_FOLDER)):
-                if not fname.lower().endswith(".xml"):
-                    continue
-                if ".checkout_" in fname:
-                    continue    # Skip .checkout_status / .checkout_lock sidecars
+            # ── Handle listfiles requests from BENTO GUI ─────────────────
+            try:
+                _handle_listfiles_requests(logger)
+            except Exception as lf_err:
+                logger.debug("[listfiles] Error: " + str(lf_err))
 
-                xml_path = os.path.join(CHECKOUT_QUEUE_FOLDER, fname)
+            # ── Collect XML paths from subfolder structure ────────────────
+            # New layout: CHECKOUT_QUEUE/<hostname>/<jira_key>/*.xml
+            # Also supports legacy flat layout for backward compatibility.
+            _xml_candidates = []
+            if os.path.isdir(watcher_queue):
+                for _entry in os.listdir(watcher_queue):
+                    _entry_path = os.path.join(watcher_queue, _entry)
+                    if os.path.isdir(_entry_path):
+                        # Jira subfolder — scan for XMLs inside
+                        try:
+                            for _xf in os.listdir(_entry_path):
+                                if _xf.lower().endswith(".xml") and ".checkout_" not in _xf:
+                                    _xml_candidates.append(os.path.join(_entry_path, _xf))
+                        except OSError:
+                            pass
+                    elif _entry.lower().endswith(".xml") and ".checkout_" not in _entry:
+                        # Legacy: XML directly in watcher_queue (backward compat)
+                        _xml_candidates.append(_entry_path)
+            _xml_candidates.sort(key=lambda p: os.path.basename(p))
+
+            # ── Process each XML candidate ───────────────────────────────
+            for xml_path in _xml_candidates:
+                fname = os.path.basename(xml_path)
 
                 # Skip if already finished (success or permanent fail)
                 if xml_path in processed:
@@ -2123,16 +3524,20 @@ def watch(env, logger):
                 fname_upper  = fname.upper()
 
                 if env_tag.upper() not in fname_upper:
-                    logger.debug(
-                        "[SKIP] env_tag '" + env_tag
-                        + "' not found in: " + fname
-                    )
+                    if xml_path not in skipped_logged:
+                        logger.debug(
+                            "[SKIP] env_tag '" + env_tag
+                            + "' not found in: " + fname
+                        )
+                        skipped_logged.add(xml_path)
                     continue
                 if hostname_tag and hostname_tag.upper() not in fname_upper:
-                    logger.debug(
-                        "[SKIP] hostname_tag '" + hostname_tag
-                        + "' not found in: " + fname
-                    )
+                    if xml_path not in skipped_logged:
+                        logger.debug(
+                            "[SKIP] hostname_tag '" + hostname_tag
+                            + "' not found in: " + fname
+                        )
+                        skipped_logged.add(xml_path)
                     continue
 
                 # Per-XML file lock — prevents two watcher instances from
@@ -2224,8 +3629,8 @@ def main():
     logger.info("BENTO Checkout Watcher starting up")
     logger.info("ENV           : " + env)
     logger.info("CHECKOUT_QUEUE: " + CHECKOUT_QUEUE_FOLDER)
-    logger.info("HOT_FOLDER    : " + SLATE_HOT_FOLDER
-                + " (auto-created if missing)")
+    logger.info("XML source    : " + CHECKOUT_QUEUE_FOLDER
+                + " (direct load, no hot folder)")
     logger.info("Poll interval : " + str(POLL_INTERVAL_SECONDS) + "s")
     logger.info("Max retries   : " + str(MAX_RETRIES))
     logger.info("pywinauto     : " + ("available" if _PYWINAUTO_AVAILABLE else "NOT INSTALLED"))
