@@ -610,7 +610,7 @@ def spool_summary_ibir(
     log_callback: Optional[Callable] = None,
 ) -> bool:
     """Spool summary for an IBIR MID (extract summary.zip and run SummaryWizard.py)."""
-    if not entry.workspace_path or not entry.spool:
+    if not entry.workspace_path:
         return False
 
     path = entry.workspace_path
@@ -644,7 +644,7 @@ def spool_summary_adv(
     log_callback: Optional[Callable] = None,
 ) -> bool:
     """Spool summary for an ADV (MPT) MID (run GenSum.pyc)."""
-    if not entry.workspace_path or not entry.spool:
+    if not entry.workspace_path:
         return False
 
     path = entry.workspace_path
