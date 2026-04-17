@@ -159,10 +159,6 @@ class PRReviewTab(BaseTab):
         self._auto_close_jira_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(options_frame, text="Auto-close JIRA after merge",
                         variable=self._auto_close_jira_var).pack(side=tk.LEFT, padx=(0, 15))
-
-        self._notify_teams_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(options_frame, text="Teams Notifications",
-                        variable=self._notify_teams_var).pack(side=tk.LEFT, padx=(0, 15))
         row += 1
 
         # ══════════════════════════════════════════════════════════════════
