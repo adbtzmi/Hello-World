@@ -66,12 +66,12 @@ class PRReviewTab(BaseTab):
         ttk.Label(parent,
                   text="PR Review & Approval Pipeline",
                   font=('Arial', 14, 'bold')).grid(
-            row=0, column=0, columnspan=4, pady=(5, 10), sticky=tk.W)
+            row=0, column=0, columnspan=4, pady=(5, 10))
 
         ttk.Label(parent,
                   text="Automate: Validation Doc → Commit/Push → PR Creation → Approval → Merge → Close JIRA",
                   font=('Arial', 9), foreground='gray').grid(
-            row=1, column=0, columnspan=4, sticky=tk.W, pady=(0, 10))
+            row=1, column=0, columnspan=4, pady=(0, 10))
 
         # ══════════════════════════════════════════════════════════════════
         # SECTION 1: Pipeline Configuration
