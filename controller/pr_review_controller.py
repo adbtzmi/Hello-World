@@ -382,7 +382,7 @@ class PRReviewController:
                     # ── Live Bitbucket API search ──────────────────────
                     results = search_bitbucket_users(
                         query_lower, bb_url, bb_user, bb_token,
-                        limit=25, log_callback=self._log,
+                        limit=50, log_callback=self._log,
                     )
                 else:
                     # ── Fallback: filter static list from settings.json ─

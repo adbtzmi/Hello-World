@@ -516,7 +516,7 @@ def search_bitbucket_users(
         req = urllib.request.Request(url, headers=headers)
         ssl_context = ssl._create_unverified_context()
 
-        resp = urllib.request.urlopen(req, context=ssl_context, timeout=30)
+        resp = urllib.request.urlopen(req, context=ssl_context, timeout=60)
         data = json.loads(resp.read().decode("utf-8"))
 
         users = []
