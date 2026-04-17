@@ -480,7 +480,7 @@ def search_bitbucket_users(
         GET /rest/api/1.0/users?filter=<query>&limit=<limit>
 
     Args:
-        query:              Search string (min 3 chars recommended).
+        query:              Search string (min 4 chars recommended).
         bitbucket_base_url: e.g. "https://bitbucket.micron.com/bbdc/scm"
         bitbucket_username: Bitbucket username for auth.
         bitbucket_token:    Bitbucket personal access token.
@@ -492,7 +492,7 @@ def search_bitbucket_users(
                          "email": "jdoe@micron.com"}, ...]
         Returns empty list on error or if query is too short.
     """
-    if not query or len(query) < 3:
+    if not query or len(query) < 4:
         return []
 
     # Normalise base URL (strip trailing /scm if present)

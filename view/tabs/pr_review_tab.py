@@ -833,11 +833,11 @@ class PRReviewTab(BaseTab):
     # ──────────────────────────────────────────────────────────────────────
 
     def _on_reviewer_key(self, event):
-        """Handle keystrokes in the reviewers Entry with 500ms debounce.
+        """Handle keystrokes in the reviewers Entry with 1000ms debounce.
 
         Supports multi-token input (comma-separated usernames).  Only the
         text after the last comma is used as the search query.
-        Minimum 3 characters required to trigger API search.
+        Minimum 4 characters required to trigger API search.
         """
         # Ignore navigation / modifier keys
         if event.keysym in ("Down", "Up", "Left", "Right", "Escape",
@@ -855,13 +855,13 @@ class PRReviewTab(BaseTab):
         parts = full_text.split(",")
         current_token = parts[-1].strip()
 
-        if len(current_token) < 3:
+        if len(current_token) < 4:
             self._hide_autocomplete()
             return
 
-        # Schedule the API call after 500ms debounce
+        # Schedule the API call after 1000ms debounce (1 second)
         self._ac_debounce_id = self.root.after(
-            500, lambda: self._fire_autocomplete(current_token)
+            1000, lambda: self._fire_autocomplete(current_token)
         )
 
     def _fire_autocomplete(self, query: str):
