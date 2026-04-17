@@ -624,6 +624,80 @@ def create_pull_request(
         return {"success": False, "error": str(e)}
 
 
+def check_existing_prs(
+    repo_slug: str,
+    project_key: str,
+    source_branch: str,
+    target_branch: str,
+    bitbucket_base_url: str,
+    bitbucket_username: str,
+    bitbucket_token: str,
+    log_callback: Optional[Callable] = None,
+) -> Dict:
+    """
+    Check if an OPEN pull request already exists for the given source→target branch.
+
+    Uses Bitbucket REST API 1.0:
+        GET /rest/api/1.0/projects/{projectKey}/repos/{repoSlug}/pull-requests
+            ?state=OPEN&direction=INCOMING
+
+    Returns:
+        dict with 'exists' (bool), 'pr_id', 'pr_url', 'title' if found.
+    """
+    _log(log_callback, f"🔍 Checking for existing PRs: {source_branch} → {target_branch}...")
+
+    base = bitbucket_base_url.rstrip("/")
+    if base.endswith("/scm"):
+        base = base[:-4]
+
+    url = (
+        f"{base}/rest/api/1.0/projects/{project_key}/repos/{repo_slug}"
+        f"/pull-requests?state=OPEN&direction=INCOMING&limit=50"
+    )
+
+    try:
+        import base64
+        auth_str = f"{bitbucket_username}:{bitbucket_token}"
+        auth_b64 = base64.b64encode(auth_str.encode()).decode()
+
+        req = urllib.request.Request(url)
+        req.add_header("Authorization", f"Basic {auth_b64}")
+        req.add_header("Content-Type", "application/json")
+
+        ctx = ssl._create_unverified_context()
+        with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+
+        for pr in data.get("values", []):
+            from_ref = pr.get("fromRef", {}).get("id", "")
+            to_ref = pr.get("toRef", {}).get("id", "")
+            from_branch = from_ref.replace("refs/heads/", "")
+            to_branch = to_ref.replace("refs/heads/", "")
+
+            if from_branch == source_branch and to_branch == target_branch:
+                pr_id = pr.get("id", "")
+                pr_url = (
+                    f"{base}/projects/{project_key}/repos/{repo_slug}"
+                    f"/pull-requests/{pr_id}"
+                )
+                _log(log_callback,
+                     f"⚠️ Existing PR found: #{pr_id} ({source_branch} → {target_branch})")
+                return {
+                    "exists": True,
+                    "pr_id": pr_id,
+                    "pr_url": pr_url,
+                    "title": pr.get("title", ""),
+                    "state": pr.get("state", "OPEN"),
+                }
+
+        _log(log_callback, "✓ No existing PR found for this branch combination")
+        return {"exists": False}
+
+    except Exception as e:
+        _log(log_callback, f"⚠️ PR duplicate check failed: {e}")
+        return {"exists": False, "error": str(e)}
+
+
 def get_pull_request_status(
     repo_slug: str,
     project_key: str,

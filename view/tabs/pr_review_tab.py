@@ -35,6 +35,7 @@ class PRReviewTab(BaseTab):
 
     def __init__(self, notebook, context):
         super().__init__(notebook, context, "✅ PR Review")
+        self._reviewer_chips: list[str] = []  # list of added reviewer usernames
         self._build_ui()
 
         # Item 12: Auto-populate commit message when JIRA key changes
@@ -44,6 +45,16 @@ class PRReviewTab(BaseTab):
                 issue_var.trace_add('write', self._auto_populate_commit_message)
                 # Populate immediately if a key is already set
                 self._auto_populate_commit_message()
+        except Exception:
+            pass
+
+        # Improvement 1: Auto-populate target branch from workflow
+        try:
+            ctrl = self._get_controller()
+            if ctrl:
+                branch = ctrl.get_target_branch_from_workflow()
+                if branch:
+                    self._target_branch_var.set(branch)
         except Exception:
             pass
 
@@ -115,31 +126,36 @@ class PRReviewTab(BaseTab):
             row=row, column=2, sticky=tk.W, padx=5)
         row += 1
 
-        # Target Branch
+        # Target Branch (Improvement 1: auto-populated from workflow)
         ttk.Label(config_frame, text="Target Branch:").grid(
             row=row, column=0, sticky=tk.W, pady=3)
         self._target_branch_var = tk.StringVar(value="master")
         ttk.Entry(config_frame, textvariable=self._target_branch_var,
                   width=30).grid(row=row, column=1, sticky=tk.W, pady=3, padx=5)
-        ttk.Label(config_frame, text="(Branch to merge into)",
+        ttk.Label(config_frame, text="(Auto-populated from workflow, editable)",
                   font=('Arial', 8), foreground='gray').grid(
             row=row, column=2, sticky=tk.W, padx=5)
         row += 1
 
-        # Reviewers (Item 16: Autocomplete with Bitbucket API + settings fallback)
+        # Reviewers (Item 16: Autocomplete + Improvement 3: Chip/Tag display)
         ttk.Label(config_frame, text="Reviewers:").grid(
-            row=row, column=0, sticky=tk.W, pady=3)
+            row=row, column=0, sticky=tk.NW, pady=3)
         self._reviewers_var = tk.StringVar(value="")
 
-        # Frame to hold the entry + dropdown listbox
-        reviewer_frame = ttk.Frame(config_frame)
-        reviewer_frame.grid(
+        # Frame to hold the entry + chip container
+        reviewer_outer = ttk.Frame(config_frame)
+        reviewer_outer.grid(
             row=row, column=1, columnspan=2, sticky="we", pady=3, padx=5)
-        reviewer_frame.columnconfigure(0, weight=1)
+        reviewer_outer.columnconfigure(0, weight=1)
 
+        # Chip container (Improvement 3: shows added reviewers as removable tags)
+        self._chip_frame = ttk.Frame(reviewer_outer)
+        self._chip_frame.grid(row=0, column=0, sticky="we", pady=(0, 3))
+
+        # Search entry for autocomplete (below chips)
         self._reviewers_entry = ttk.Entry(
-            reviewer_frame, textvariable=self._reviewers_var, width=48)
-        self._reviewers_entry.grid(row=0, column=0, sticky="we")
+            reviewer_outer, textvariable=self._reviewers_var, width=48)
+        self._reviewers_entry.grid(row=1, column=0, sticky="we")
 
         # Autocomplete dropdown (Listbox in a Toplevel — floats over the UI)
         self._ac_listbox: tk.Listbox | None = None
@@ -154,7 +170,7 @@ class PRReviewTab(BaseTab):
         self._reviewers_entry.bind("<Down>", self._ac_focus_listbox)
         self._reviewers_entry.bind("<Return>", self._ac_select_current)
 
-        ttk.Label(config_frame, text="(Type to search Bitbucket users)",
+        ttk.Label(config_frame, text="(Type to search, chips added below)",
                   font=('Arial', 8), foreground='gray').grid(
             row=row, column=3, sticky=tk.W, padx=5)
         row += 1
@@ -169,6 +185,20 @@ class PRReviewTab(BaseTab):
             config_frame, text="✨ AI Generate",
             command=self._generate_ai_commit_message)
         self._ai_commit_btn.grid(row=row, column=2, sticky=tk.W, padx=5)
+        row += 1
+
+        # PR Description (Improvement 2: editable multi-line description)
+        ttk.Label(config_frame, text="PR Description:").grid(
+            row=row, column=0, sticky=tk.NW, pady=3)
+        self._pr_desc_text = tk.Text(
+            config_frame, height=3, width=50, wrap=tk.WORD,
+            font=('Arial', 9))
+        self._pr_desc_text.grid(
+            row=row, column=1, columnspan=2, sticky="we", pady=3, padx=5)
+        ttk.Label(config_frame,
+                  text="(Optional — auto-generated if empty)",
+                  font=('Arial', 8), foreground='gray').grid(
+            row=row, column=3, sticky=tk.NW, padx=5)
         row += 1
 
         # Validation Doc Path
@@ -343,13 +373,13 @@ class PRReviewTab(BaseTab):
             self.show_error("Input Error", "Please enter a target branch")
             return
 
-        reviewers_str = self._reviewers_var.get().strip()
-        if not reviewers_str:
+        # Improvement 3: Use chip-based reviewers
+        reviewers = list(self._reviewer_chips)
+        if not reviewers:
             self.show_error("Input Error",
-                           "Please enter at least one reviewer (Bitbucket username)")
+                           "Please add at least one reviewer (search and select from dropdown)")
             return
 
-        reviewers = [r.strip() for r in reviewers_str.split(",") if r.strip()]
         commit_msg = self._commit_msg_var.get().strip()
         if not commit_msg:
             commit_msg = f"[{issue_key}] Code changes"
@@ -426,7 +456,7 @@ class PRReviewTab(BaseTab):
         ctrl.commit_and_push(commit_msg, self._on_push_result)
 
     def _create_pr_only(self):
-        """Create PR only (standalone)."""
+        """Create PR only (standalone). Includes duplicate PR check (Improvement 4)."""
         issue_key = self._get_issue_key()
         if not issue_key:
             return
@@ -436,20 +466,56 @@ class PRReviewTab(BaseTab):
             self.show_error("Input Error", "Please enter a target branch")
             return
 
-        reviewers_str = self._reviewers_var.get().strip()
-        if not reviewers_str:
-            self.show_error("Input Error", "Please enter at least one reviewer")
+        # Improvement 3: Use chip-based reviewers
+        reviewers = list(self._reviewer_chips)
+        if not reviewers:
+            self.show_error("Input Error", "Please add at least one reviewer")
             return
 
-        reviewers = [r.strip() for r in reviewers_str.split(",") if r.strip()]
+        # Improvement 2: Get PR description from text widget
+        pr_description = self._pr_desc_text.get("1.0", tk.END).strip()
 
         ctrl = self._get_controller()
         if not ctrl:
             return
 
+        # Improvement 4: Check for duplicate PR before creating
         self.lock_gui()
-        self._append_status(f"\n🔀 Creating PR: → {target_branch}")
-        ctrl.create_pr_only(issue_key, target_branch, reviewers, self._on_pr_created)
+        self._append_status(f"\n🔍 Checking for existing PRs: → {target_branch}")
+        ctrl.check_existing_pr(
+            target_branch,
+            lambda result: self._on_dup_check_result(
+                result, issue_key, target_branch, reviewers, pr_description, ctrl
+            ),
+        )
+
+    def _on_dup_check_result(self, result, issue_key, target_branch, reviewers,
+                              pr_description, ctrl):
+        """Improvement 4: Handle duplicate PR check result before creating PR."""
+        if result.get("exists"):
+            self.unlock_gui()
+            pr_id = result.get("pr_id", "?")
+            title = result.get("title", "")
+            pr_url = result.get("pr_url", "")
+            msg = (
+                f"An OPEN pull request already exists!\n\n"
+                f"PR #{pr_id}: {title}\n"
+                f"URL: {pr_url}\n\n"
+                f"Do you still want to create a new PR?"
+            )
+            if not messagebox.askyesno("Duplicate PR Warning", msg, icon="warning"):
+                self._append_status(f"⚠ Skipped — existing PR #{pr_id} found")
+                if pr_url:
+                    self._pr_url_var.set(pr_url)
+                return
+            self.lock_gui()
+
+        self._append_status(f"🔀 Creating PR: → {target_branch}")
+        ctrl.create_pr_only(
+            issue_key, target_branch, reviewers,
+            pr_description=pr_description,
+            callback=self._on_pr_created,
+        )
 
     def _check_pr_status(self):
         """Check current PR approval status."""
@@ -766,10 +832,10 @@ class PRReviewTab(BaseTab):
 
         Called after successful PR creation so that used reviewers appear
         in the static fallback list for future autocomplete.
+        Uses chip-based reviewer list (Improvement 3).
         """
         try:
-            reviewers_str = self._reviewers_var.get().strip()
-            reviewers = [r.strip() for r in reviewers_str.split(",") if r.strip()]
+            reviewers = list(self._reviewer_chips)
             if reviewers:
                 ctrl = self._get_controller()
                 if ctrl:
@@ -835,8 +901,8 @@ class PRReviewTab(BaseTab):
     def _on_reviewer_key(self, event):
         """Handle keystrokes in the reviewers Entry with 1000ms debounce.
 
-        Supports multi-token input (comma-separated usernames).  Only the
-        text after the last comma is used as the search query.
+        With chip-based UI (Improvement 3), the entire entry text is the
+        search query (no comma splitting needed).
         Minimum 4 characters required to trigger API search.
         """
         # Ignore navigation / modifier keys
@@ -850,18 +916,16 @@ class PRReviewTab(BaseTab):
             self.root.after_cancel(self._ac_debounce_id)
             self._ac_debounce_id = None
 
-        # Extract the current token (text after last comma)
-        full_text = self._reviewers_var.get()
-        parts = full_text.split(",")
-        current_token = parts[-1].strip()
+        # With chip UI, the full entry text is the search query
+        query = self._reviewers_var.get().strip()
 
-        if len(current_token) < 4:
+        if len(query) < 4:
             self._hide_autocomplete()
             return
 
         # Schedule the API call after 1000ms debounce (1 second)
         self._ac_debounce_id = self.root.after(
-            1000, lambda: self._fire_autocomplete(current_token)
+            1000, lambda: self._fire_autocomplete(query)
         )
 
     def _fire_autocomplete(self, query: str):
@@ -884,11 +948,13 @@ class PRReviewTab(BaseTab):
         if not results:
             return
 
-        # Build display strings first so we can measure the widest one
+        # Build display strings; exclude already-added chip reviewers
         self._ac_display_map = {}  # display_text -> username
         display_items: list[str] = []
         for item in results:
             uname = item.get("username", "")
+            if uname in self._reviewer_chips:
+                continue  # skip already-added reviewers
             dname = item.get("display_name", "")
             email = item.get("email", "")
             display = f"{uname}  —  {dname}"
@@ -896,6 +962,9 @@ class PRReviewTab(BaseTab):
                 display += f"  ({email})"
             display_items.append(display)
             self._ac_display_map[display] = uname
+
+        if not display_items:
+            return
 
         # Calculate width: use the longest display string + padding
         max_chars = max((len(d) for d in display_items), default=60)
@@ -977,31 +1046,75 @@ class PRReviewTab(BaseTab):
         return "break"
 
     def _ac_insert_selection(self, index: int):
-        """Insert the selected username into the entry, replacing the
-        current token (text after the last comma)."""
+        """Improvement 3: Add the selected username as a chip/tag instead of
+        appending to comma-separated text."""
         if self._ac_listbox is None:
             return
 
         display_text = self._ac_listbox.get(index)
         username = self._ac_display_map.get(display_text, display_text)
 
-        full_text = self._reviewers_var.get()
-        parts = [p.strip() for p in full_text.split(",")]
+        # Add as chip (skip if already added)
+        self._add_reviewer_chip(username)
 
-        # Replace the last (incomplete) token with the selected username
-        if parts:
-            parts[-1] = username
-        else:
-            parts = [username]
-
-        # Rebuild with trailing comma+space so user can type the next reviewer
-        self._reviewers_var.set(", ".join(parts) + ", ")
-
-        # Move cursor to end
-        self._reviewers_entry.icursor(tk.END)
+        # Clear the search entry for the next search
+        self._reviewers_var.set("")
         self._reviewers_entry.focus_set()
 
         self._destroy_autocomplete()
+
+    # ──────────────────────────────────────────────────────────────────────
+    # REVIEWER CHIP / TAG MANAGEMENT (Improvement 3)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _add_reviewer_chip(self, username: str):
+        """Add a reviewer chip/tag to the chip container.
+
+        Each chip is a small Frame containing a Label (username) and a
+        '×' Button to remove it.  Duplicate usernames are silently ignored.
+        """
+        username = username.strip()
+        if not username or username in self._reviewer_chips:
+            return
+
+        self._reviewer_chips.append(username)
+
+        chip = tk.Frame(
+            self._chip_frame, bg="#e0e7ff", bd=1, relief=tk.RAISED,
+            padx=4, pady=1,
+        )
+        chip.pack(side=tk.LEFT, padx=2, pady=2)
+
+        tk.Label(
+            chip, text=username, bg="#e0e7ff", fg="#1e3a5f",
+            font=("Arial", 9),
+        ).pack(side=tk.LEFT)
+
+        remove_btn = tk.Button(
+            chip, text="×", bg="#e0e7ff", fg="#c0392b",
+            font=("Arial", 8, "bold"), bd=0, cursor="hand2",
+            activebackground="#fdd", activeforeground="#c0392b",
+            command=lambda u=username, c=chip: self._remove_reviewer_chip(u, c),
+        )
+        remove_btn.pack(side=tk.LEFT, padx=(3, 0))
+
+    def _remove_reviewer_chip(self, username: str, chip_widget: tk.Frame):
+        """Remove a reviewer chip from the container and the internal list."""
+        if username in self._reviewer_chips:
+            self._reviewer_chips.remove(username)
+        try:
+            chip_widget.destroy()
+        except Exception:
+            pass
+
+    def _clear_all_chips(self):
+        """Remove all reviewer chips."""
+        self._reviewer_chips.clear()
+        for child in self._chip_frame.winfo_children():
+            try:
+                child.destroy()
+            except Exception:
+                pass
 
     def _load_reviewer_suggestions(self):
         """Item 16: Load reviewer suggestions from settings.json.

@@ -26,6 +26,7 @@ from typing import Callable, Dict, List, Optional
 from model.orchestrators.pr_review_orchestrator import (
     add_jira_comment,
     attach_file_to_jira,
+    check_existing_prs,
     create_pull_request,
     generate_commit_message,
     get_jira_reporter,
@@ -126,6 +127,7 @@ class PRReviewController:
         issue_key: str,
         target_branch: str,
         reviewers: List[str],
+        pr_description: str = "",
         callback: Optional[Callable] = None,
     ):
         """Create PR only (Phase 3 standalone)."""
@@ -155,7 +157,9 @@ class PRReviewController:
                 bb_url, bb_user, bb_token = self._get_bitbucket_creds()
 
                 pr_title = f"[{issue_key}] Feature branch merge"
-                pr_desc = f"**JIRA:** {issue_key}\n**Branch:** {source_branch} → {target_branch}"
+                pr_desc = pr_description.strip() if pr_description.strip() else (
+                    f"**JIRA:** {issue_key}\n**Branch:** {source_branch} → {target_branch}"
+                )
 
                 result = create_pull_request(
                     repo_slug, project_key, source_branch, target_branch,
@@ -176,6 +180,48 @@ class PRReviewController:
                 self._running = False
 
         threading.Thread(target=_work, daemon=True, name="bento-pr-create").start()
+
+    def check_existing_pr(
+        self,
+        target_branch: str,
+        callback: Optional[Callable] = None,
+    ):
+        """Check if an OPEN PR already exists for the current branch → target (non-blocking)."""
+        def _work():
+            try:
+                repo_path = self.workflow.get_workflow_step("REPOSITORY_PATH")
+                if not repo_path:
+                    self._callback(callback, {"exists": False, "error": "No repository path"})
+                    return
+
+                source_branch = git_get_current_branch(repo_path, self._log) or ""
+                if not source_branch:
+                    self._callback(callback, {"exists": False, "error": "Cannot determine branch"})
+                    return
+
+                repo_slug, project_key = self._resolve_repo_info()
+                bb_url, bb_user, bb_token = self._get_bitbucket_creds()
+
+                result = check_existing_prs(
+                    repo_slug, project_key, source_branch, target_branch,
+                    bb_url, bb_user, bb_token, self._log
+                )
+                self._callback(callback, result)
+            except Exception as e:
+                self._callback(callback, {"exists": False, "error": str(e)})
+
+        threading.Thread(target=_work, daemon=True, name="bento-pr-check-dup").start()
+
+    def get_target_branch_from_workflow(self) -> str:
+        """Extract the base/target branch from the workflow REPOSITORY_INFO section."""
+        try:
+            repo_info = self.workflow.get_workflow_step("REPOSITORY_INFO") or ""
+            for line in repo_info.split("\n"):
+                if line.strip().startswith("Base branch:"):
+                    return line.split(":", 1)[1].strip()
+        except Exception:
+            pass
+        return ""
 
     def check_pr_status(self, callback: Optional[Callable] = None):
         """Check current PR approval status."""
