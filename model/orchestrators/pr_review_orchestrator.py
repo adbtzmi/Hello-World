@@ -367,7 +367,7 @@ def search_bitbucket_users(
     bitbucket_base_url: str,
     bitbucket_username: str,
     bitbucket_token: str,
-    limit: int = 25,
+    limit: int = 50,
     log_callback: Optional[Callable] = None,
 ) -> List[Dict[str, str]]:
     """
@@ -377,7 +377,7 @@ def search_bitbucket_users(
         GET /rest/api/1.0/users?filter=<query>&limit=<limit>
 
     Args:
-        query:              Search string (min 2 chars recommended).
+        query:              Search string (min 3 chars recommended).
         bitbucket_base_url: e.g. "https://bitbucket.micron.com/bbdc/scm"
         bitbucket_username: Bitbucket username for auth.
         bitbucket_token:    Bitbucket personal access token.
@@ -389,7 +389,7 @@ def search_bitbucket_users(
                          "email": "jdoe@micron.com"}, ...]
         Returns empty list on error or if query is too short.
     """
-    if not query or len(query) < 2:
+    if not query or len(query) < 3:
         return []
 
     # Normalise base URL (strip trailing /scm if present)

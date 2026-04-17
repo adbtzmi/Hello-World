@@ -778,10 +778,11 @@ class PRReviewTab(BaseTab):
     # ──────────────────────────────────────────────────────────────────────
 
     def _on_reviewer_key(self, event):
-        """Handle keystrokes in the reviewers Entry with 300ms debounce.
+        """Handle keystrokes in the reviewers Entry with 500ms debounce.
 
         Supports multi-token input (comma-separated usernames).  Only the
         text after the last comma is used as the search query.
+        Minimum 3 characters required to trigger API search.
         """
         # Ignore navigation / modifier keys
         if event.keysym in ("Down", "Up", "Left", "Right", "Escape",
@@ -799,13 +800,13 @@ class PRReviewTab(BaseTab):
         parts = full_text.split(",")
         current_token = parts[-1].strip()
 
-        if len(current_token) < 2:
+        if len(current_token) < 3:
             self._hide_autocomplete()
             return
 
-        # Schedule the API call after 300ms debounce
+        # Schedule the API call after 500ms debounce
         self._ac_debounce_id = self.root.after(
-            300, lambda: self._fire_autocomplete(current_token)
+            500, lambda: self._fire_autocomplete(current_token)
         )
 
     def _fire_autocomplete(self, query: str):
@@ -828,6 +829,23 @@ class PRReviewTab(BaseTab):
         if not results:
             return
 
+        # Build display strings first so we can measure the widest one
+        self._ac_display_map = {}  # display_text -> username
+        display_items: list[str] = []
+        for item in results:
+            uname = item.get("username", "")
+            dname = item.get("display_name", "")
+            email = item.get("email", "")
+            display = f"{uname}  —  {dname}"
+            if email:
+                display += f"  ({email})"
+            display_items.append(display)
+            self._ac_display_map[display] = uname
+
+        # Calculate width: use the longest display string + padding
+        max_chars = max((len(d) for d in display_items), default=60)
+        listbox_width = max(max_chars + 4, 80)  # minimum 80 chars wide
+
         # Create a Toplevel that floats over the entry
         entry = self._reviewers_entry
         x = entry.winfo_rootx()
@@ -839,21 +857,13 @@ class PRReviewTab(BaseTab):
         top.lift()
 
         listbox = tk.Listbox(
-            top, width=60, height=min(len(results), 8),
+            top, width=listbox_width, height=min(len(display_items), 10),
             font=("Consolas", 9), selectmode=tk.SINGLE,
         )
         listbox.pack(fill=tk.BOTH, expand=True)
 
-        self._ac_display_map = {}  # display_text -> username
-        for item in results:
-            uname = item.get("username", "")
-            dname = item.get("display_name", "")
-            email = item.get("email", "")
-            display = f"{uname}  —  {dname}"
-            if email:
-                display += f"  ({email})"
+        for display in display_items:
             listbox.insert(tk.END, display)
-            self._ac_display_map[display] = uname
 
         listbox.bind("<ButtonRelease-1>", self._ac_on_click)
         listbox.bind("<Return>", self._ac_on_listbox_return)

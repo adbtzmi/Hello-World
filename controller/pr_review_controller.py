@@ -345,12 +345,12 @@ class PRReviewController:
         Bitbucket credentials are not configured.
 
         Args:
-            query:    Search string (min 2 chars).
+            query:    Search string (min 3 chars).
             callback: Called on the main thread with a list of
                       ``{"username": ..., "display_name": ..., "email": ...}``
                       dicts.
         """
-        if not query or len(query) < 2:
+        if not query or len(query) < 3:
             if callback:
                 self.context.root.after(0, lambda: callback([]))
             return
