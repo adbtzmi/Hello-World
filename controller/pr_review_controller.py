@@ -370,14 +370,25 @@ class PRReviewController:
             try:
                 bb_url, bb_user, bb_token = self._get_bitbucket_creds()
 
+                logger.debug(
+                    f"Reviewer autocomplete: query='{query_lower}', "
+                    f"bb_url={'set' if bb_url else 'EMPTY'}, "
+                    f"bb_user={'set' if bb_user else 'EMPTY'}, "
+                    f"bb_token={'set' if bb_token else 'EMPTY'}"
+                )
+
                 if bb_url and bb_user and bb_token:
                     # ── Live Bitbucket API search ──────────────────────
                     results = search_bitbucket_users(
                         query_lower, bb_url, bb_user, bb_token,
-                        limit=25, log_callback=None,
+                        limit=25, log_callback=self._log,
                     )
                 else:
                     # ── Fallback: filter static list from settings.json ─
+                    logger.debug(
+                        "Reviewer autocomplete: No Bitbucket creds, "
+                        "falling back to static list"
+                    )
                     results = self._filter_static_reviewers(query_lower)
 
                 # Cache the results

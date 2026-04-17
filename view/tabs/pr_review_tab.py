@@ -810,7 +810,8 @@ class PRReviewTab(BaseTab):
 
     def _fire_autocomplete(self, query: str):
         """Send the autocomplete query to the controller."""
-        ctrl = self._get_controller()
+        # Use silent controller lookup — don't show error dialog during typing
+        ctrl = getattr(self.context.controller, 'pr_review_controller', None)
         if not ctrl:
             return
         ctrl.fetch_reviewer_suggestions(query, self._show_autocomplete)
