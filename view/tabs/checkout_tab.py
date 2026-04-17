@@ -2343,10 +2343,10 @@ class CheckoutTab(BaseTab):
         controller = self.context.controller
         if controller and hasattr(controller, "result_controller"):
             rc = controller.result_controller
-            if rc and rc.is_running():
+            if rc and rc.has_collector():
                 rc.refresh_status()
             else:
-                self.log("⚠ Result collector is not running.")
+                self.log("⚠ No result collector available — run checkout first.")
 
     def _rc_spool_selected(self):
         """Manually spool summary for selected MIDs."""
@@ -2358,8 +2358,8 @@ class CheckoutTab(BaseTab):
         if not controller or not hasattr(controller, "result_controller"):
             return
         rc = controller.result_controller
-        if not rc or not rc.is_running():
-            self.log("⚠ Result collector is not running.")
+        if not rc or not rc.has_collector():
+            self.log("⚠ No result collector available — run checkout first.")
             return
         for item_id in selected:
             values = self._rc_tree.item(item_id, "values")
