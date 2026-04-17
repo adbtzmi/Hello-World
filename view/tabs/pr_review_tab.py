@@ -40,16 +40,22 @@ class PRReviewTab(BaseTab):
         self.configure(padding="10")
 
         # Make the tab scrollable for smaller screens
-        canvas = tk.Canvas(self, highlightthickness=0)
+        self._canvas = canvas = tk.Canvas(self, highlightthickness=0)
         scrollbar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
-        self._inner_frame = ttk.Frame(canvas)
+        self._inner_frame = ttk.Frame(canvas, padding="10")
 
         self._inner_frame.bind(
             "<Configure>",
             lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
-        canvas.create_window((0, 0), window=self._inner_frame, anchor="nw")
+        self._canvas_window = canvas.create_window(
+            (0, 0), window=self._inner_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Stretch inner frame to match canvas width so content fills the tab
+        def _on_canvas_resize(event):
+            canvas.itemconfig(self._canvas_window, width=event.width)
+        canvas.bind("<Configure>", _on_canvas_resize)
 
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
