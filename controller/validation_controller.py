@@ -169,9 +169,17 @@ class ValidationController:
             pass
 
         # Run consolidation
+        # Resolve absolute template path
+        template_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "template_validation.docx"
+        )
+        if not os.path.exists(template_path):
+            template_path = "template_validation.docx"
+
         self._log("📊 Running auto-consolidation...")
         consolidator = AutoConsolidator(
-            template_path="template_validation.docx",
+            template_path=template_path,
             ai_client=ai_client,
         )
 
