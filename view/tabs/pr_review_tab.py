@@ -49,14 +49,8 @@ class PRReviewTab(BaseTab):
             pass
 
         # Improvement 1: Auto-populate target branch from workflow
-        try:
-            ctrl = self._get_controller()
-            if ctrl:
-                branch = ctrl.get_target_branch_from_workflow()
-                if branch:
-                    self._target_branch_var.set(branch)
-        except Exception:
-            pass
+        # Deferred so the controller has time to initialize after app startup
+        self.root.after(500, self._auto_populate_target_branch)
 
     def _build_ui(self):
         self.configure(padding="10")
@@ -814,6 +808,21 @@ class PRReviewTab(BaseTab):
             self._status_text.configure(state=tk.DISABLED)
 
         self.root.after(0, _do)
+
+    def _auto_populate_target_branch(self):
+        """Improvement 1: Auto-populate target branch from workflow.
+
+        Uses silent controller lookup (no error dialog) since this runs
+        during startup when the controller may not be initialized yet.
+        """
+        try:
+            ctrl = getattr(self.context.controller, 'pr_review_controller', None)
+            if ctrl:
+                branch = ctrl.get_target_branch_from_workflow()
+                if branch:
+                    self._target_branch_var.set(branch)
+        except Exception:
+            pass
 
     def _auto_populate_commit_message(self, *_args):
         """Item 12: Auto-populate commit message from JIRA key when the
