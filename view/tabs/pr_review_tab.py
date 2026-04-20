@@ -315,8 +315,9 @@ class PRReviewTab(BaseTab):
         action_frame = ttk.LabelFrame(parent, text="Pipeline Actions", padding="10")
         action_frame.grid(row=3, column=0, columnspan=4, sticky="nesw", pady=5)
 
+        # Row 1: Pipeline controls + first set of quick actions
         btn_row = ttk.Frame(action_frame)
-        btn_row.pack(fill=tk.X, pady=5)
+        btn_row.pack(fill=tk.X, pady=(5, 2))
 
         self._run_pipeline_btn = ttk.Button(
             btn_row, text="▶ Run Full Pipeline",
@@ -331,7 +332,6 @@ class PRReviewTab(BaseTab):
 
         ttk.Separator(btn_row, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
 
-        # Quick action buttons
         ttk.Label(btn_row, text="Quick Actions:",
                   font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=5)
 
@@ -357,20 +357,27 @@ class PRReviewTab(BaseTab):
         self._create_pr_btn.pack(side=tk.LEFT, padx=3)
         self.context.lockable_buttons.append(self._create_pr_btn)
 
+        # Row 2: Remaining quick actions (ensures visibility on smaller screens)
+        btn_row2 = ttk.Frame(action_frame)
+        btn_row2.pack(fill=tk.X, pady=(0, 5))
+
+        # Spacer to align with Quick Actions above
+        ttk.Label(btn_row2, text="").pack(side=tk.LEFT, padx=(215, 0))
+
         self._check_pr_btn = ttk.Button(
-            btn_row, text="🔍 Check PR Status",
+            btn_row2, text="🔍 Check PR Status",
             command=self._check_pr_status)
         self._check_pr_btn.pack(side=tk.LEFT, padx=3)
 
         # H1: Merge PR button (standalone quick action)
         self._merge_pr_btn = ttk.Button(
-            btn_row, text="🔀 Merge PR",
+            btn_row2, text="🔀 Merge PR",
             command=self._merge_pr_only)
         self._merge_pr_btn.pack(side=tk.LEFT, padx=3)
 
         # H2: Poll Approval button (auto-refresh with countdown)
         self._poll_btn = ttk.Button(
-            btn_row, text="⏳ Poll Approval",
+            btn_row2, text="⏳ Poll Approval",
             command=self._toggle_polling)
         self._poll_btn.pack(side=tk.LEFT, padx=3)
 
