@@ -14,6 +14,7 @@ attachment through PR merge and JIRA closure.
 """
 
 import os
+import time
 import webbrowser
 import tkinter as tk
 from tkinter import ttk, scrolledtext, filedialog, messagebox
@@ -38,6 +39,15 @@ class PRReviewTab(BaseTab):
         super().__init__(notebook, context, "✅ PR Review")
         self._reviewer_chips: list[str] = []  # list of added reviewer usernames
         self._reviewer_display_names: dict[str, str] = {}  # username → display name (Feature 13)
+        # H2: Approval polling state
+        self._polling_active = False
+        self._poll_after_id = None       # root.after() handle for cancellation
+        self._poll_interval = 30         # seconds between polls
+        self._poll_countdown = 0         # seconds remaining until next poll
+        self._poll_countdown_id = None   # root.after() handle for countdown tick
+        # H3: Elapsed timer state
+        self._elapsed_start: float = 0.0
+        self._elapsed_after_id = None    # root.after() handle for timer tick
         self._build_ui()
 
         # Item 12: Auto-populate commit message when JIRA key changes
@@ -310,6 +320,18 @@ class PRReviewTab(BaseTab):
             command=self._check_pr_status)
         self._check_pr_btn.pack(side=tk.LEFT, padx=3)
 
+        # H1: Merge PR button (standalone quick action)
+        self._merge_pr_btn = ttk.Button(
+            btn_row, text="🔀 Merge PR",
+            command=self._merge_pr_only)
+        self._merge_pr_btn.pack(side=tk.LEFT, padx=3)
+
+        # H2: Poll Approval button (auto-refresh with countdown)
+        self._poll_btn = ttk.Button(
+            btn_row, text="⏳ Poll Approval",
+            command=self._toggle_polling)
+        self._poll_btn.pack(side=tk.LEFT, padx=3)
+
         # ══════════════════════════════════════════════════════════════════
         # SECTION 3: Pipeline Progress
         # ══════════════════════════════════════════════════════════════════
@@ -327,6 +349,16 @@ class PRReviewTab(BaseTab):
         self._phase_label = ttk.Label(phase_row, text="Idle",
                                        font=('Arial', 9), foreground='gray')
         self._phase_label.pack(side=tk.LEFT, padx=10)
+
+        # H3: Elapsed time indicator (right-aligned in phase row)
+        self._elapsed_label = ttk.Label(phase_row, text="",
+                                         font=('Consolas', 9), foreground='gray')
+        self._elapsed_label.pack(side=tk.RIGHT, padx=10)
+
+        # H2: Polling countdown label (right-aligned, next to elapsed)
+        self._poll_status_label = ttk.Label(phase_row, text="",
+                                             font=('Arial', 8), foreground='gray')
+        self._poll_status_label.pack(side=tk.RIGHT, padx=5)
 
         # Phase progress bar (6 phases)
         self._phase_steps = []
@@ -804,10 +836,12 @@ class PRReviewTab(BaseTab):
             self.lock_gui()
             self._cancel_btn.config(state=tk.NORMAL)
             self._phase_label.config(text="Starting...", foreground='blue')
+            self._start_elapsed_timer()   # H3
         else:
             self.unlock_gui()
             self._cancel_btn.config(state=tk.DISABLED)
             self._phase_label.config(text="Idle", foreground='gray')
+            self._stop_elapsed_timer()    # H3
 
     def _reset_phase_indicators(self):
         """Reset all phase step indicators to pending."""
@@ -846,6 +880,175 @@ class PRReviewTab(BaseTab):
             self._status_text.configure(state=tk.DISABLED)
 
         self.root.after(0, _do)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # H1: MERGE PR (standalone quick action)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _merge_pr_only(self):
+        """H1: Merge the current PR (standalone quick action)."""
+        ctrl = self._get_controller()
+        if not ctrl:
+            return
+
+        if not messagebox.askyesno("Confirm Merge",
+                                    "Merge the current PR?\n\n"
+                                    "This will merge the PR into the target branch."):
+            return
+
+        self._append_status("\n🔀 Merging PR...")
+        ctrl.merge_pr(self._on_merge_result)
+
+    def _on_merge_result(self, result):
+        """H1: Handle merge PR result."""
+        if result.get("success"):
+            self._append_status("✅ PR merged successfully!")
+            self.show_info("PR Merged", "Pull Request merged successfully!")
+            # Stop polling if active (PR is now merged)
+            if self._polling_active:
+                self._stop_polling()
+        else:
+            error = result.get("error", "Unknown error")
+            self._append_status(f"✗ Merge failed: {error}")
+            self.show_error("Merge Failed", error)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # H2: PR APPROVAL POLLING (auto-refresh with countdown)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _toggle_polling(self):
+        """H2: Toggle approval polling on/off."""
+        if self._polling_active:
+            self._stop_polling()
+        else:
+            self._start_polling()
+
+    def _start_polling(self):
+        """H2: Start polling for PR approval every N seconds."""
+        ctrl = self._get_controller()
+        if not ctrl:
+            return
+
+        self._polling_active = True
+        self._poll_btn.config(text="⏹ Stop Polling")
+        self._append_status(f"\n⏳ Polling for PR approval every {self._poll_interval}s...")
+        self._poll_status_label.config(text="Polling active", foreground='blue')
+
+        # Fire first check immediately
+        self._poll_tick()
+
+    def _stop_polling(self):
+        """H2: Stop the approval polling loop."""
+        self._polling_active = False
+        self._poll_btn.config(text="⏳ Poll Approval")
+        self._poll_status_label.config(text="", foreground='gray')
+
+        if self._poll_after_id:
+            self.root.after_cancel(self._poll_after_id)
+            self._poll_after_id = None
+        if self._poll_countdown_id:
+            self.root.after_cancel(self._poll_countdown_id)
+            self._poll_countdown_id = None
+
+        self._append_status("⏹ Polling stopped")
+
+    def _poll_tick(self):
+        """H2: Execute one poll cycle — check status, then schedule next."""
+        if not self._polling_active:
+            return
+
+        ctrl = self._get_controller()
+        if not ctrl:
+            self._stop_polling()
+            return
+
+        ctrl.check_pr_status(self._on_poll_result)
+
+    def _on_poll_result(self, result):
+        """H2: Handle poll result — auto-stop if approved/merged, else schedule next."""
+        if not self._polling_active:
+            return
+
+        if result.get("success"):
+            state = result.get("state", "UNKNOWN")
+            approved = result.get("approved", False)
+            reviewers = result.get("reviewers", [])
+
+            icon = "✅" if approved else ("🔀" if state == "MERGED" else "⏳")
+            self._append_status(f"  {icon} Poll: PR state={state}, approved={approved}")
+
+            for r in reviewers:
+                status_icon = "✅" if r["approved"] else "⏳"
+                self._append_status(f"    {status_icon} {r['user']}: {r['status']}")
+
+            if approved:
+                self._append_status("  🎉 PR is approved! Stopping poll.")
+                self._poll_status_label.config(text="✅ Approved!", foreground='green')
+                self._stop_polling()
+                return
+            elif state == "MERGED":
+                self._append_status("  🔀 PR already merged. Stopping poll.")
+                self._poll_status_label.config(text="🔀 Merged", foreground='green')
+                self._stop_polling()
+                return
+        else:
+            self._append_status(f"  ⚠ Poll error: {result.get('error', '?')}")
+
+        # Schedule next poll with countdown
+        self._poll_countdown = self._poll_interval
+        self._poll_countdown_tick()
+
+    def _poll_countdown_tick(self):
+        """H2: Update countdown label and schedule next tick or poll."""
+        if not self._polling_active:
+            return
+
+        if self._poll_countdown <= 0:
+            self._poll_status_label.config(text="Checking...", foreground='blue')
+            self._poll_tick()
+            return
+
+        self._poll_status_label.config(
+            text=f"Next poll in {self._poll_countdown}s", foreground='orange')
+        self._poll_countdown -= 1
+        self._poll_countdown_id = self.root.after(1000, self._poll_countdown_tick)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # H3: ELAPSED TIME INDICATOR (during pipeline execution)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _start_elapsed_timer(self):
+        """H3: Start the elapsed time counter."""
+        self._elapsed_start = time.monotonic()
+        self._update_elapsed()
+
+    def _stop_elapsed_timer(self):
+        """H3: Stop the elapsed time counter and show final time."""
+        if self._elapsed_after_id:
+            self.root.after_cancel(self._elapsed_after_id)
+            self._elapsed_after_id = None
+
+        if self._elapsed_start:
+            elapsed = time.monotonic() - self._elapsed_start
+            h, rem = divmod(int(elapsed), 3600)
+            m, s = divmod(rem, 60)
+            self._elapsed_label.config(
+                text=f"⏱ {h:02d}:{m:02d}:{s:02d} (done)",
+                foreground='green')
+            self._elapsed_start = 0.0
+
+    def _update_elapsed(self):
+        """H3: Update the elapsed time label every second."""
+        if not self._elapsed_start:
+            return
+
+        elapsed = time.monotonic() - self._elapsed_start
+        h, rem = divmod(int(elapsed), 3600)
+        m, s = divmod(rem, 60)
+        self._elapsed_label.config(
+            text=f"⏱ {h:02d}:{m:02d}:{s:02d}",
+            foreground='blue')
+        self._elapsed_after_id = self.root.after(1000, self._update_elapsed)
 
     def _auto_populate_target_branch(self):
         """Improvement 1: Auto-populate target branch from workflow.

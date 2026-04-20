@@ -250,6 +250,46 @@ class PRReviewController:
 
         threading.Thread(target=_work, daemon=True, name="bento-pr-status").start()
 
+    def merge_pr(self, callback: Optional[Callable] = None):
+        """Merge the current PR (standalone quick action, non-blocking).
+
+        Fetches the PR version first, then calls merge_pull_request().
+        """
+        def _work():
+            pr_id = self._current_pr_id
+            if not pr_id:
+                pr_id_str = self.workflow.get_workflow_step("PR_ID")
+                if pr_id_str:
+                    pr_id = int(pr_id_str)
+
+            if not pr_id:
+                self._callback(callback, {"success": False, "error": "No PR ID found. Create a PR first."})
+                return
+
+            try:
+                repo_slug, project_key = self._resolve_repo_info()
+                bb_url, bb_user, bb_token = self._get_bitbucket_creds()
+
+                # Get current PR version (required for merge)
+                version = get_pr_version(
+                    repo_slug, project_key, pr_id,
+                    bb_url, bb_user, bb_token, self._log
+                )
+                if version is None:
+                    self._callback(callback, {"success": False, "error": "Could not get PR version"})
+                    return
+
+                # Merge the PR
+                result = merge_pull_request(
+                    repo_slug, project_key, pr_id, version,
+                    bb_url, bb_user, bb_token, self._log
+                )
+                self._callback(callback, result)
+            except Exception as e:
+                self._callback(callback, {"success": False, "error": str(e)})
+
+        threading.Thread(target=_work, daemon=True, name="bento-pr-merge").start()
+
     # ──────────────────────────────────────────────────────────────────────
     # FULL PIPELINE
     # ──────────────────────────────────────────────────────────────────────
