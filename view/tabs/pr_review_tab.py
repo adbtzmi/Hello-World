@@ -362,19 +362,15 @@ class PRReviewTab(BaseTab):
             command=self._check_pr_status)
         self._check_pr_btn.pack(side=tk.LEFT, padx=3)
 
-        # Second row for additional quick actions (avoid overcrowding)
-        btn_row2 = ttk.Frame(action_frame)
-        btn_row2.pack(fill=tk.X, pady=(0, 5))
-
         # H1: Merge PR button (standalone quick action)
         self._merge_pr_btn = ttk.Button(
-            btn_row2, text="🔀 Merge PR",
+            btn_row, text="🔀 Merge PR",
             command=self._merge_pr_only)
         self._merge_pr_btn.pack(side=tk.LEFT, padx=3)
 
         # H2: Poll Approval button (auto-refresh with countdown)
         self._poll_btn = ttk.Button(
-            btn_row2, text="⏳ Poll Approval",
+            btn_row, text="⏳ Poll Approval",
             command=self._toggle_polling)
         self._poll_btn.pack(side=tk.LEFT, padx=3)
 
@@ -861,9 +857,11 @@ class PRReviewTab(BaseTab):
 
             # L4: Update diff button label with file count
             if diff:
-                file_count = sum(1 for line in diff.splitlines()
-                                 if line.strip() and not line.startswith(" "))
-                self._diff_btn.config(text=f"📊 View Diff ({file_count} files)")
+                import re
+                m = re.search(r'(\d+)\s+files?\s+changed', diff)
+                file_count = int(m.group(1)) if m else 0
+                if file_count:
+                    self._diff_btn.config(text=f"📊 View Diff ({file_count} files)")
         else:
             self._append_status(f"✗ {result.get('error', 'Unknown error')}")
 
