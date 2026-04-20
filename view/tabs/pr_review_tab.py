@@ -366,8 +366,26 @@ class PRReviewTab(BaseTab):
         btn_row2 = ttk.Frame(action_frame)
         btn_row2.pack(fill=tk.X, pady=(0, 5))
 
-        # Spacer to align with Quick Actions above
-        ttk.Label(btn_row2, text="").pack(side=tk.LEFT, padx=(215, 0))
+        # Dynamic spacer — aligns Merge PR under View Diff after layout
+        self._row2_spacer = ttk.Frame(btn_row2, width=0)
+        self._row2_spacer.pack(side=tk.LEFT)
+        self._row2_spacer.pack_propagate(False)
+
+        def _align_row2(_event=None):
+            try:
+                # Get x-offset of View Diff button relative to action_frame
+                x = self._diff_btn.winfo_x()
+                # Account for btn_row's own x-offset inside action_frame
+                x += btn_row.winfo_x()
+                # Subtract btn_row2's x-offset
+                x -= btn_row2.winfo_x()
+                if x > 0:
+                    self._row2_spacer.configure(width=x)
+            except Exception:
+                pass
+
+        # Schedule alignment after widgets are rendered
+        self.after(200, _align_row2)
 
         # H1: Merge PR button (standalone quick action)
         self._merge_pr_btn = ttk.Button(
