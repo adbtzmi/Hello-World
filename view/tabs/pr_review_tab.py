@@ -741,6 +741,11 @@ class PRReviewTab(BaseTab):
             pr_id = result.get("pr_id", "")
             pr_url = result.get("pr_url", "")
             self._pr_url_var.set(pr_url)
+            # Show the auto-generated description in the PR Description field
+            pr_desc = result.get("pr_description", "")
+            if pr_desc and not self._pr_desc_text.get("1.0", tk.END).strip():
+                self._pr_desc_text.delete("1.0", tk.END)
+                self._pr_desc_text.insert("1.0", pr_desc)
             # Item 16: Save used reviewers to settings.json for future fallback
             self._save_used_reviewers()
             self._append_status(f"✓ PR #{pr_id} created: {pr_url}")

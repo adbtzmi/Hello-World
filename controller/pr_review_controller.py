@@ -172,6 +172,7 @@ class PRReviewController:
                 if result.get("success"):
                     self._current_pr_id = result["pr_id"]
                     self._current_pr_url = result["pr_url"]
+                    result["pr_description"] = pr_desc
                     self.workflow.save_workflow_step("PR_ID", str(result["pr_id"]))
                     self.workflow.save_workflow_step("PR_URL", result["pr_url"])
 
