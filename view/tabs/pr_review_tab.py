@@ -67,6 +67,9 @@ class PRReviewTab(BaseTab):
         # Feature 12: Check for saved pipeline state to resume
         self.root.after(1500, self._check_resume_pipeline)
 
+        # L3: Restore last used settings from settings.json
+        self.root.after(600, self._restore_last_settings)
+
     def _build_ui(self):
         self.configure(padding="10")
 
@@ -192,6 +195,8 @@ class PRReviewTab(BaseTab):
         self._reviewers_entry.bind("<Escape>", self._hide_autocomplete)
         self._reviewers_entry.bind("<Down>", self._ac_focus_listbox)
         self._reviewers_entry.bind("<Return>", self._ac_select_current)
+        # L5: Backspace in empty entry removes last reviewer chip
+        self._reviewers_entry.bind("<BackSpace>", self._on_reviewer_backspace)
 
         ttk.Label(config_frame, text="(Type to search, chips added below)",
                   font=('Arial', 8), foreground='gray').grid(
@@ -420,10 +425,24 @@ class PRReviewTab(BaseTab):
         ttk.Button(log_header, text="🗑 Clear Log",
                    command=self._clear_status_log).pack(side=tk.RIGHT)
 
+        # L2: Pipeline progress bar (determinate, 6 steps)
+        self._pipeline_progress = ttk.Progressbar(
+            progress_frame, orient=tk.HORIZONTAL, length=400,
+            mode='determinate', maximum=6, value=0)
+        self._pipeline_progress.pack(fill=tk.X, pady=(2, 5))
+
         self._status_text = scrolledtext.ScrolledText(
             progress_frame, height=14, width=80, wrap=tk.WORD,
             state=tk.DISABLED)
         self._status_text.pack(fill=tk.BOTH, expand=True, pady=(2, 5))
+
+        # L1: Configure syntax highlighting tags for status log
+        self._status_text.tag_configure("success", foreground="#228B22")
+        self._status_text.tag_configure("error", foreground="#DC143C")
+        self._status_text.tag_configure("warning", foreground="#FF8C00")
+        self._status_text.tag_configure("phase", foreground="#1E90FF", font=('Arial', 9, 'bold'))
+        self._status_text.tag_configure("header", foreground="#4B0082", font=('Arial', 10, 'bold'))
+        self._status_text.tag_configure("info", foreground="#555555")
 
         # PR Info row
         pr_info_frame = ttk.Frame(progress_frame)
@@ -482,6 +501,10 @@ class PRReviewTab(BaseTab):
                 f"Currently {len(reviewers)} added.\n\n"
                 f"(Configurable via settings.json → pr_review.min_reviewers)"
             )
+            return
+
+        # L6: Validate target branch exists via Bitbucket API
+        if not self._validate_target_branch(target_branch):
             return
 
         commit_msg = self._commit_msg_text.get("1.0", tk.END).strip()
@@ -745,6 +768,9 @@ class PRReviewTab(BaseTab):
             # Item 16: Save used reviewers to settings.json for future fallback
             self._save_used_reviewers()
 
+            # L3: Save last used settings for next session
+            self._save_last_settings()
+
             # Item 15: Mark all phases ✅ on success
             for lbl in self._phase_steps:
                 text = lbl.cget("text")
@@ -810,6 +836,9 @@ class PRReviewTab(BaseTab):
                     if text.startswith("⬜"):
                         lbl.config(text=text.replace("⬜", "🔄"), foreground='blue')
 
+            # L2: Update progress bar value
+            self._pipeline_progress['value'] = phase_num
+
         self._append_status(f"  [{phase_name}] {detail}")
 
     def _on_diff_result(self, result):
@@ -821,6 +850,12 @@ class PRReviewTab(BaseTab):
             self._append_status(f"{'─'*40}")
             self._append_status(diff if diff else "(no uncommitted changes)")
             self._append_status(f"{'─'*40}")
+
+            # L4: Update diff button label with file count
+            if diff:
+                file_count = sum(1 for line in diff.splitlines()
+                                 if line.strip() and not line.startswith(" "))
+                self._diff_btn.config(text=f"📊 View Diff ({file_count} files)")
         else:
             self._append_status(f"✗ {result.get('error', 'Unknown error')}")
 
@@ -927,6 +962,8 @@ class PRReviewTab(BaseTab):
         ]
         for i, lbl in enumerate(self._phase_steps):
             lbl.config(text=f"⬜ {phase_names[i]}", foreground='gray')
+        # L2: Reset progress bar
+        self._pipeline_progress['value'] = 0
 
     def _extract_phase_number(self, phase_name: str) -> int:
         """Extract phase number from phase name like '3/6 — Create PR'."""
@@ -943,11 +980,155 @@ class PRReviewTab(BaseTab):
         self._status_text.delete("1.0", tk.END)
         self._status_text.configure(state=tk.DISABLED)
 
+    # ──────────────────────────────────────────────────────────────────────
+    # L3: REMEMBER LAST USED SETTINGS
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _restore_last_settings(self):
+        """L3: Restore last used settings (target branch, transition, auto-merge,
+        auto-close) from settings.json on tab init."""
+        try:
+            import json
+            with open("settings.json", "r") as f:
+                cfg = json.load(f)
+            pr_cfg = cfg.get("pr_review", {})
+
+            last_branch = pr_cfg.get("last_target_branch", "")
+            if last_branch and not self._target_branch_var.get().strip():
+                self._target_branch_var.set(last_branch)
+
+            last_transition = pr_cfg.get("last_transition", "")
+            if last_transition:
+                self._transition_var.set(last_transition)
+
+            if "auto_merge" in pr_cfg:
+                self._auto_merge_var.set(bool(pr_cfg["auto_merge"]))
+
+            if "auto_close_jira" in pr_cfg:
+                self._auto_close_jira_var.set(bool(pr_cfg["auto_close_jira"]))
+        except Exception:
+            pass
+
+    def _save_last_settings(self):
+        """L3: Save current settings to settings.json for next session."""
+        try:
+            import json
+            with open("settings.json", "r") as f:
+                cfg = json.load(f)
+
+            pr_cfg = cfg.setdefault("pr_review", {})
+            pr_cfg["last_target_branch"] = self._target_branch_var.get().strip()
+            pr_cfg["last_transition"] = self._transition_var.get().strip()
+            pr_cfg["auto_merge"] = self._auto_merge_var.get()
+            pr_cfg["auto_close_jira"] = self._auto_close_jira_var.get()
+
+            with open("settings.json", "w") as f:
+                json.dump(cfg, f, indent=2)
+        except Exception:
+            pass
+
+    # ──────────────────────────────────────────────────────────────────────
+    # L5: REVIEWER CHIP KEYBOARD DELETE
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _on_reviewer_backspace(self, event):
+        """L5: When Backspace is pressed in an empty reviewer entry,
+        remove the last reviewer chip."""
+        current_text = self._reviewers_var.get()
+        if current_text:
+            # Entry has text — let default Backspace behaviour handle it
+            return
+        # Entry is empty — remove last chip
+        if self._reviewer_chips:
+            last_username = self._reviewer_chips[-1]
+            children = self._chip_frame.winfo_children()
+            if children:
+                last_chip: tk.Frame = children[-1]  # type: ignore[assignment]
+                self._remove_reviewer_chip(last_username, last_chip)
+            return "break"  # Suppress default Backspace
+
+    # ──────────────────────────────────────────────────────────────────────
+    # L6: BRANCH VALIDATION BEFORE PIPELINE
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _validate_target_branch(self, target_branch: str) -> bool:
+        """L6: Validate that the target branch exists on the remote via
+        Bitbucket API before starting the pipeline.
+
+        Returns True if valid (or if validation cannot be performed),
+        False if the branch definitely does not exist.
+        """
+        ctrl = self._get_controller()
+        if not ctrl:
+            return True  # Can't validate without controller — allow anyway
+
+        import threading
+
+        result_holder: list = []
+        done_event = threading.Event()
+
+        def _on_branches(branches):
+            result_holder.append(branches)
+            done_event.set()
+
+        ctrl.fetch_branches(filter_text=target_branch, callback=_on_branches)
+
+        # Wait up to 10 seconds for the API response
+        done_event.wait(timeout=10)
+
+        if not result_holder:
+            # Timeout or error — allow pipeline to proceed
+            return True
+
+        branches = result_holder[0]
+        if not branches:
+            # API returned empty — could be network issue, allow anyway
+            return True
+
+        # Check if exact branch name exists in results
+        if target_branch in branches:
+            return True
+
+        # Branch not found — ask user
+        from tkinter import messagebox
+        return messagebox.askyesno(
+            "Branch Not Found",
+            f"Target branch '{target_branch}' was not found on the remote.\n\n"
+            f"Available branches matching '{target_branch}':\n"
+            f"  {', '.join(branches[:10]) if branches else '(none)'}\n\n"
+            f"Proceed anyway?"
+        )
+
     def _append_status(self, text: str):
-        """Append text to the status log (thread-safe via root.after)."""
+        """Append text to the status log (thread-safe via root.after).
+        L1: Auto-applies color tags based on content patterns."""
+        def _detect_tag(line: str) -> str:
+            """Detect the appropriate tag for syntax highlighting."""
+            stripped = line.strip()
+            if stripped.startswith("✅") or stripped.startswith("✓") or "COMPLETE" in stripped.upper():
+                return "success"
+            if stripped.startswith("❌") or stripped.startswith("✗") or "FAILED" in stripped.upper():
+                return "error"
+            if stripped.startswith("⚠") or "warning" in stripped.lower():
+                return "warning"
+            if stripped.startswith("[") and "/" in stripped[:6]:
+                return "phase"
+            if stripped.startswith("═") or stripped.startswith("─"):
+                return "header"
+            if stripped.startswith("🤖") or stripped.startswith("📊") or stripped.startswith("📤"):
+                return "info"
+            return ""
+
         def _do():
             self._status_text.configure(state=tk.NORMAL)
-            self._status_text.insert(tk.END, text + "\n")
+            tag = _detect_tag(text)
+            if tag:
+                start = self._status_text.index(tk.END)
+                self._status_text.insert(tk.END, text + "\n")
+                end = self._status_text.index(tk.END)
+                self._status_text.tag_add(tag, start, end)
+            else:
+                self._status_text.insert(tk.END, text + "\n")
             self._status_text.see(tk.END)
             self._status_text.configure(state=tk.DISABLED)
 
