@@ -13,7 +13,9 @@ Deployment solution only — full end-to-end pipeline from validation doc
 attachment through PR merge and JIRA closure.
 """
 
+import json
 import os
+import re
 import time
 import webbrowser
 import tkinter as tk
@@ -252,7 +254,6 @@ class PRReviewTab(BaseTab):
             font=('Arial', 9))
         self._pr_desc_text.grid(
             row=row, column=1, sticky="we", pady=3, padx=5)
-        # AI Generate button removed — now handled by "AI Generate All" above
         ttk.Label(config_frame,
                   text="(Optional — auto-generated if empty)",
                   font=('Arial', 8), foreground='gray').grid(
@@ -489,7 +490,6 @@ class PRReviewTab(BaseTab):
     def _get_min_reviewers(self) -> int:
         """M5: Read minimum reviewer count from settings.json (default 1)."""
         try:
-            import json
             with open("settings.json", "r") as f:
                 cfg = json.load(f)
             return int(cfg.get("pr_review", {}).get("min_reviewers", 1))
@@ -870,7 +870,6 @@ class PRReviewTab(BaseTab):
 
             # L4: Update diff button label with file count
             if diff:
-                import re
                 m = re.search(r'(\d+)\s+files?\s+changed', diff)
                 file_count = int(m.group(1)) if m else 0
                 if file_count:
@@ -1007,7 +1006,6 @@ class PRReviewTab(BaseTab):
         """L3: Restore last used settings (target branch, transition, auto-merge,
         auto-close) from settings.json on tab init."""
         try:
-            import json
             with open("settings.json", "r") as f:
                 cfg = json.load(f)
             pr_cfg = cfg.get("pr_review", {})
@@ -1031,7 +1029,6 @@ class PRReviewTab(BaseTab):
     def _save_last_settings(self):
         """L3: Save current settings to settings.json for next session."""
         try:
-            import json
             with open("settings.json", "r") as f:
                 cfg = json.load(f)
 
@@ -1109,7 +1106,6 @@ class PRReviewTab(BaseTab):
             return True
 
         # Branch not found — ask user
-        from tkinter import messagebox
         return messagebox.askyesno(
             "Branch Not Found",
             f"Target branch '{target_branch}' was not found on the remote.\n\n"
@@ -1323,17 +1319,15 @@ class PRReviewTab(BaseTab):
         self._elapsed_after_id = self.root.after(1000, self._update_elapsed)
 
     def _on_tab_selected(self, event=None):
-        """Re-detect source branch when user switches to this tab.
-        Only runs if source branch is still showing a placeholder."""
+        """Re-detect source branch when user switches to this tab."""
         try:
             # Check if this tab is the currently selected one
             selected = self._notebook.select()
             if str(self) != str(selected):
                 return  # Different tab selected, ignore
 
-            current_src = self._source_branch_var.get()
-            if current_src in ("(no repo loaded)", "(unknown)", "(error)"):
-                self._auto_populate_target_branch()
+            # Always refresh source branch so it stays current
+            self._auto_populate_target_branch()
         except Exception:
             pass
 
@@ -1386,7 +1380,6 @@ class PRReviewTab(BaseTab):
                 msg = self._commit_msg_text.get("1.0", tk.END).strip()
                 # Strip existing issue key prefix to avoid duplication
                 # e.g. "[TSESSD-99999] Validation updates" → "Validation updates"
-                import re
                 msg_clean = re.sub(r'^\[' + re.escape(issue_key) + r'\]\s*', '', msg)
                 self._pr_title_var.set(f"[{issue_key}] {msg_clean}" if msg_clean else f"[{issue_key}] Feature branch merge")
 
@@ -1405,8 +1398,10 @@ class PRReviewTab(BaseTab):
         if self._pr_title_user_edited:
             return
 
-        issue_key = self._get_issue_key()
-        if not issue_key:
+        # Silent issue key lookup — don't show error dialog during typing
+        issue_key = self.context.get_var('issue_var').get().strip().upper()
+        jira_project = self.context.config.get('jira', {}).get('project_key', 'TSESSD')
+        if not issue_key or issue_key == f"{jira_project}-":
             return
 
         msg = self._commit_msg_text.get("1.0", tk.END).strip()
@@ -1415,7 +1410,6 @@ class PRReviewTab(BaseTab):
 
         # Use only the first line of the commit message for the PR title
         first_line = msg.split("\n")[0].strip()
-        import re
         # Strip existing [KEY] prefix to avoid duplication
         first_line_clean = re.sub(
             r'^\[' + re.escape(issue_key) + r'\]\s*', '', first_line)
@@ -1451,7 +1445,6 @@ class PRReviewTab(BaseTab):
 
         issue_key = self._get_issue_key()
         if not issue_key:
-            from tkinter import messagebox
             messagebox.showwarning(
                 "Missing Issue Key",
                 "Please enter a JIRA Issue Key first.",
@@ -1463,18 +1456,6 @@ class PRReviewTab(BaseTab):
         self._ai_commit_btn.configure(state="disabled", text="⏳ Generating...")
         self._append_status("🤖 AI Generate All: generating commit message...")
 
-        ctrl.generate_ai_commit_message(issue_key, self._on_ai_commit_result)
-
-    def _generate_ai_commit_message(self):
-        """Generate only the AI commit message (used internally)."""
-        ctrl = self._get_controller()
-        if not ctrl:
-            return
-        issue_key = self._get_issue_key()
-        if not issue_key:
-            return
-        self._ai_commit_btn.configure(state="disabled", text="⏳ Generating...")
-        self._append_status("🤖 Generating AI commit message...")
         ctrl.generate_ai_commit_message(issue_key, self._on_ai_commit_result)
 
     def _on_ai_commit_result(self, result: dict):
@@ -1505,7 +1486,6 @@ class PRReviewTab(BaseTab):
                 state="normal", text="✨ AI Generate All")
             error = result.get("error", "Unknown error")
             self._append_status(f"⚠️ AI commit message failed: {error}")
-            from tkinter import messagebox
             messagebox.showerror(
                 "AI Generate",
                 f"Failed to generate commit message:\n{error}",
@@ -1515,20 +1495,6 @@ class PRReviewTab(BaseTab):
     # ──────────────────────────────────────────────────────────────────────
     # M1: AI PR DESCRIPTION GENERATION
     # ──────────────────────────────────────────────────────────────────────
-
-    def _generate_ai_pr_description(self):
-        """M1: Generate PR description only (used internally or by chain)."""
-        ctrl = self._get_controller()
-        if not ctrl:
-            return
-        issue_key = self._get_issue_key()
-        if not issue_key:
-            return
-        target_branch = self._target_branch_var.get().strip() or "master"
-        self._append_status("🤖 Generating AI PR description...")
-        ctrl.generate_ai_pr_description(
-            issue_key, target_branch, self._on_ai_pr_desc_result
-        )
 
     def _on_ai_pr_desc_result(self, result: dict):
         """M1: Callback from controller with the AI-generated PR description.
@@ -1546,7 +1512,6 @@ class PRReviewTab(BaseTab):
         else:
             error = result.get("error", "Unknown error")
             self._append_status(f"⚠️ AI PR description failed: {error}")
-            from tkinter import messagebox
             messagebox.showerror(
                 "AI PR Description",
                 f"Failed to generate PR description:\n{error}",
