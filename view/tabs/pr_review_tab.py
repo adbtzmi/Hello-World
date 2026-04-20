@@ -222,9 +222,12 @@ class PRReviewTab(BaseTab):
         ttk.Label(config_frame, text="(Multi-line supported)",
                   font=('Arial', 8), foreground='gray').grid(
             row=row, column=3, sticky=tk.NW, padx=5)
+        # Auto-sync PR title when commit message changes
+        self._pr_title_user_edited = False  # Track manual edits
+        self._commit_msg_text.bind("<<Modified>>", self._on_commit_msg_changed)
         row += 1
 
-        # M4: PR Title (editable, auto-populated as [ISSUE_KEY] commit_message)
+        # M4: PR Title (editable, auto-synced from first line of commit message)
         ttk.Label(config_frame, text="PR Title:").grid(
             row=row, column=0, sticky=tk.W, pady=3)
         self._pr_title_var = tk.StringVar(value="")
@@ -232,8 +235,11 @@ class PRReviewTab(BaseTab):
             config_frame, textvariable=self._pr_title_var, width=50)
         self._pr_title_entry.grid(
             row=row, column=1, columnspan=2, sticky="we", pady=3, padx=5)
+        # Mark as user-edited when they type directly in PR title
+        self._pr_title_entry.bind(
+            "<Key>", lambda _: setattr(self, '_pr_title_user_edited', True))
         ttk.Label(config_frame,
-                  text="(Auto-filled from issue key + commit msg)",
+                  text="(Auto-synced from commit msg first line)",
                   font=('Arial', 8), foreground='gray').grid(
             row=row, column=3, sticky=tk.NW, padx=5)
         row += 1
@@ -1387,6 +1393,38 @@ class PRReviewTab(BaseTab):
                 import re
                 msg_clean = re.sub(r'^\[' + re.escape(issue_key) + r'\]\s*', '', msg)
                 self._pr_title_var.set(f"[{issue_key}] {msg_clean}" if msg_clean else f"[{issue_key}] Feature branch merge")
+
+    def _on_commit_msg_changed(self, _event=None):
+        """Auto-sync PR title from the first line of the commit message.
+
+        Only updates if the user hasn't manually edited the PR title field.
+        Uses the <<Modified>> virtual event from tk.Text.
+        """
+        # Reset the modified flag so the event fires again next time
+        try:
+            self._commit_msg_text.edit_modified(False)
+        except Exception:
+            pass
+
+        if self._pr_title_user_edited:
+            return
+
+        issue_key = self._get_issue_key()
+        if not issue_key:
+            return
+
+        msg = self._commit_msg_text.get("1.0", tk.END).strip()
+        if not msg:
+            return
+
+        # Use only the first line of the commit message for the PR title
+        first_line = msg.split("\n")[0].strip()
+        import re
+        # Strip existing [KEY] prefix to avoid duplication
+        first_line_clean = re.sub(
+            r'^\[' + re.escape(issue_key) + r'\]\s*', '', first_line)
+        if first_line_clean:
+            self._pr_title_var.set(f"[{issue_key}] {first_line_clean}")
 
     def _save_used_reviewers(self):
         """Item 16: Save the current reviewers to settings.json via controller.
