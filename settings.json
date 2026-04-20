@@ -5,7 +5,7 @@
   },
   "bitbucket": {
     "base_url": "https://bitbucket.micron.com/bbdc/scm",
-    "project_key": "TESTSSD"
+    "project_key": "~NISAZULAIKHA"
   },
   "model_gateway": {
     "base_url": "https://model-gateway.gcldgenaigw.gc.micron.com/api/v1"
@@ -48,7 +48,10 @@
     "temp_dir": ""
   },
   "pr_review": {
-    "reviewers": []
+    "reviewers": [
+      "NISAZULAIKHA"
+    ],
+    "min_reviewers": 1
   },
   "registry_path": "P:\\temp\\BENTO\\bento_testers.json",
   "encryption": {

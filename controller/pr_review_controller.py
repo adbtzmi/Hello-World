@@ -29,6 +29,7 @@ from model.orchestrators.pr_review_orchestrator import (
     check_existing_prs,
     create_pull_request,
     generate_commit_message,
+    generate_pr_description,
     get_jira_reporter,
     get_pr_version,
     get_pull_request_status,
@@ -130,6 +131,7 @@ class PRReviewController:
         target_branch: str,
         reviewers: List[str],
         pr_description: str = "",
+        pr_title: str = "",
         callback: Optional[Callable] = None,
     ):
         """Create PR only (Phase 3 standalone)."""
@@ -158,14 +160,14 @@ class PRReviewController:
 
                 bb_url, bb_user, bb_token = self._get_bitbucket_creds()
 
-                pr_title = f"[{issue_key}] Feature branch merge"
+                title = pr_title.strip() if pr_title.strip() else f"[{issue_key}] Feature branch merge"
                 pr_desc = pr_description.strip() if pr_description.strip() else (
                     f"**JIRA:** {issue_key}\n**Branch:** {source_branch} → {target_branch}"
                 )
 
                 result = create_pull_request(
                     repo_slug, project_key, source_branch, target_branch,
-                    pr_title, pr_desc, reviewers,
+                    title, pr_desc, reviewers,
                     bb_url, bb_user, bb_token, self._log
                 )
 
@@ -614,6 +616,56 @@ class PRReviewController:
 
         threading.Thread(
             target=_work, daemon=True, name="bento-ai-commit-msg"
+        ).start()
+
+    # ──────────────────────────────────────────────────────────────────────
+    # AI PR DESCRIPTION GENERATION (M1)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def generate_ai_pr_description(
+        self, issue_key: str, target_branch: str = "master",
+        callback: Optional[Callable] = None,
+    ):
+        """
+        Generate a PR description using AI based on the current git diff.
+
+        Runs in a background thread.  The callback receives a dict with
+        ``{"success": True, "description": "..."}`` or
+        ``{"success": False, "error": "..."}``.
+        """
+        def _work():
+            try:
+                repo_path = self.workflow.get_workflow_step("REPOSITORY_PATH")
+                if not repo_path:
+                    self._callback(callback, {
+                        "success": False,
+                        "error": "No repository path in workflow"
+                    })
+                    return
+
+                ai_client = getattr(self.analyzer, "ai_client", None)
+                if not ai_client:
+                    self._callback(callback, {
+                        "success": False,
+                        "error": "AI client not available — load credentials first"
+                    })
+                    return
+
+                result = generate_pr_description(
+                    repo_path=repo_path,
+                    issue_key=issue_key or "UNKNOWN",
+                    target_branch=target_branch,
+                    ai_client=ai_client,
+                    log_callback=self._log,
+                )
+                self._callback(callback, result)
+
+            except Exception as e:
+                logger.error(f"AI PR description error: {e}", exc_info=True)
+                self._callback(callback, {"success": False, "error": str(e)})
+
+        threading.Thread(
+            target=_work, daemon=True, name="bento-ai-pr-desc"
         ).start()
 
     # ──────────────────────────────────────────────────────────────────────

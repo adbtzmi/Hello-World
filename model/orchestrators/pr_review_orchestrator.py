@@ -567,6 +567,113 @@ def generate_commit_message(
         return {"success": False, "error": str(e)}
 
 
+def generate_pr_description(
+    repo_path: str,
+    issue_key: str,
+    target_branch: str,
+    ai_client: Any,
+    log_callback: Optional[Callable] = None,
+) -> Dict[str, Any]:
+    """
+    Generate a rich PR description using AI based on the current git diff.
+
+    Similar to ``generate_commit_message()`` but produces a longer, more
+    descriptive body suitable for a pull request description.
+
+    Returns:
+        ``{"success": True, "description": "<pr body>"}`` or
+        ``{"success": False, "error": "<reason>"}``.
+    """
+    try:
+        # 0. Make untracked files visible to git diff
+        _ensure_untracked_visible(repo_path, log_callback)
+
+        # 1. Get the diff content
+        diff_text = _run_git(
+            ["git", "diff", "HEAD"],
+            repo_path, log_callback,
+        ).strip()
+
+        if not diff_text:
+            diff_text = _run_git(
+                ["git", "diff", "--cached"],
+                repo_path, log_callback,
+            ).strip()
+
+        if not diff_text:
+            return {"success": False, "error": "No changes detected in repository"}
+
+        # 2. Get stat summary and current branch
+        stat_text = _run_git(
+            ["git", "diff", "--stat", "HEAD"],
+            repo_path, log_callback,
+        ).strip()
+
+        source_branch = git_get_current_branch(repo_path, log_callback) or "unknown"
+
+        # 3. Truncate diff to avoid exceeding token limits
+        max_diff_chars = 6000
+        truncated = len(diff_text) > max_diff_chars
+        diff_snippet = diff_text[:max_diff_chars]
+        if truncated:
+            diff_snippet += "\n\n... (diff truncated)"
+
+        # 4. Build the AI prompt
+        prompt = (
+            f"Generate a pull request description for the following code changes.\n"
+            f"JIRA issue key: {issue_key}\n"
+            f"Source branch: {source_branch}\n"
+            f"Target branch: {target_branch}\n\n"
+            f"Rules:\n"
+            f"- Use markdown formatting\n"
+            f"- Start with a brief summary paragraph (2-3 sentences)\n"
+            f"- Include a '## Changes' section with bullet points of what changed\n"
+            f"- Include a '## Testing' section with brief testing notes\n"
+            f"- Reference the JIRA issue: {issue_key}\n"
+            f"- Be specific about what changed and why\n"
+            f"- Keep it concise but informative (max ~300 words)\n"
+            f"- Do NOT include code fences around the entire output\n"
+            f"- Return ONLY the PR description text, nothing else\n\n"
+            f"File change summary:\n{stat_text}\n\n"
+            f"Diff:\n{diff_snippet}"
+        )
+
+        _log(log_callback, "🤖 Generating PR description with AI...")
+
+        # 5. Call the AI Gateway
+        result = ai_client.chat_completion(
+            messages=[{"role": "user", "content": prompt}],
+            task_type="analysis",
+        )
+
+        if not result.get("success"):
+            error = result.get("error", "Unknown AI error")
+            return {"success": False, "error": f"AI generation failed: {error}"}
+
+        # 6. Extract the generated description
+        response = result.get("response", {})
+        choices = response.get("choices", [])
+        if not choices:
+            return {"success": False, "error": "AI returned empty response"}
+
+        description = choices[0].get("message", {}).get("content", "").strip()
+        if not description:
+            return {"success": False, "error": "AI returned empty description"}
+
+        # Clean up: remove any markdown code fences wrapping the entire output
+        if description.startswith("```") and description.endswith("```"):
+            lines = description.split("\n")
+            lines = lines[1:-1]  # Remove first and last ``` lines
+            description = "\n".join(lines).strip()
+
+        _log(log_callback, f"✅ AI PR description generated ({len(description)} chars)")
+        return {"success": True, "description": description}
+
+    except Exception as e:
+        _log(log_callback, f"⚠️ PR description generation failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. BITBUCKET PULL REQUEST OPERATIONS
 # ══════════════════════════════════════════════════════════════════════════════

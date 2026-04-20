@@ -215,6 +215,20 @@ class PRReviewTab(BaseTab):
             row=row, column=3, sticky=tk.NW, padx=5)
         row += 1
 
+        # M4: PR Title (editable, auto-populated as [ISSUE_KEY] commit_message)
+        ttk.Label(config_frame, text="PR Title:").grid(
+            row=row, column=0, sticky=tk.W, pady=3)
+        self._pr_title_var = tk.StringVar(value="")
+        self._pr_title_entry = ttk.Entry(
+            config_frame, textvariable=self._pr_title_var, width=50)
+        self._pr_title_entry.grid(
+            row=row, column=1, columnspan=2, sticky="we", pady=3, padx=5)
+        ttk.Label(config_frame,
+                  text="(Auto-filled from issue key + commit msg)",
+                  font=('Arial', 8), foreground='gray').grid(
+            row=row, column=3, sticky=tk.NW, padx=5)
+        row += 1
+
         # PR Description (Improvement 2: editable multi-line description)
         ttk.Label(config_frame, text="PR Description:").grid(
             row=row, column=0, sticky=tk.NW, pady=3)
@@ -222,11 +236,30 @@ class PRReviewTab(BaseTab):
             config_frame, height=3, width=50, wrap=tk.WORD,
             font=('Arial', 9))
         self._pr_desc_text.grid(
-            row=row, column=1, columnspan=2, sticky="we", pady=3, padx=5)
+            row=row, column=1, sticky="we", pady=3, padx=5)
+        # M1: AI Generate button for PR description
+        self._ai_pr_desc_btn = ttk.Button(
+            config_frame, text="✨ AI Generate",
+            command=self._generate_ai_pr_description)
+        self._ai_pr_desc_btn.grid(row=row, column=2, sticky=tk.NW, padx=5)
         ttk.Label(config_frame,
                   text="(Optional — auto-generated if empty)",
                   font=('Arial', 8), foreground='gray').grid(
             row=row, column=3, sticky=tk.NW, padx=5)
+        row += 1
+
+        # M3: Source Branch (read-only, auto-populated from git)
+        ttk.Label(config_frame, text="Source Branch:").grid(
+            row=row, column=0, sticky=tk.W, pady=3)
+        self._source_branch_var = tk.StringVar(value="(detecting...)")
+        self._source_branch_label = ttk.Label(
+            config_frame, textvariable=self._source_branch_var,
+            font=('Consolas', 9), foreground='#0066cc')
+        self._source_branch_label.grid(
+            row=row, column=1, sticky=tk.W, pady=3, padx=5)
+        ttk.Label(config_frame, text="(Auto-detected from local repo)",
+                  font=('Arial', 8), foreground='gray').grid(
+            row=row, column=2, columnspan=2, sticky=tk.W, padx=5)
         row += 1
 
         # Validation Doc Path
@@ -417,6 +450,16 @@ class PRReviewTab(BaseTab):
     # USER ACTIONS
     # ══════════════════════════════════════════════════════════════════════
 
+    def _get_min_reviewers(self) -> int:
+        """M5: Read minimum reviewer count from settings.json (default 1)."""
+        try:
+            import json
+            with open("settings.json", "r") as f:
+                cfg = json.load(f)
+            return int(cfg.get("pr_review", {}).get("min_reviewers", 1))
+        except Exception:
+            return 1
+
     def _run_full_pipeline(self):
         """Launch the full PR review pipeline."""
         issue_key = self._get_issue_key()
@@ -430,17 +473,29 @@ class PRReviewTab(BaseTab):
 
         # Improvement 3: Use chip-based reviewers
         reviewers = list(self._reviewer_chips)
-        if not reviewers:
-            self.show_error("Input Error",
-                           "Please add at least one reviewer (search and select from dropdown)")
+        # M5: Reviewer minimum count validation
+        min_rev = self._get_min_reviewers()
+        if len(reviewers) < min_rev:
+            self.show_error(
+                "Input Error",
+                f"Please add at least {min_rev} reviewer(s). "
+                f"Currently {len(reviewers)} added.\n\n"
+                f"(Configurable via settings.json → pr_review.min_reviewers)"
+            )
             return
 
         commit_msg = self._commit_msg_text.get("1.0", tk.END).strip()
         if not commit_msg:
             commit_msg = f"[{issue_key}] Code changes"
 
+        # M4: Read PR title from editable field
+        pr_title = self._pr_title_var.get().strip()
+
         # Read PR description (auto-generated if empty)
         pr_description = self._pr_desc_text.get("1.0", tk.END).strip()
+
+        # M3: Source branch display
+        source_branch = self._source_branch_var.get().strip()
 
         validation_doc = self._validation_doc_var.get().strip() or None
 
@@ -448,12 +503,18 @@ class PRReviewTab(BaseTab):
         if not ctrl:
             return
 
-        # Confirm
+        # M2: Confirmation dialog with PR description preview
+        desc_preview = pr_description[:200] + "..." if len(pr_description) > 200 else pr_description
+        desc_line = f"\nPR Description: {desc_preview}" if desc_preview else "\nPR Description: (auto-generated)"
+        title_line = f"\nPR Title: {pr_title}" if pr_title else "\nPR Title: (auto-generated)"
         msg = (
             f"Run full PR pipeline?\n\n"
             f"JIRA: {issue_key}\n"
+            f"Source: {source_branch}\n"
             f"Target: {target_branch}\n"
-            f"Reviewers: {', '.join(reviewers)}\n"
+            f"Reviewers: {', '.join(reviewers)}"
+            f"{title_line}"
+            f"{desc_line}\n\n"
             f"Auto-merge: {'Yes' if self._auto_merge_var.get() else 'No'}\n"
             f"Auto-close JIRA: {'Yes' if self._auto_close_jira_var.get() else 'No'}"
         )
@@ -525,14 +586,23 @@ class PRReviewTab(BaseTab):
             self.show_error("Input Error", "Please enter a target branch")
             return
 
-        # Improvement 3: Use chip-based reviewers
+        # Improvement 3 + M5: Use chip-based reviewers with min count validation
         reviewers = list(self._reviewer_chips)
-        if not reviewers:
-            self.show_error("Input Error", "Please add at least one reviewer")
+        min_rev = self._get_min_reviewers()
+        if len(reviewers) < min_rev:
+            self.show_error(
+                "Input Error",
+                f"Please add at least {min_rev} reviewer(s). "
+                f"Currently {len(reviewers)} added.\n\n"
+                f"(Configurable via settings.json → pr_review.min_reviewers)"
+            )
             return
 
         # Improvement 2: Get PR description from text widget
         pr_description = self._pr_desc_text.get("1.0", tk.END).strip()
+
+        # M4: Get PR title from editable field
+        pr_title = self._pr_title_var.get().strip()
 
         ctrl = self._get_controller()
         if not ctrl:
@@ -544,12 +614,13 @@ class PRReviewTab(BaseTab):
         ctrl.check_existing_pr(
             target_branch,
             lambda result: self._on_dup_check_result(
-                result, issue_key, target_branch, reviewers, pr_description, ctrl
+                result, issue_key, target_branch, reviewers,
+                pr_description, pr_title, ctrl
             ),
         )
 
     def _on_dup_check_result(self, result, issue_key, target_branch, reviewers,
-                              pr_description, ctrl):
+                              pr_description, pr_title, ctrl):
         """Improvement 4: Handle duplicate PR check result before creating PR."""
         if result.get("exists"):
             self.unlock_gui()
@@ -573,6 +644,7 @@ class PRReviewTab(BaseTab):
         ctrl.create_pr_only(
             issue_key, target_branch, reviewers,
             pr_description=pr_description,
+            pr_title=pr_title,
             callback=self._on_pr_created,
         )
 
@@ -1055,6 +1127,7 @@ class PRReviewTab(BaseTab):
 
         Uses silent controller lookup (no error dialog) since this runs
         during startup when the controller may not be initialized yet.
+        Also M3: auto-detect source branch from local git repo.
         """
         try:
             ctrl = getattr(self.context.controller, 'pr_review_controller', None)
@@ -1062,13 +1135,26 @@ class PRReviewTab(BaseTab):
                 branch = ctrl.get_target_branch_from_workflow()
                 if branch:
                     self._target_branch_var.set(branch)
+
+                # M3: Auto-detect source branch
+                repo_path = ctrl.workflow.get_workflow_step("REPOSITORY_PATH")
+                if repo_path:
+                    from model.orchestrators.pr_review_orchestrator import git_get_current_branch
+                    src = git_get_current_branch(repo_path)
+                    if src:
+                        self._source_branch_var.set(src)
+                    else:
+                        self._source_branch_var.set("(unknown)")
+                else:
+                    self._source_branch_var.set("(no repo loaded)")
         except Exception:
-            pass
+            self._source_branch_var.set("(error)")
 
     def _auto_populate_commit_message(self, *_args):
         """Item 12: Auto-populate commit message from JIRA key when the
         commit message field is empty or matches the previous auto-generated
-        pattern.  Triggered by a trace on the issue_var StringVar."""
+        pattern.  Triggered by a trace on the issue_var StringVar.
+        Also M4: auto-populate PR title from issue key."""
         issue_key = self.context.get_var('issue_var').get().strip().upper()
         current_msg = self._commit_msg_text.get("1.0", tk.END).strip()
 
@@ -1077,6 +1163,13 @@ class PRReviewTab(BaseTab):
             if issue_key and not issue_key.endswith("-"):
                 self._commit_msg_text.delete("1.0", tk.END)
                 self._commit_msg_text.insert("1.0", f"[{issue_key}] Validation updates")
+
+        # M4: Auto-populate PR title from issue key + commit message
+        current_title = self._pr_title_var.get().strip()
+        if not current_title or current_title.startswith("["):
+            if issue_key and not issue_key.endswith("-"):
+                msg = self._commit_msg_text.get("1.0", tk.END).strip()
+                self._pr_title_var.set(f"[{issue_key}] {msg}" if msg else f"[{issue_key}] Feature branch merge")
 
     def _save_used_reviewers(self):
         """Item 16: Save the current reviewers to settings.json via controller.
@@ -1144,6 +1237,61 @@ class PRReviewTab(BaseTab):
             messagebox.showerror(
                 "AI Commit Message",
                 f"Failed to generate commit message:\n{error}",
+                parent=self.root,
+            )
+
+    # ──────────────────────────────────────────────────────────────────────
+    # M1: AI PR DESCRIPTION GENERATION
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _generate_ai_pr_description(self):
+        """M1: Handle the '✨ AI Generate' button click for PR description.
+
+        Calls the controller to generate a PR description from the git diff
+        using the AI Gateway.  Disables the button while running.
+        """
+        ctrl = self._get_controller()
+        if not ctrl:
+            return
+
+        issue_key = self._get_issue_key()
+        if not issue_key:
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "Missing Issue Key",
+                "Please enter a JIRA Issue Key first.",
+                parent=self.root,
+            )
+            return
+
+        target_branch = self._target_branch_var.get().strip() or "master"
+
+        # Disable button and show progress
+        self._ai_pr_desc_btn.configure(state="disabled", text="⏳ Generating...")
+        self._append_status("🤖 Generating AI PR description...")
+
+        ctrl.generate_ai_pr_description(
+            issue_key, target_branch, self._on_ai_pr_desc_result
+        )
+
+    def _on_ai_pr_desc_result(self, result: dict):
+        """M1: Callback from controller with the AI-generated PR description."""
+        # Re-enable button
+        self._ai_pr_desc_btn.configure(state="normal", text="✨ AI Generate")
+
+        if result.get("success"):
+            description = result["description"]
+            self._pr_desc_text.delete("1.0", tk.END)
+            self._pr_desc_text.insert("1.0", description.strip())
+            preview = description.split("\n")[0].strip()[:80]
+            self._append_status(f"✅ AI PR description set: {preview}...")
+        else:
+            error = result.get("error", "Unknown error")
+            self._append_status(f"⚠️ AI PR description failed: {error}")
+            from tkinter import messagebox
+            messagebox.showerror(
+                "AI PR Description",
+                f"Failed to generate PR description:\n{error}",
                 parent=self.root,
             )
 
