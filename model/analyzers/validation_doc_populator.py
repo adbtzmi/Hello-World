@@ -107,6 +107,9 @@ class ValidationDocumentPopulator:
             return True
             
         except Exception as e:
+            import logging
+            logging.getLogger("bento_app").error(
+                f"Error populating validation document: {e}")
             print(f"Error populating validation document: {e}")
             return False
     

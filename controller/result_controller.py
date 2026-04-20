@@ -40,6 +40,10 @@ class ResultController:
     def is_running(self) -> bool:
         return self._running
 
+    def has_collector(self) -> bool:
+        """Return True if a collector instance exists (even if finished)."""
+        return self._collector is not None
+
     # ──────────────────────────────────────────────────────────────────────
     # START / STOP
     # ──────────────────────────────────────────────────────────────────────

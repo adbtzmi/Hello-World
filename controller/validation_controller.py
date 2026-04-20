@@ -147,10 +147,9 @@ class ValidationController:
         # Resolve AI client if available
         ai_client = None
         try:
-            controller = self.context.controller
-            if hasattr(controller, '_ai_client'):
-                ai_client = controller._ai_client
-            elif hasattr(self.context, 'ai_client'):
+            if hasattr(self.analyzer, 'ai_client') and self.analyzer.ai_client:
+                ai_client = self.analyzer.ai_client
+            elif hasattr(self.context, 'ai_client') and self.context.ai_client:
                 ai_client = self.context.ai_client
         except Exception:
             pass
@@ -170,9 +169,17 @@ class ValidationController:
             pass
 
         # Run consolidation
+        # Resolve absolute template path
+        template_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "template_validation.docx"
+        )
+        if not os.path.exists(template_path):
+            template_path = "template_validation.docx"
+
         self._log("📊 Running auto-consolidation...")
         consolidator = AutoConsolidator(
-            template_path="template_validation.docx",
+            template_path=template_path,
             ai_client=ai_client,
         )
 

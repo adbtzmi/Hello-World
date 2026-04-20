@@ -883,9 +883,14 @@ class ResultCollector:
             except Exception as e:
                 logger.warning(f"Failed to initialize AutoConsolidator: {e}")
 
-        # Resolve target path from site if not provided
+        # Resolve target path from site if not provided.
+        # When a remote tester_hostname is given, files are already in
+        # CHECKOUT_RESULTS (the watcher collected them during checkout),
+        # so we use that folder as the target — no redundant copy to Dom_Q.
         if target_path:
             self.target_path = target_path
+        elif tester_hostname:
+            self.target_path = CHECKOUT_RESULTS_FOLDER
         elif site.upper() in SITE_TRACE_PATHS:
             self.target_path = SITE_TRACE_PATHS[site.upper()]
         else:
