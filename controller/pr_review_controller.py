@@ -35,6 +35,8 @@ from model.orchestrators.pr_review_orchestrator import (
     git_add_commit_push,
     git_get_current_branch,
     git_get_diff_summary,
+    git_get_full_diff,
+    list_branches,
     merge_pull_request,
     run_full_pr_pipeline,
     search_bitbucket_users,
@@ -570,6 +572,146 @@ class PRReviewController:
         threading.Thread(
             target=_work, daemon=True, name="bento-ai-commit-msg"
         ).start()
+
+    # ──────────────────────────────────────────────────────────────────────
+    # BRANCH AUTOCOMPLETE (Feature 10)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def fetch_branches(
+        self, filter_text: str = "", callback: Optional[Callable] = None
+    ):
+        """Fetch branch names from Bitbucket API (non-blocking, Feature 10).
+
+        Results are cached for ``_reviewer_cache_ttl`` seconds (reuses the
+        same TTL as reviewer cache).
+
+        Args:
+            filter_text: Optional prefix/substring filter.
+            callback:    Called on the main thread with a list of branch
+                         name strings.
+        """
+        cache_key = f"__branches__{filter_text.lower().strip()}"
+
+        # ── Check cache ────────────────────────────────────────────────
+        cached = self._reviewer_cache.get(cache_key)
+        if cached:
+            ts, results = cached
+            if time.time() - ts < self._reviewer_cache_ttl:
+                if callback:
+                    self.context.root.after(0, lambda r=results: callback(r))
+                return
+
+        def _work():
+            try:
+                repo_slug, project_key = self._resolve_repo_info()
+                if not repo_slug:
+                    logger.warning("fetch_branches: no repo_slug resolved")
+                    if callback:
+                        self.context.root.after(0, lambda: callback([]))
+                    return
+
+                bb_url, bb_user, bb_token = self._get_bitbucket_creds()
+                if not (bb_url and bb_user and bb_token):
+                    logger.debug("fetch_branches: no Bitbucket creds")
+                    if callback:
+                        self.context.root.after(0, lambda: callback([]))
+                    return
+
+                results = list_branches(
+                    project_key=project_key,
+                    repo_slug=repo_slug,
+                    bitbucket_base_url=bb_url,
+                    bitbucket_username=bb_user,
+                    bitbucket_token=bb_token,
+                    filter_text=filter_text,
+                    limit=100,
+                    log_callback=self._log,
+                )
+
+                self._reviewer_cache[cache_key] = (time.time(), results)
+
+                if callback:
+                    self.context.root.after(0, lambda r=results: callback(r))
+
+            except Exception as e:
+                logger.warning(f"Branch fetch failed: {e}")
+                if callback:
+                    self.context.root.after(0, lambda: callback([]))
+
+        threading.Thread(
+            target=_work, daemon=True, name="bento-branch-fetch"
+        ).start()
+
+    # ──────────────────────────────────────────────────────────────────────
+    # FULL DIFF (Feature 11)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def get_full_diff(self, callback: Optional[Callable] = None):
+        """Get the full unified diff for the diff preview popup (non-blocking).
+
+        The callback receives a dict with:
+            ``{"success": True, "branch": "...", "diff": "...", "repo_path": "..."}``
+        """
+        def _work():
+            repo_path = self.workflow.get_workflow_step("REPOSITORY_PATH")
+            if not repo_path:
+                self._callback(callback, {
+                    "success": False,
+                    "error": "No repository path in workflow",
+                })
+                return
+            branch = git_get_current_branch(repo_path, self._log)
+            diff = git_get_full_diff(repo_path, self._log)
+            self._callback(callback, {
+                "success": True,
+                "branch": branch or "unknown",
+                "diff": diff,
+                "repo_path": repo_path,
+            })
+
+        threading.Thread(
+            target=_work, daemon=True, name="bento-full-diff"
+        ).start()
+
+    # ──────────────────────────────────────────────────────────────────────
+    # PIPELINE STATE PERSISTENCE (Feature 12)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def save_pipeline_state(self, state: Dict):
+        """Save pipeline state to workflow file for resume capability.
+
+        Args:
+            state: Dict with keys like 'phase', 'issue_key', 'target_branch',
+                   'reviewers', 'pr_id', 'pr_url', 'phases_completed', etc.
+        """
+        try:
+            state_json = json.dumps(state)
+            self.workflow.set_workflow_step("PR_PIPELINE_STATE", state_json)
+            logger.info(f"Pipeline state saved: phase={state.get('phase', '?')}")
+        except Exception as e:
+            logger.warning(f"Could not save pipeline state: {e}")
+
+    def load_pipeline_state(self) -> Optional[Dict]:
+        """Load saved pipeline state from workflow file.
+
+        Returns:
+            Dict with pipeline state, or None if no state is saved.
+        """
+        try:
+            raw = self.workflow.get_workflow_step("PR_PIPELINE_STATE")
+            if raw:
+                return json.loads(raw)
+        except Exception as e:
+            logger.debug(f"No pipeline state to load: {e}")
+        return None
+
+    def clear_pipeline_state(self):
+        """Clear saved pipeline state after successful completion."""
+        try:
+            self.workflow.set_workflow_step("PR_PIPELINE_STATE", "")
+            logger.info("Pipeline state cleared.")
+        except Exception as e:
+            logger.debug(f"Could not clear pipeline state: {e}")
 
     # ──────────────────────────────────────────────────────────────────────
     # HELPERS

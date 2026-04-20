@@ -358,6 +358,90 @@ def git_get_diff_summary(
         return "(unable to get diff)"
 
 
+def git_get_full_diff(
+    repo_path: str,
+    log_callback: Optional[Callable] = None,
+) -> str:
+    """Return the full unified diff for the working tree (Feature 11).
+
+    Used by the diff preview popup to show coloured file-level changes.
+    """
+    try:
+        return _run_git(
+            ["git", "diff", "HEAD"],
+            repo_path, log_callback
+        ).strip()
+    except Exception:
+        return "(unable to get diff)"
+
+
+def list_branches(
+    project_key: str,
+    repo_slug: str,
+    bitbucket_base_url: str,
+    bitbucket_username: str,
+    bitbucket_token: str,
+    filter_text: str = "",
+    limit: int = 100,
+    log_callback: Optional[Callable] = None,
+) -> List[str]:
+    """Fetch branch names from Bitbucket Server REST API (Feature 10).
+
+    Uses:
+        GET /rest/api/1.0/projects/{key}/repos/{slug}/branches?filterText=...&limit=...
+
+    Args:
+        project_key:        Bitbucket project key (e.g. "TESTSSD").
+        repo_slug:          Repository slug.
+        bitbucket_base_url: e.g. "https://bitbucket.micron.com/bbdc/scm"
+        bitbucket_username: Bitbucket username for auth.
+        bitbucket_token:    Bitbucket personal access token.
+        filter_text:        Optional prefix/substring filter.
+        limit:              Max results (default 100).
+        log_callback:       Optional logging callback.
+
+    Returns:
+        List of branch display names (e.g. ["master", "develop", "feature/xyz"]).
+    """
+    base = bitbucket_base_url.rstrip("/")
+    if base.endswith("/scm"):
+        base = base[:-4]
+
+    url = (
+        f"{base}/rest/api/1.0/projects/{urllib.parse.quote(project_key)}"
+        f"/repos/{urllib.parse.quote(repo_slug)}/branches"
+        f"?limit={limit}&orderBy=MODIFICATION"
+    )
+    if filter_text:
+        url += f"&filterText={urllib.parse.quote(filter_text)}"
+
+    _log(log_callback, f"🌿 Branch list URL: {url}")
+
+    try:
+        import base64 as b64
+        auth_string = f"{bitbucket_username}:{bitbucket_token}"
+        auth_header = b64.b64encode(auth_string.encode("utf-8")).decode("utf-8")
+
+        headers = {
+            "Authorization": f"Basic {auth_header}",
+            "Content-Type": "application/json",
+        }
+
+        req = urllib.request.Request(url, headers=headers)
+        ssl_context = ssl._create_unverified_context()
+
+        resp = urllib.request.urlopen(req, context=ssl_context, timeout=30)
+        data = json.loads(resp.read().decode("utf-8"))
+
+        branches = [b.get("displayId", "") for b in data.get("values", []) if b.get("displayId")]
+        _log(log_callback, f"🌿 Found {len(branches)} branch(es)")
+        return branches
+
+    except Exception as e:
+        _log(log_callback, f"⚠️ Branch list failed: {type(e).__name__}: {e}")
+        return []
+
+
 def generate_commit_message(
     repo_path: str,
     issue_key: str,

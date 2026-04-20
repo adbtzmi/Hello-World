@@ -18,6 +18,7 @@ import webbrowser
 import tkinter as tk
 from tkinter import ttk, scrolledtext, filedialog, messagebox
 from view.tabs.base_tab import BaseTab
+from view.widgets.tooltip import ToolTip
 
 
 class PRReviewTab(BaseTab):
@@ -36,6 +37,7 @@ class PRReviewTab(BaseTab):
     def __init__(self, notebook, context):
         super().__init__(notebook, context, "✅ PR Review")
         self._reviewer_chips: list[str] = []  # list of added reviewer usernames
+        self._reviewer_display_names: dict[str, str] = {}  # username → display name (Feature 13)
         self._build_ui()
 
         # Item 12: Auto-populate commit message when JIRA key changes
@@ -51,6 +53,9 @@ class PRReviewTab(BaseTab):
         # Improvement 1: Auto-populate target branch from workflow
         # Deferred so the controller has time to initialize after app startup
         self.root.after(500, self._auto_populate_target_branch)
+
+        # Feature 12: Check for saved pipeline state to resume
+        self.root.after(1500, self._check_resume_pipeline)
 
     def _build_ui(self):
         self.configure(padding="10")
@@ -120,13 +125,26 @@ class PRReviewTab(BaseTab):
             row=row, column=2, sticky=tk.W, padx=5)
         row += 1
 
-        # Target Branch (Improvement 1: auto-populated from workflow)
+        # Target Branch (Feature 10: searchable autocomplete from Bitbucket API)
         ttk.Label(config_frame, text="Target Branch:").grid(
             row=row, column=0, sticky=tk.W, pady=3)
         self._target_branch_var = tk.StringVar(value="master")
-        ttk.Entry(config_frame, textvariable=self._target_branch_var,
-                  width=30).grid(row=row, column=1, sticky=tk.W, pady=3, padx=5)
-        ttk.Label(config_frame, text="(Auto-populated from workflow, editable)",
+        self._branch_entry = ttk.Entry(
+            config_frame, textvariable=self._target_branch_var, width=30)
+        self._branch_entry.grid(row=row, column=1, sticky=tk.W, pady=3, padx=5)
+
+        # Branch autocomplete state
+        self._branch_ac_listbox: tk.Listbox | None = None
+        self._branch_ac_toplevel: tk.Toplevel | None = None
+        self._branch_ac_debounce_id: str | None = None
+
+        self._branch_entry.bind("<KeyRelease>", self._on_branch_key)
+        self._branch_entry.bind("<FocusOut>", self._hide_branch_autocomplete)
+        self._branch_entry.bind("<Escape>", self._hide_branch_autocomplete)
+        self._branch_entry.bind("<Down>", self._branch_ac_focus_listbox)
+        self._branch_entry.bind("<Return>", self._branch_ac_select_current)
+
+        ttk.Label(config_frame, text="(Type to search branches from Bitbucket)",
                   font=('Arial', 8), foreground='gray').grid(
             row=row, column=2, sticky=tk.W, padx=5)
         row += 1
@@ -169,16 +187,21 @@ class PRReviewTab(BaseTab):
             row=row, column=3, sticky=tk.W, padx=5)
         row += 1
 
-        # Commit Message
+        # Commit Message (Feature 14: multi-line Text widget)
         ttk.Label(config_frame, text="Commit Message:").grid(
-            row=row, column=0, sticky=tk.W, pady=3)
-        self._commit_msg_var = tk.StringVar(value="")
-        ttk.Entry(config_frame, textvariable=self._commit_msg_var,
-                  width=50).grid(row=row, column=1, sticky="we", pady=3, padx=5)
+            row=row, column=0, sticky=tk.NW, pady=3)
+        self._commit_msg_text = tk.Text(
+            config_frame, height=3, width=50, wrap=tk.WORD,
+            font=('Arial', 9))
+        self._commit_msg_text.grid(
+            row=row, column=1, sticky="we", pady=3, padx=5)
         self._ai_commit_btn = ttk.Button(
             config_frame, text="✨ AI Generate",
             command=self._generate_ai_commit_message)
-        self._ai_commit_btn.grid(row=row, column=2, sticky=tk.W, padx=5)
+        self._ai_commit_btn.grid(row=row, column=2, sticky=tk.NW, padx=5)
+        ttk.Label(config_frame, text="(Multi-line supported)",
+                  font=('Arial', 8), foreground='gray').grid(
+            row=row, column=3, sticky=tk.NW, padx=5)
         row += 1
 
         # PR Description (Improvement 2: editable multi-line description)
@@ -263,6 +286,11 @@ class PRReviewTab(BaseTab):
             btn_row, text="📊 View Diff",
             command=self._view_diff)
         self._diff_btn.pack(side=tk.LEFT, padx=3)
+
+        self._diff_popup_btn = ttk.Button(
+            btn_row, text="🔍 Diff Preview",
+            command=self._open_diff_preview)
+        self._diff_popup_btn.pack(side=tk.LEFT, padx=3)
 
         self._push_btn = ttk.Button(
             btn_row, text="📤 Commit & Push",
@@ -374,7 +402,7 @@ class PRReviewTab(BaseTab):
                            "Please add at least one reviewer (search and select from dropdown)")
             return
 
-        commit_msg = self._commit_msg_var.get().strip()
+        commit_msg = self._commit_msg_text.get("1.0", tk.END).strip()
         if not commit_msg:
             commit_msg = f"[{issue_key}] Code changes"
 
@@ -437,7 +465,7 @@ class PRReviewTab(BaseTab):
         if not issue_key:
             return
 
-        commit_msg = self._commit_msg_var.get().strip()
+        commit_msg = self._commit_msg_text.get("1.0", tk.END).strip()
         if not commit_msg:
             commit_msg = f"[{issue_key}] Code changes"
 
@@ -829,12 +857,13 @@ class PRReviewTab(BaseTab):
         commit message field is empty or matches the previous auto-generated
         pattern.  Triggered by a trace on the issue_var StringVar."""
         issue_key = self.context.get_var('issue_var').get().strip().upper()
-        current_msg = self._commit_msg_var.get().strip()
+        current_msg = self._commit_msg_text.get("1.0", tk.END).strip()
 
         # Only auto-fill if the field is empty or matches the auto pattern
         if not current_msg or current_msg.startswith("[") and current_msg.endswith("]"):
             if issue_key and not issue_key.endswith("-"):
-                self._commit_msg_var.set(f"[{issue_key}] Validation updates")
+                self._commit_msg_text.delete("1.0", tk.END)
+                self._commit_msg_text.insert("1.0", f"[{issue_key}] Validation updates")
 
     def _save_used_reviewers(self):
         """Item 16: Save the current reviewers to settings.json via controller.
@@ -890,8 +919,10 @@ class PRReviewTab(BaseTab):
         if result.get("success"):
             message = result["message"]
             # Take only the first line for the commit message field
+            # Feature 14: Insert full multi-line message into Text widget
+            self._commit_msg_text.delete("1.0", tk.END)
+            self._commit_msg_text.insert("1.0", message.strip())
             first_line = message.split("\n")[0].strip()
-            self._commit_msg_var.set(first_line)
             self._append_status(f"✅ AI commit message set: {first_line}")
         else:
             error = result.get("error", "Unknown error")
@@ -1056,15 +1087,27 @@ class PRReviewTab(BaseTab):
 
     def _ac_insert_selection(self, index: int):
         """Improvement 3: Add the selected username as a chip/tag instead of
-        appending to comma-separated text."""
+        appending to comma-separated text.
+        Feature 13: Also extracts display name for tooltip on chip."""
         if self._ac_listbox is None:
             return
 
         display_text = self._ac_listbox.get(index)
         username = self._ac_display_map.get(display_text, display_text)
 
+        # Feature 13: Extract display name from the display string
+        # Format is "username  —  Display Name  (email)"
+        display_name = ""
+        if "  —  " in display_text:
+            after_dash = display_text.split("  —  ", 1)[1]
+            # Strip optional email suffix
+            if "  (" in after_dash:
+                display_name = after_dash.split("  (", 1)[0].strip()
+            else:
+                display_name = after_dash.strip()
+
         # Add as chip (skip if already added)
-        self._add_reviewer_chip(username)
+        self._add_reviewer_chip(username, display_name=display_name)
 
         # Clear the search entry for the next search
         self._reviewers_var.set("")
@@ -1076,11 +1119,14 @@ class PRReviewTab(BaseTab):
     # REVIEWER CHIP / TAG MANAGEMENT (Improvement 3)
     # ──────────────────────────────────────────────────────────────────────
 
-    def _add_reviewer_chip(self, username: str):
+    def _add_reviewer_chip(self, username: str, display_name: str = ""):
         """Add a reviewer chip/tag to the chip container.
 
         Each chip is a small Frame containing a Label (username) and a
         '×' Button to remove it.  Duplicate usernames are silently ignored.
+
+        Feature 13: If *display_name* is provided, a hover tooltip shows
+        the full display name on the chip.
         """
         username = username.strip()
         if not username or username in self._reviewer_chips:
@@ -1088,16 +1134,25 @@ class PRReviewTab(BaseTab):
 
         self._reviewer_chips.append(username)
 
+        # Feature 13: Store display name mapping
+        if display_name:
+            self._reviewer_display_names[username] = display_name
+
         chip = tk.Frame(
             self._chip_frame, bg="#e0e7ff", bd=1, relief=tk.RAISED,
             padx=4, pady=1,
         )
         chip.pack(side=tk.LEFT, padx=2, pady=2)
 
-        tk.Label(
+        chip_label = tk.Label(
             chip, text=username, bg="#e0e7ff", fg="#1e3a5f",
             font=("Arial", 9),
-        ).pack(side=tk.LEFT)
+        )
+        chip_label.pack(side=tk.LEFT)
+
+        # Feature 13: Add tooltip with display name if available
+        tooltip_text = display_name if display_name else username
+        ToolTip(chip_label, tooltip_text)
 
         remove_btn = tk.Button(
             chip, text="×", bg="#e0e7ff", fg="#c0392b",
@@ -1145,3 +1200,337 @@ class PRReviewTab(BaseTab):
         except Exception:
             pass
         return []
+
+    # ──────────────────────────────────────────────────────────────────────
+    # BRANCH AUTOCOMPLETE (Feature 10)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _on_branch_key(self, event):
+        """Handle keystrokes in the target branch Entry with 500ms debounce.
+
+        Minimum 2 characters required to trigger API search.
+        """
+        if event.keysym in ("Down", "Up", "Left", "Right", "Escape",
+                            "Return", "Tab", "Shift_L", "Shift_R",
+                            "Control_L", "Control_R", "Alt_L", "Alt_R"):
+            return
+
+        # Cancel any pending debounce
+        if self._branch_ac_debounce_id is not None:
+            self.root.after_cancel(self._branch_ac_debounce_id)
+            self._branch_ac_debounce_id = None
+
+        query = self._target_branch_var.get().strip()
+
+        if len(query) < 2:
+            self._destroy_branch_autocomplete()
+            return
+
+        # Schedule the API call after 500ms debounce
+        self._branch_ac_debounce_id = self.root.after(
+            500, lambda: self._fire_branch_autocomplete(query)
+        )
+
+    def _fire_branch_autocomplete(self, query: str):
+        """Send the branch autocomplete query to the controller."""
+        ctrl = getattr(self.context.controller, 'pr_review_controller', None)
+        if not ctrl:
+            return
+        ctrl.fetch_branches(query, self._show_branch_autocomplete)
+
+    def _show_branch_autocomplete(self, results):
+        """Callback from controller — display the branch autocomplete dropdown.
+
+        Args:
+            results: list of branch name strings.
+        """
+        self._destroy_branch_autocomplete()
+
+        if not results:
+            return
+
+        # Filter to only branches matching the current query (case-insensitive)
+        query = self._target_branch_var.get().strip().lower()
+        filtered = [b for b in results if query in b.lower()] if query else results
+
+        if not filtered:
+            return
+
+        # Calculate width
+        max_chars = max((len(b) for b in filtered), default=30)
+        listbox_width = max(max_chars + 4, 40)
+
+        # Create a Toplevel that floats over the entry
+        entry = self._branch_entry
+        x = entry.winfo_rootx()
+        y = entry.winfo_rooty() + entry.winfo_height()
+
+        top = tk.Toplevel(self.root)
+        top.wm_overrideredirect(True)
+        top.wm_geometry(f"+{x}+{y}")
+        top.lift()
+
+        listbox = tk.Listbox(
+            top, width=listbox_width, height=min(len(filtered), 10),
+            font=("Consolas", 9), selectmode=tk.SINGLE,
+        )
+        listbox.pack(fill=tk.BOTH, expand=True)
+
+        for branch in filtered:
+            listbox.insert(tk.END, branch)
+
+        listbox.bind("<ButtonRelease-1>", self._branch_ac_on_click)
+        listbox.bind("<Return>", self._branch_ac_on_listbox_return)
+        listbox.bind("<Escape>", self._hide_branch_autocomplete)
+
+        if listbox.size() > 0:
+            listbox.selection_set(0)
+
+        self._branch_ac_toplevel = top
+        self._branch_ac_listbox = listbox
+
+    def _destroy_branch_autocomplete(self):
+        """Destroy the branch autocomplete Toplevel if it exists."""
+        if self._branch_ac_toplevel is not None:
+            try:
+                self._branch_ac_toplevel.destroy()
+            except Exception:
+                pass
+            self._branch_ac_toplevel = None
+            self._branch_ac_listbox = None
+
+    def _hide_branch_autocomplete(self, event=None):
+        """Hide the branch autocomplete dropdown (bound to FocusOut / Escape)."""
+        self.root.after(150, self._destroy_branch_autocomplete)
+
+    def _branch_ac_focus_listbox(self, event=None):
+        """Move focus into the branch autocomplete listbox (Down arrow)."""
+        if self._branch_ac_listbox is not None:
+            self._branch_ac_listbox.focus_set()
+            if not self._branch_ac_listbox.curselection():
+                self._branch_ac_listbox.selection_set(0)
+            return "break"
+
+    def _branch_ac_select_current(self, event=None):
+        """Select the currently highlighted branch listbox item (Return in entry)."""
+        if self._branch_ac_listbox is not None and self._branch_ac_listbox.curselection():
+            self._branch_ac_insert_selection(self._branch_ac_listbox.curselection()[0])
+            return "break"
+
+    def _branch_ac_on_click(self, event):
+        """Handle mouse click on a branch listbox item."""
+        if self._branch_ac_listbox is None:
+            return
+        sel = self._branch_ac_listbox.nearest(event.y)
+        if sel >= 0:
+            self._branch_ac_insert_selection(sel)
+
+    def _branch_ac_on_listbox_return(self, event):
+        """Handle Return key inside the branch listbox."""
+        if self._branch_ac_listbox is None:
+            return "break"
+        sel = self._branch_ac_listbox.curselection()
+        if sel:
+            self._branch_ac_insert_selection(sel[0])
+        return "break"
+
+    def _branch_ac_insert_selection(self, index: int):
+        """Set the target branch Entry to the selected branch name."""
+        if self._branch_ac_listbox is None:
+            return
+
+        branch_name = self._branch_ac_listbox.get(index)
+        self._target_branch_var.set(branch_name)
+
+        # Move cursor to end of entry
+        self._branch_entry.icursor(tk.END)
+        self._branch_entry.focus_set()
+
+        self._destroy_branch_autocomplete()
+
+    # ──────────────────────────────────────────────────────────────────────
+    # DIFF PREVIEW POPUP (Feature 11)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _open_diff_preview(self):
+        """Feature 11: Open a dedicated diff preview popup with syntax
+        highlighting instead of appending to the status log."""
+        ctrl = self._get_controller()
+        if not ctrl:
+            return
+
+        self._diff_popup_btn.configure(state="disabled", text="⏳ Loading...")
+        self._append_status("🔍 Loading full diff preview...")
+        ctrl.get_full_diff(self._on_full_diff_result)
+
+    def _on_full_diff_result(self, result):
+        """Callback from controller with the full unified diff."""
+        self._diff_popup_btn.configure(state="normal", text="🔍 Diff Preview")
+
+        if result.get("success"):
+            diff_text = result.get("diff", "")
+            branch = result.get("branch", "?")
+            if not diff_text:
+                self._append_status("ℹ No uncommitted changes to preview")
+                self.show_info("Diff Preview", "No uncommitted changes found.")
+                return
+            self._show_diff_popup(diff_text, branch)
+        else:
+            error = result.get("error", "Unknown error")
+            self._append_status(f"✗ Diff preview failed: {error}")
+            self.show_error("Diff Preview", f"Failed to load diff:\n{error}")
+
+    def _show_diff_popup(self, diff_text: str, branch: str = ""):
+        """Feature 11: Display the full diff in a popup window with basic
+        syntax highlighting (added lines green, removed lines red)."""
+        popup = tk.Toplevel(self.root)
+        popup.title(f"Diff Preview — {branch}" if branch else "Diff Preview")
+        popup.geometry("900x600")
+        popup.transient(self.root)
+
+        # Header
+        header = ttk.Frame(popup, padding="5")
+        header.pack(fill=tk.X)
+        ttk.Label(header, text=f"📊 Full Diff — Branch: {branch}",
+                  font=("Arial", 11, "bold")).pack(side=tk.LEFT)
+        ttk.Button(header, text="Close", command=popup.destroy).pack(side=tk.RIGHT)
+
+        # Diff text widget with syntax highlighting
+        text_frame = ttk.Frame(popup)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        diff_widget = tk.Text(
+            text_frame, wrap=tk.NONE, font=("Consolas", 10),
+            bg="#1e1e1e", fg="#d4d4d4", insertbackground="white",
+        )
+        diff_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Scrollbars
+        y_scroll = ttk.Scrollbar(text_frame, orient=tk.VERTICAL,
+                                  command=diff_widget.yview)
+        y_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        diff_widget.configure(yscrollcommand=y_scroll.set)
+
+        x_scroll = ttk.Scrollbar(popup, orient=tk.HORIZONTAL,
+                                  command=diff_widget.xview)
+        x_scroll.pack(fill=tk.X, padx=5)
+        diff_widget.configure(xscrollcommand=x_scroll.set)
+
+        # Configure syntax highlighting tags
+        diff_widget.tag_configure("added", foreground="#4ec9b0")       # green
+        diff_widget.tag_configure("removed", foreground="#f44747")     # red
+        diff_widget.tag_configure("header", foreground="#569cd6",      # blue
+                                   font=("Consolas", 10, "bold"))
+        diff_widget.tag_configure("hunk", foreground="#c586c0")        # purple
+        diff_widget.tag_configure("file_sep", foreground="#808080")    # gray
+
+        # Insert diff text with highlighting
+        for line in diff_text.splitlines(True):
+            stripped = line.rstrip("\n")
+            if stripped.startswith("+++") or stripped.startswith("---"):
+                diff_widget.insert(tk.END, line, "header")
+            elif stripped.startswith("@@"):
+                diff_widget.insert(tk.END, line, "hunk")
+            elif stripped.startswith("+"):
+                diff_widget.insert(tk.END, line, "added")
+            elif stripped.startswith("-"):
+                diff_widget.insert(tk.END, line, "removed")
+            elif stripped.startswith("diff "):
+                diff_widget.insert(tk.END, line, "file_sep")
+            else:
+                diff_widget.insert(tk.END, line)
+
+        diff_widget.configure(state=tk.DISABLED)
+
+        # Status bar
+        line_count = diff_text.count("\n")
+        added = sum(1 for l in diff_text.splitlines() if l.startswith("+") and not l.startswith("+++"))
+        removed = sum(1 for l in diff_text.splitlines() if l.startswith("-") and not l.startswith("---"))
+        status = ttk.Label(popup,
+                           text=f"  {line_count} lines  |  +{added} added  |  -{removed} removed",
+                           font=("Arial", 9), foreground="gray")
+        status.pack(fill=tk.X, padx=5, pady=(0, 5))
+
+        self._append_status(f"✓ Diff preview opened ({line_count} lines, +{added}/-{removed})")
+
+    # ──────────────────────────────────────────────────────────────────────
+    # PIPELINE HISTORY / RESUME (Feature 12)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _check_resume_pipeline(self):
+        """Feature 12: Check if there is a saved pipeline state to resume.
+
+        Called during startup (deferred) to offer resuming a crashed pipeline.
+        """
+        try:
+            ctrl = getattr(self.context.controller, 'pr_review_controller', None)
+            if not ctrl:
+                return
+
+            state = ctrl.load_pipeline_state()
+            if not state:
+                return
+
+            issue_key = state.get("issue_key", "?")
+            target_branch = state.get("target_branch", "?")
+            last_phase = state.get("last_phase", "?")
+
+            msg = (
+                f"A previous pipeline run was interrupted.\n\n"
+                f"JIRA: {issue_key}\n"
+                f"Target: {target_branch}\n"
+                f"Last completed phase: {last_phase}\n\n"
+                f"Would you like to resume from where it left off?"
+            )
+            if messagebox.askyesno("Resume Pipeline?", msg):
+                self._resume_pipeline(state)
+            else:
+                ctrl.clear_pipeline_state()
+                self._append_status("ℹ Cleared saved pipeline state")
+        except Exception:
+            pass
+
+    def _resume_pipeline(self, state: dict):
+        """Feature 12: Resume a pipeline from saved state.
+
+        Restores the UI fields from the saved state and re-runs the pipeline.
+        """
+        try:
+            # Restore UI fields from saved state
+            issue_key = state.get("issue_key", "")
+            if issue_key:
+                self.context.get_var('issue_var').set(issue_key)
+
+            target_branch = state.get("target_branch", "")
+            if target_branch:
+                self._target_branch_var.set(target_branch)
+
+            reviewers = state.get("reviewers", [])
+            self._clear_all_chips()
+            for r in reviewers:
+                self._add_reviewer_chip(r)
+
+            commit_msg = state.get("commit_message", "")
+            if commit_msg:
+                self._commit_msg_text.delete("1.0", tk.END)
+                self._commit_msg_text.insert("1.0", commit_msg)
+
+            self._append_status(f"\n🔄 Resuming pipeline from: {state.get('last_phase', '?')}")
+            self._append_status(f"  JIRA: {issue_key} | Target: {target_branch}")
+
+            # Clear the saved state before re-running
+            ctrl = self._get_controller()
+            if ctrl:
+                ctrl.clear_pipeline_state()
+
+            # Re-run the full pipeline (user can adjust fields before clicking Run)
+            self.show_info(
+                "Pipeline Restored",
+                f"Pipeline state restored.\n\n"
+                f"JIRA: {issue_key}\n"
+                f"Target: {target_branch}\n"
+                f"Reviewers: {', '.join(reviewers)}\n\n"
+                f"Click '▶ Run Full Pipeline' to resume."
+            )
+        except Exception as e:
+            self._append_status(f"⚠ Failed to resume pipeline: {e}")
