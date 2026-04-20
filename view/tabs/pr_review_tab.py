@@ -315,10 +315,9 @@ class PRReviewTab(BaseTab):
         action_frame = ttk.LabelFrame(parent, text="Pipeline Actions", padding="10")
         action_frame.grid(row=3, column=0, columnspan=4, sticky="nesw", pady=5)
 
-        # Use grid inside action_frame so Row 1 and Row 2 columns align
-        # Col 0: pipeline controls  |  Col 1: separator  |  Col 2: quick-action buttons
+        # Grid layout: Col 0=pipeline controls | Col 1=separator | Col 2=label | Col 3=buttons
         ctrl_frame = ttk.Frame(action_frame)
-        ctrl_frame.grid(row=0, column=0, sticky="w", pady=(5, 2), padx=(0, 0))
+        ctrl_frame.grid(row=0, column=0, sticky="w", pady=(5, 2))
 
         self._run_pipeline_btn = ttk.Button(
             ctrl_frame, text="▶ Run Full Pipeline",
@@ -334,12 +333,14 @@ class PRReviewTab(BaseTab):
         ttk.Separator(action_frame, orient=tk.VERTICAL).grid(
             row=0, column=1, rowspan=2, sticky="ns", padx=10, pady=5)
 
-        # Row 1 quick actions
-        qa_row1 = ttk.Frame(action_frame)
-        qa_row1.grid(row=0, column=2, sticky="w", pady=(5, 2))
+        # "Quick Actions:" label in its own column, spanning both rows
+        ttk.Label(action_frame, text="Quick Actions:",
+                  font=('Arial', 9, 'bold')).grid(
+            row=0, column=2, sticky="nw", pady=(8, 2), padx=(0, 5))
 
-        ttk.Label(qa_row1, text="Quick Actions:",
-                  font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 5))
+        # Row 1 buttons (col 3) — View Diff starts here
+        qa_row1 = ttk.Frame(action_frame)
+        qa_row1.grid(row=0, column=3, sticky="w", pady=(5, 2))
 
         self._diff_btn = ttk.Button(
             qa_row1, text="📊 View Diff",
@@ -368,9 +369,9 @@ class PRReviewTab(BaseTab):
             command=self._check_pr_status)
         self._check_pr_btn.pack(side=tk.LEFT, padx=3)
 
-        # Row 2 quick actions — column 2 aligns with Row 1 quick actions
+        # Row 2 buttons (col 3) — Merge PR aligns under View Diff
         qa_row2 = ttk.Frame(action_frame)
-        qa_row2.grid(row=1, column=2, sticky="w", pady=(0, 5))
+        qa_row2.grid(row=1, column=3, sticky="w", pady=(0, 5))
 
         # H1: Merge PR button (standalone quick action)
         self._merge_pr_btn = ttk.Button(
