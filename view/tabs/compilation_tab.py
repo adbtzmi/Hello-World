@@ -494,7 +494,7 @@ class CompilationTab(BaseTab):
 
         ff_cols = ("Enabled", "Test ID", "Description", "Files")
         self._ff_tree = ttk.Treeview(
-            cases_frame, columns=ff_cols, show="headings", height=5,
+            cases_frame, columns=ff_cols, show="headings", height=8,
         )
         ff_col_widths = [60, 120, 300, 200]
         for col, w in zip(ff_cols, ff_col_widths):
