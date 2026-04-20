@@ -1417,7 +1417,8 @@ def _run_git(cmd: list, cwd: str, log_callback: Optional[Callable] = None) -> st
     _log(log_callback, f"  $ {' '.join(cmd)}")
     result = subprocess.run(
         cmd, cwd=cwd,
-        capture_output=True, text=True, timeout=120
+        capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=120
     )
     if result.returncode != 0:
         raise subprocess.CalledProcessError(
