@@ -315,87 +315,72 @@ class PRReviewTab(BaseTab):
         action_frame = ttk.LabelFrame(parent, text="Pipeline Actions", padding="10")
         action_frame.grid(row=3, column=0, columnspan=4, sticky="nesw", pady=5)
 
-        # Row 1: Pipeline controls + first set of quick actions
-        btn_row = ttk.Frame(action_frame)
-        btn_row.pack(fill=tk.X, pady=(5, 2))
+        # Use grid inside action_frame so Row 1 and Row 2 columns align
+        # Col 0: pipeline controls  |  Col 1: separator  |  Col 2: quick-action buttons
+        ctrl_frame = ttk.Frame(action_frame)
+        ctrl_frame.grid(row=0, column=0, sticky="w", pady=(5, 2), padx=(0, 0))
 
         self._run_pipeline_btn = ttk.Button(
-            btn_row, text="▶ Run Full Pipeline",
+            ctrl_frame, text="▶ Run Full Pipeline",
             command=self._run_full_pipeline)
         self._run_pipeline_btn.pack(side=tk.LEFT, padx=5)
         self.context.lockable_buttons.append(self._run_pipeline_btn)
 
         self._cancel_btn = ttk.Button(
-            btn_row, text="⏹ Cancel",
+            ctrl_frame, text="⏹ Cancel",
             command=self._cancel_pipeline, state=tk.DISABLED)
         self._cancel_btn.pack(side=tk.LEFT, padx=5)
 
-        ttk.Separator(btn_row, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
+        ttk.Separator(action_frame, orient=tk.VERTICAL).grid(
+            row=0, column=1, rowspan=2, sticky="ns", padx=10, pady=5)
 
-        ttk.Label(btn_row, text="Quick Actions:",
-                  font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=5)
+        # Row 1 quick actions
+        qa_row1 = ttk.Frame(action_frame)
+        qa_row1.grid(row=0, column=2, sticky="w", pady=(5, 2))
+
+        ttk.Label(qa_row1, text="Quick Actions:",
+                  font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 5))
 
         self._diff_btn = ttk.Button(
-            btn_row, text="📊 View Diff",
+            qa_row1, text="📊 View Diff",
             command=self._view_diff)
         self._diff_btn.pack(side=tk.LEFT, padx=3)
 
         self._diff_popup_btn = ttk.Button(
-            btn_row, text="🔍 Diff Preview",
+            qa_row1, text="🔍 Diff Preview",
             command=self._open_diff_preview)
         self._diff_popup_btn.pack(side=tk.LEFT, padx=3)
 
         self._push_btn = ttk.Button(
-            btn_row, text="📤 Commit & Push",
+            qa_row1, text="📤 Commit & Push",
             command=self._commit_push_only)
         self._push_btn.pack(side=tk.LEFT, padx=3)
         self.context.lockable_buttons.append(self._push_btn)
 
         self._create_pr_btn = ttk.Button(
-            btn_row, text="🔀 Create PR",
+            qa_row1, text="🔀 Create PR",
             command=self._create_pr_only)
         self._create_pr_btn.pack(side=tk.LEFT, padx=3)
         self.context.lockable_buttons.append(self._create_pr_btn)
 
         self._check_pr_btn = ttk.Button(
-            btn_row, text="🔍 Check PR Status",
+            qa_row1, text="🔍 Check PR Status",
             command=self._check_pr_status)
         self._check_pr_btn.pack(side=tk.LEFT, padx=3)
 
-        # Row 2: Remaining quick actions (ensures visibility on smaller screens)
-        btn_row2 = ttk.Frame(action_frame)
-        btn_row2.pack(fill=tk.X, pady=(0, 5))
-
-        # Dynamic spacer — aligns Merge PR under View Diff after layout
-        self._row2_spacer = ttk.Frame(btn_row2, width=0)
-        self._row2_spacer.pack(side=tk.LEFT)
-        self._row2_spacer.pack_propagate(False)
-
-        def _align_row2(_event=None):
-            try:
-                # Get x-offset of View Diff button relative to action_frame
-                x = self._diff_btn.winfo_x()
-                # Account for btn_row's own x-offset inside action_frame
-                x += btn_row.winfo_x()
-                # Subtract btn_row2's x-offset
-                x -= btn_row2.winfo_x()
-                if x > 0:
-                    self._row2_spacer.configure(width=x)
-            except Exception:
-                pass
-
-        # Schedule alignment after widgets are rendered
-        self.after(200, _align_row2)
+        # Row 2 quick actions — column 2 aligns with Row 1 quick actions
+        qa_row2 = ttk.Frame(action_frame)
+        qa_row2.grid(row=1, column=2, sticky="w", pady=(0, 5))
 
         # H1: Merge PR button (standalone quick action)
         self._merge_pr_btn = ttk.Button(
-            btn_row2, text="🔀 Merge PR",
+            qa_row2, text="🔀 Merge PR",
             command=self._merge_pr_only)
         self._merge_pr_btn.pack(side=tk.LEFT, padx=3)
 
         # H2: Poll Approval button (auto-refresh with countdown)
         self._poll_btn = ttk.Button(
-            btn_row2, text="⏳ Poll Approval",
+            qa_row2, text="⏳ Poll Approval",
             command=self._toggle_polling)
         self._poll_btn.pack(side=tk.LEFT, padx=3)
 
