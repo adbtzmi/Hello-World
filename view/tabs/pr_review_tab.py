@@ -204,7 +204,7 @@ class PRReviewTab(BaseTab):
         # L5: Backspace in empty entry removes last reviewer chip
         self._reviewers_entry.bind("<BackSpace>", self._on_reviewer_backspace)
 
-        ttk.Label(config_frame, text="(Type to search, chips added below)",
+        ttk.Label(config_frame, text="(Type to search, chips appear above)",
                   font=('Arial', 8), foreground='gray').grid(
             row=row, column=3, sticky=tk.W, padx=5)
         row += 1
@@ -237,9 +237,13 @@ class PRReviewTab(BaseTab):
             config_frame, textvariable=self._pr_title_var, width=50)
         self._pr_title_entry.grid(
             row=row, column=1, columnspan=2, sticky="we", pady=3, padx=5)
-        # Mark as user-edited when they type directly in PR title
-        self._pr_title_entry.bind(
-            "<Key>", lambda _: setattr(self, '_pr_title_user_edited', True))
+        # Mark as user-edited when they type a printable character in PR title
+        def _on_pr_title_key(event):
+            # Only flag as user-edited for actual printable characters,
+            # not Tab, Shift, arrows, etc.
+            if event.char and event.char.isprintable():
+                self._pr_title_user_edited = True
+        self._pr_title_entry.bind("<Key>", _on_pr_title_key)
         ttk.Label(config_frame,
                   text="(Auto-synced from commit msg first line)",
                   font=('Arial', 8), foreground='gray').grid(
@@ -327,11 +331,13 @@ class PRReviewTab(BaseTab):
             command=self._run_full_pipeline)
         self._run_pipeline_btn.pack(side=tk.LEFT, padx=5)
         self.context.lockable_buttons.append(self._run_pipeline_btn)
+        ToolTip(self._run_pipeline_btn, "Run the full 6-phase PR pipeline end-to-end")
 
         self._cancel_btn = ttk.Button(
             ctrl_frame, text="⏹ Cancel",
             command=self._cancel_pipeline, state=tk.DISABLED)
         self._cancel_btn.pack(side=tk.LEFT, padx=5)
+        ToolTip(self._cancel_btn, "Cancel the running pipeline")
 
         ttk.Separator(action_frame, orient=tk.VERTICAL).grid(
             row=0, column=1, rowspan=2, sticky="ns", padx=10, pady=5)
@@ -347,30 +353,29 @@ class PRReviewTab(BaseTab):
 
         self._diff_btn = ttk.Button(
             qa_row1, text="📊 View Diff",
-            command=self._view_diff)
-        self._diff_btn.pack(side=tk.LEFT, padx=3)
-
-        self._diff_popup_btn = ttk.Button(
-            qa_row1, text="🔍 Diff Preview",
             command=self._open_diff_preview)
-        self._diff_popup_btn.pack(side=tk.LEFT, padx=3)
+        self._diff_btn.pack(side=tk.LEFT, padx=3)
+        ToolTip(self._diff_btn, "Show full unified diff in a popup window")
 
         self._push_btn = ttk.Button(
             qa_row1, text="📤 Commit & Push",
             command=self._commit_push_only)
         self._push_btn.pack(side=tk.LEFT, padx=3)
         self.context.lockable_buttons.append(self._push_btn)
+        ToolTip(self._push_btn, "Stage all changes, commit, and push to remote")
 
         self._create_pr_btn = ttk.Button(
             qa_row1, text="🔀 Create PR",
             command=self._create_pr_only)
         self._create_pr_btn.pack(side=tk.LEFT, padx=3)
         self.context.lockable_buttons.append(self._create_pr_btn)
+        ToolTip(self._create_pr_btn, "Create a pull request on Bitbucket")
 
         self._check_pr_btn = ttk.Button(
             qa_row1, text="🔍 Check PR Status",
             command=self._check_pr_status)
         self._check_pr_btn.pack(side=tk.LEFT, padx=3)
+        ToolTip(self._check_pr_btn, "Check current PR approval status")
 
         # Row 2 buttons (col 3) — Merge PR aligns under View Diff
         qa_row2 = ttk.Frame(action_frame)
@@ -381,12 +386,14 @@ class PRReviewTab(BaseTab):
             qa_row2, text="🔀 Merge PR",
             command=self._merge_pr_only)
         self._merge_pr_btn.pack(side=tk.LEFT, padx=3)
+        ToolTip(self._merge_pr_btn, "Merge the approved pull request")
 
         # H2: Poll Approval button (auto-refresh with countdown)
         self._poll_btn = ttk.Button(
             qa_row2, text="⏳ Poll Approval",
             command=self._toggle_polling)
         self._poll_btn.pack(side=tk.LEFT, padx=3)
+        ToolTip(self._poll_btn, "Auto-refresh PR approval status every 60s")
 
         # ══════════════════════════════════════════════════════════════════
         # SECTION 3: Pipeline Progress
@@ -450,7 +457,7 @@ class PRReviewTab(BaseTab):
         self._pipeline_progress.pack(fill=tk.X, pady=(2, 5))
 
         self._status_text = scrolledtext.ScrolledText(
-            progress_frame, height=14, width=80, wrap=tk.WORD,
+            progress_frame, height=8, width=80, wrap=tk.WORD,
             state=tk.DISABLED)
         self._status_text.pack(fill=tk.BOTH, expand=True, pady=(2, 5))
 
@@ -520,10 +527,15 @@ class PRReviewTab(BaseTab):
             )
             return
 
-        # L6: Validate target branch exists via Bitbucket API
-        if not self._validate_target_branch(target_branch):
-            return
+        # L6: Validate target branch exists via Bitbucket API (non-blocking)
+        self._branch_validation_done = False
+        self._validate_target_branch(
+            target_branch,
+            on_valid=lambda: self._continue_pipeline(
+                issue_key, target_branch, reviewers))
 
+    def _continue_pipeline(self, issue_key, target_branch, reviewers):
+        """Continue pipeline after branch validation succeeds."""
         commit_msg = self._commit_msg_text.get("1.0", tk.END).strip()
         if not commit_msg:
             commit_msg = f"[{issue_key}] Code changes"
@@ -590,7 +602,7 @@ class PRReviewTab(BaseTab):
             self._append_status("⚠ Cancel requested...")
 
     def _view_diff(self):
-        """Show git diff summary."""
+        """Show git diff summary in the status log (kept for internal use)."""
         ctrl = self._get_controller()
         if not ctrl:
             return
@@ -1067,52 +1079,88 @@ class PRReviewTab(BaseTab):
     # L6: BRANCH VALIDATION BEFORE PIPELINE
     # ──────────────────────────────────────────────────────────────────────
 
-    def _validate_target_branch(self, target_branch: str) -> bool:
+    def _validate_target_branch(self, target_branch: str,
+                                on_valid=None) -> None:
         """L6: Validate that the target branch exists on the remote via
         Bitbucket API before starting the pipeline.
 
-        Returns True if valid (or if validation cannot be performed),
-        False if the branch definitely does not exist.
+        Non-blocking: shows a spinner label while waiting, then calls
+        *on_valid()* if the branch is confirmed (or user chooses to proceed).
         """
         ctrl = self._get_controller()
         if not ctrl:
-            return True  # Can't validate without controller — allow anyway
+            if on_valid:
+                on_valid()
+            return
 
-        import threading
+        # Show a loading indicator on the Run button
+        self._run_pipeline_btn.configure(state="disabled",
+                                         text="⏳ Validating branch…")
+        self._append_status(f"🔍 Validating target branch '{target_branch}'…")
 
         result_holder: list = []
-        done_event = threading.Event()
 
         def _on_branches(branches):
             result_holder.append(branches)
-            done_event.set()
+            # Schedule UI check on main thread
+            self.root.after(0, lambda: self._finish_branch_validation(
+                target_branch, result_holder, on_valid))
 
         ctrl.fetch_branches(filter_text=target_branch, callback=_on_branches)
 
-        # Wait up to 10 seconds for the API response
-        done_event.wait(timeout=10)
+        # Fallback timeout — if API doesn't respond in 10s, proceed anyway
+        def _timeout():
+            if not result_holder:
+                result_holder.append(None)  # sentinel for timeout
+                self._finish_branch_validation(
+                    target_branch, result_holder, on_valid)
+        self.root.after(10000, _timeout)
 
-        if not result_holder:
+    def _finish_branch_validation(self, target_branch: str,
+                                  result_holder: list,
+                                  on_valid=None) -> None:
+        """Complete branch validation on the main thread (non-blocking)."""
+        # Restore button
+        self._run_pipeline_btn.configure(state="normal",
+                                         text="▶ Run Full Pipeline")
+
+        # Already handled (timeout vs callback race)
+        if getattr(self, '_branch_validation_done', False):
+            return
+        self._branch_validation_done = True
+
+        branches = result_holder[0] if result_holder else None
+
+        if branches is None:
             # Timeout or error — allow pipeline to proceed
-            return True
+            self._append_status("⚠ Branch validation timed out — proceeding")
+            if on_valid:
+                on_valid()
+            return
 
-        branches = result_holder[0]
         if not branches:
             # API returned empty — could be network issue, allow anyway
-            return True
+            if on_valid:
+                on_valid()
+            return
 
         # Check if exact branch name exists in results
         if target_branch in branches:
-            return True
+            self._append_status(f"✓ Target branch '{target_branch}' verified")
+            if on_valid:
+                on_valid()
+            return
 
         # Branch not found — ask user
-        return messagebox.askyesno(
+        proceed = messagebox.askyesno(
             "Branch Not Found",
             f"Target branch '{target_branch}' was not found on the remote.\n\n"
             f"Available branches matching '{target_branch}':\n"
             f"  {', '.join(branches[:10]) if branches else '(none)'}\n\n"
             f"Proceed anyway?"
         )
+        if proceed and on_valid:
+            on_valid()
 
     def _append_status(self, text: str):
         """Append text to the status log (thread-safe via root.after).
@@ -1954,13 +2002,13 @@ class PRReviewTab(BaseTab):
         if not ctrl:
             return
 
-        self._diff_popup_btn.configure(state="disabled", text="⏳ Loading...")
+        self._diff_btn.configure(state="disabled", text="⏳ Loading...")
         self._append_status("🔍 Loading full diff preview...")
         ctrl.get_full_diff(self._on_full_diff_result)
 
     def _on_full_diff_result(self, result):
         """Callback from controller with the full unified diff."""
-        self._diff_popup_btn.configure(state="normal", text="🔍 Diff Preview")
+        self._diff_btn.configure(state="normal", text="📊 View Diff")
 
         if result.get("success"):
             diff_text = result.get("diff", "")
