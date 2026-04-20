@@ -174,6 +174,7 @@ class PRReviewTab(BaseTab):
         self._ac_toplevel: tk.Toplevel | None = None
         self._ac_debounce_id: str | None = None
         self._ac_display_map: dict = {}
+        self._ac_clicking: bool = False  # Flag to prevent FocusOut during click
 
         # Bind keystrokes for autocomplete
         self._reviewers_entry.bind("<KeyRelease>", self._on_reviewer_key)
@@ -1029,9 +1030,15 @@ class PRReviewTab(BaseTab):
         for display in display_items:
             listbox.insert(tk.END, display)
 
-        listbox.bind("<ButtonRelease-1>", self._ac_on_click)
+        # Use ButtonPress (not ButtonRelease) so click fires before FocusOut
+        # destroys the Toplevel on Windows
+        listbox.bind("<ButtonPress-1>", self._ac_on_click)
         listbox.bind("<Return>", self._ac_on_listbox_return)
         listbox.bind("<Escape>", self._hide_autocomplete)
+
+        # Prevent FocusOut from destroying dropdown while mouse is over it
+        listbox.bind("<Enter>", lambda _: setattr(self, '_ac_clicking', True))
+        listbox.bind("<Leave>", lambda _: setattr(self, '_ac_clicking', False))
 
         if listbox.size() > 0:
             listbox.selection_set(0)
@@ -1051,8 +1058,11 @@ class PRReviewTab(BaseTab):
 
     def _hide_autocomplete(self, event=None):
         """Hide the autocomplete dropdown (bound to FocusOut / Escape)."""
+        # If mouse is over the listbox, don't destroy — user is clicking
+        if self._ac_clicking:
+            return
         # Small delay so click events on the listbox can fire first
-        self.root.after(150, self._destroy_autocomplete)
+        self.root.after(200, self._destroy_autocomplete)
 
     def _ac_focus_listbox(self, event=None):
         """Move focus into the autocomplete listbox (Down arrow)."""
@@ -1074,6 +1084,8 @@ class PRReviewTab(BaseTab):
             return
         sel = self._ac_listbox.nearest(event.y)
         if sel >= 0:
+            # Reset flag before inserting (which destroys the dropdown)
+            self._ac_clicking = False
             self._ac_insert_selection(sel)
 
     def _ac_on_listbox_return(self, event):
