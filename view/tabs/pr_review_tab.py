@@ -377,16 +377,16 @@ class PRReviewTab(BaseTab):
         self._check_pr_btn.pack(side=tk.LEFT, padx=3)
         ToolTip(self._check_pr_btn, "Check current PR approval status")
 
-        # Row 2 buttons (col 3) — Merge PR aligns under View Diff
-        qa_row2 = ttk.Frame(action_frame)
-        qa_row2.grid(row=1, column=3, sticky="w", pady=(0, 5))
-
-        # H1: Merge PR button (standalone quick action)
+        # H1: Merge PR button (on row 1 — natural flow after Check PR)
         self._merge_pr_btn = ttk.Button(
-            qa_row2, text="🔀 Merge PR",
+            qa_row1, text="🔀 Merge PR",
             command=self._merge_pr_only)
         self._merge_pr_btn.pack(side=tk.LEFT, padx=3)
         ToolTip(self._merge_pr_btn, "Merge the approved pull request")
+
+        # Row 2 buttons (col 3) — Poll Approval
+        qa_row2 = ttk.Frame(action_frame)
+        qa_row2.grid(row=1, column=3, sticky="w", pady=(0, 5))
 
         # H2: Poll Approval button (auto-refresh with countdown)
         self._poll_btn = ttk.Button(
