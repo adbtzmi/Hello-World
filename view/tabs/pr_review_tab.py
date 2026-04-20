@@ -216,8 +216,8 @@ class PRReviewTab(BaseTab):
         self._commit_msg_text.grid(
             row=row, column=1, sticky="we", pady=3, padx=5)
         self._ai_commit_btn = ttk.Button(
-            config_frame, text="✨ AI Generate",
-            command=self._generate_ai_commit_message)
+            config_frame, text="✨ AI Generate All",
+            command=self._generate_ai_all)
         self._ai_commit_btn.grid(row=row, column=2, sticky=tk.NW, padx=5)
         ttk.Label(config_frame, text="(Multi-line supported)",
                   font=('Arial', 8), foreground='gray').grid(
@@ -252,11 +252,7 @@ class PRReviewTab(BaseTab):
             font=('Arial', 9))
         self._pr_desc_text.grid(
             row=row, column=1, sticky="we", pady=3, padx=5)
-        # M1: AI Generate button for PR description
-        self._ai_pr_desc_btn = ttk.Button(
-            config_frame, text="✨ AI Generate",
-            command=self._generate_ai_pr_description)
-        self._ai_pr_desc_btn.grid(row=row, column=2, sticky=tk.NW, padx=5)
+        # AI Generate button removed — now handled by "AI Generate All" above
         ttk.Label(config_frame,
                   text="(Optional — auto-generated if empty)",
                   font=('Arial', 8), foreground='gray').grid(
@@ -1446,12 +1442,9 @@ class PRReviewTab(BaseTab):
     # AI COMMIT MESSAGE GENERATION
     # ──────────────────────────────────────────────────────────────────────
 
-    def _generate_ai_commit_message(self):
-        """Handle the '✨ AI Generate' button click.
-
-        Calls the controller to generate a commit message from the git diff
-        using the AI Gateway.  Disables the button while running.
-        """
+    def _generate_ai_all(self):
+        """Unified '✨ AI Generate All' — generates commit message AND PR
+        description in one click.  Chains: commit msg first, then PR desc."""
         ctrl = self._get_controller()
         if not ctrl:
             return
@@ -1468,29 +1461,53 @@ class PRReviewTab(BaseTab):
 
         # Disable button and show progress
         self._ai_commit_btn.configure(state="disabled", text="⏳ Generating...")
-        self._append_status("🤖 Generating AI commit message...")
+        self._append_status("🤖 AI Generate All: generating commit message...")
 
         ctrl.generate_ai_commit_message(issue_key, self._on_ai_commit_result)
 
-    def _on_ai_commit_result(self, result: dict):
-        """Callback from controller with the AI-generated commit message."""
-        # Re-enable button
-        self._ai_commit_btn.configure(state="normal", text="✨ AI Generate")
+    def _generate_ai_commit_message(self):
+        """Generate only the AI commit message (used internally)."""
+        ctrl = self._get_controller()
+        if not ctrl:
+            return
+        issue_key = self._get_issue_key()
+        if not issue_key:
+            return
+        self._ai_commit_btn.configure(state="disabled", text="⏳ Generating...")
+        self._append_status("🤖 Generating AI commit message...")
+        ctrl.generate_ai_commit_message(issue_key, self._on_ai_commit_result)
 
+    def _on_ai_commit_result(self, result: dict):
+        """Callback from controller with the AI-generated commit message.
+        On success, automatically chains to PR description generation."""
         if result.get("success"):
             message = result["message"]
-            # Take only the first line for the commit message field
-            # Feature 14: Insert full multi-line message into Text widget
             self._commit_msg_text.delete("1.0", tk.END)
             self._commit_msg_text.insert("1.0", message.strip())
             first_line = message.split("\n")[0].strip()
             self._append_status(f"✅ AI commit message set: {first_line}")
+
+            # Chain: now generate PR description
+            self._append_status("🤖 AI Generate All: generating PR description...")
+            ctrl = self._get_controller()
+            issue_key = self._get_issue_key()
+            target_branch = self._target_branch_var.get().strip() or "master"
+            if ctrl and issue_key:
+                ctrl.generate_ai_pr_description(
+                    issue_key, target_branch, self._on_ai_pr_desc_result
+                )
+            else:
+                self._ai_commit_btn.configure(
+                    state="normal", text="✨ AI Generate All")
         else:
+            # Re-enable button on failure
+            self._ai_commit_btn.configure(
+                state="normal", text="✨ AI Generate All")
             error = result.get("error", "Unknown error")
             self._append_status(f"⚠️ AI commit message failed: {error}")
             from tkinter import messagebox
             messagebox.showerror(
-                "AI Commit Message",
+                "AI Generate",
                 f"Failed to generate commit message:\n{error}",
                 parent=self.root,
             )
@@ -1500,39 +1517,25 @@ class PRReviewTab(BaseTab):
     # ──────────────────────────────────────────────────────────────────────
 
     def _generate_ai_pr_description(self):
-        """M1: Handle the '✨ AI Generate' button click for PR description.
-
-        Calls the controller to generate a PR description from the git diff
-        using the AI Gateway.  Disables the button while running.
-        """
+        """M1: Generate PR description only (used internally or by chain)."""
         ctrl = self._get_controller()
         if not ctrl:
             return
-
         issue_key = self._get_issue_key()
         if not issue_key:
-            from tkinter import messagebox
-            messagebox.showwarning(
-                "Missing Issue Key",
-                "Please enter a JIRA Issue Key first.",
-                parent=self.root,
-            )
             return
-
         target_branch = self._target_branch_var.get().strip() or "master"
-
-        # Disable button and show progress
-        self._ai_pr_desc_btn.configure(state="disabled", text="⏳ Generating...")
         self._append_status("🤖 Generating AI PR description...")
-
         ctrl.generate_ai_pr_description(
             issue_key, target_branch, self._on_ai_pr_desc_result
         )
 
     def _on_ai_pr_desc_result(self, result: dict):
-        """M1: Callback from controller with the AI-generated PR description."""
-        # Re-enable button
-        self._ai_pr_desc_btn.configure(state="normal", text="✨ AI Generate")
+        """M1: Callback from controller with the AI-generated PR description.
+        Also re-enables the unified AI Generate All button."""
+        # Re-enable the unified button
+        self._ai_commit_btn.configure(
+            state="normal", text="✨ AI Generate All")
 
         if result.get("success"):
             description = result["description"]
