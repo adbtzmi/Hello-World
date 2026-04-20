@@ -344,12 +344,29 @@ def git_get_current_branch(
         return None
 
 
+def _ensure_untracked_visible(repo_path: str, log_callback: Optional[Callable] = None):
+    """Run ``git add -N .`` so untracked files appear in ``git diff HEAD``.
+
+    ``-N`` (intent-to-add) registers new files in the index without staging
+    their content, making them visible to diff commands.  This is safe to
+    call repeatedly — already-tracked files are unaffected.
+    """
+    try:
+        _run_git(["git", "add", "-N", "."], repo_path, log_callback)
+    except Exception:
+        pass  # best-effort; diff will still work for tracked files
+
+
 def git_get_diff_summary(
     repo_path: str,
     log_callback: Optional[Callable] = None,
 ) -> str:
-    """Return a short diff stat summary for the working tree."""
+    """Return a short diff stat summary for the working tree.
+
+    Includes untracked (new) files via ``git add -N``.
+    """
     try:
+        _ensure_untracked_visible(repo_path, log_callback)
         return _run_git(
             ["git", "diff", "--stat", "HEAD"],
             repo_path, log_callback
@@ -365,8 +382,10 @@ def git_get_full_diff(
     """Return the full unified diff for the working tree (Feature 11).
 
     Used by the diff preview popup to show coloured file-level changes.
+    Includes untracked (new) files via ``git add -N``.
     """
     try:
+        _ensure_untracked_visible(repo_path, log_callback)
         return _run_git(
             ["git", "diff", "HEAD"],
             repo_path, log_callback
@@ -465,6 +484,9 @@ def generate_commit_message(
         ``{"success": False, "error": "<reason>"}``.
     """
     try:
+        # 0. Make untracked files visible to git diff
+        _ensure_untracked_visible(repo_path, log_callback)
+
         # 1. Get the diff content (actual changes, not just stat)
         diff_text = _run_git(
             ["git", "diff", "HEAD"],
