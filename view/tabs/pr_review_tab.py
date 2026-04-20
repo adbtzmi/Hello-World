@@ -37,6 +37,7 @@ class PRReviewTab(BaseTab):
 
     def __init__(self, notebook, context):
         super().__init__(notebook, context, "✅ PR Review")
+        self._notebook = notebook  # Store for tab-change detection
         self._reviewer_chips: list[str] = []  # list of added reviewer usernames
         self._reviewer_display_names: dict[str, str] = {}  # username → display name (Feature 13)
         # H2: Approval polling state
@@ -69,6 +70,9 @@ class PRReviewTab(BaseTab):
 
         # L3: Restore last used settings from settings.json
         self.root.after(600, self._restore_last_settings)
+
+        # Re-detect source branch when user switches to this tab
+        notebook.bind("<<NotebookTabChanged>>", self._on_tab_selected, add=True)
 
     def _build_ui(self):
         self.configure(padding="10")
@@ -358,15 +362,19 @@ class PRReviewTab(BaseTab):
             command=self._check_pr_status)
         self._check_pr_btn.pack(side=tk.LEFT, padx=3)
 
+        # Second row for additional quick actions (avoid overcrowding)
+        btn_row2 = ttk.Frame(action_frame)
+        btn_row2.pack(fill=tk.X, pady=(0, 5))
+
         # H1: Merge PR button (standalone quick action)
         self._merge_pr_btn = ttk.Button(
-            btn_row, text="🔀 Merge PR",
+            btn_row2, text="🔀 Merge PR",
             command=self._merge_pr_only)
         self._merge_pr_btn.pack(side=tk.LEFT, padx=3)
 
         # H2: Poll Approval button (auto-refresh with countdown)
         self._poll_btn = ttk.Button(
-            btn_row, text="⏳ Poll Approval",
+            btn_row2, text="⏳ Poll Approval",
             command=self._toggle_polling)
         self._poll_btn.pack(side=tk.LEFT, padx=3)
 
@@ -1303,6 +1311,21 @@ class PRReviewTab(BaseTab):
             foreground='blue')
         self._elapsed_after_id = self.root.after(1000, self._update_elapsed)
 
+    def _on_tab_selected(self, event=None):
+        """Re-detect source branch when user switches to this tab.
+        Only runs if source branch is still showing a placeholder."""
+        try:
+            # Check if this tab is the currently selected one
+            selected = self._notebook.select()
+            if str(self) != str(selected):
+                return  # Different tab selected, ignore
+
+            current_src = self._source_branch_var.get()
+            if current_src in ("(no repo loaded)", "(unknown)", "(error)"):
+                self._auto_populate_target_branch()
+        except Exception:
+            pass
+
     def _auto_populate_target_branch(self):
         """Improvement 1: Auto-populate target branch from workflow.
 
@@ -1350,7 +1373,11 @@ class PRReviewTab(BaseTab):
         if not current_title or current_title.startswith("["):
             if issue_key and not issue_key.endswith("-"):
                 msg = self._commit_msg_text.get("1.0", tk.END).strip()
-                self._pr_title_var.set(f"[{issue_key}] {msg}" if msg else f"[{issue_key}] Feature branch merge")
+                # Strip existing issue key prefix to avoid duplication
+                # e.g. "[TSESSD-99999] Validation updates" → "Validation updates"
+                import re
+                msg_clean = re.sub(r'^\[' + re.escape(issue_key) + r'\]\s*', '', msg)
+                self._pr_title_var.set(f"[{issue_key}] {msg_clean}" if msg_clean else f"[{issue_key}] Feature branch merge")
 
     def _save_used_reviewers(self):
         """Item 16: Save the current reviewers to settings.json via controller.
