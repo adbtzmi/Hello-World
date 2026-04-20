@@ -357,17 +357,17 @@ class PRReviewTab(BaseTab):
         self._create_pr_btn.pack(side=tk.LEFT, padx=3)
         self.context.lockable_buttons.append(self._create_pr_btn)
 
+        self._check_pr_btn = ttk.Button(
+            btn_row, text="🔍 Check PR Status",
+            command=self._check_pr_status)
+        self._check_pr_btn.pack(side=tk.LEFT, padx=3)
+
         # Row 2: Remaining quick actions (ensures visibility on smaller screens)
         btn_row2 = ttk.Frame(action_frame)
         btn_row2.pack(fill=tk.X, pady=(0, 5))
 
         # Spacer to align with Quick Actions above
         ttk.Label(btn_row2, text="").pack(side=tk.LEFT, padx=(215, 0))
-
-        self._check_pr_btn = ttk.Button(
-            btn_row2, text="🔍 Check PR Status",
-            command=self._check_pr_status)
-        self._check_pr_btn.pack(side=tk.LEFT, padx=3)
 
         # H1: Merge PR button (standalone quick action)
         self._merge_pr_btn = ttk.Button(
