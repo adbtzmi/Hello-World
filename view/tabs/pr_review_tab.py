@@ -407,6 +407,9 @@ class PRReviewTab(BaseTab):
         if not commit_msg:
             commit_msg = f"[{issue_key}] Code changes"
 
+        # Read PR description (auto-generated if empty)
+        pr_description = self._pr_desc_text.get("1.0", tk.END).strip()
+
         validation_doc = self._validation_doc_var.get().strip() or None
 
         ctrl = self._get_controller()
@@ -441,6 +444,7 @@ class PRReviewTab(BaseTab):
             auto_merge=self._auto_merge_var.get(),
             auto_close_jira=self._auto_close_jira_var.get(),
             transition_name=self._transition_var.get(),
+            pr_description=pr_description,
             callback=self._on_pipeline_complete,
             phase_callback=self._on_phase_update,
         )

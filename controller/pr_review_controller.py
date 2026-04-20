@@ -263,6 +263,7 @@ class PRReviewController:
         auto_merge: bool,
         auto_close_jira: bool,
         transition_name: str,
+        pr_description: str = "",
         callback: Optional[Callable] = None,
         phase_callback: Optional[Callable] = None,
     ):
@@ -336,6 +337,7 @@ class PRReviewController:
                     transition_name=transition_name,
                     auto_merge=auto_merge,
                     auto_close_jira=auto_close_jira,
+                    pr_description=pr_description,
                     log_callback=self._log,
                     phase_callback=_safe_phase,
                     cancel_event=self._cancel_event,
