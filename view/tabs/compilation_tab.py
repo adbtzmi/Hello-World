@@ -153,7 +153,7 @@ class CompilationTab(BaseTab):
         list_frame.rowconfigure(0, weight=1)
 
         self._tester_listbox = tk.Listbox(list_frame, selectmode=tk.MULTIPLE,
-                                          height=4, exportselection=False,
+                                          height=7, exportselection=False,
                                           font=("Segoe UI", 9))
         self._tester_listbox.grid(row=0, column=0, sticky="nsew")
         self._tester_listbox.bind("<<ListboxSelect>>", self._on_tester_selected)
@@ -484,8 +484,9 @@ class CompilationTab(BaseTab):
 
         # Row 2: Cases list (Treeview for per-case toggles)
         cases_frame = ttk.Frame(ff_frame)
-        cases_frame.grid(row=2, column=0, columnspan=2, sticky="we", pady=(0, 4))
+        cases_frame.grid(row=2, column=0, columnspan=2, sticky="nswe", pady=(0, 4))
         cases_frame.columnconfigure(0, weight=1)
+        cases_frame.rowconfigure(1, weight=1)
 
         # A7: Instruction label for double-click toggle
         ttk.Label(cases_frame, text="💡 Double-click a row to enable/disable a case",
@@ -507,7 +508,7 @@ class CompilationTab(BaseTab):
 
         ff_scroll = ttk.Scrollbar(cases_frame, orient=tk.VERTICAL, command=self._ff_tree.yview)
         self._ff_tree.configure(yscrollcommand=ff_scroll.set)
-        self._ff_tree.grid(row=1, column=0, sticky="we")
+        self._ff_tree.grid(row=1, column=0, sticky="nsew")
         ff_scroll.grid(row=1, column=1, sticky="ns")
 
         # Row 3: Diff preview (collapsed by default)
@@ -691,7 +692,8 @@ class CompilationTab(BaseTab):
         """Compile the force-fail TGZ using patched repo."""
         issue_key = self.context.get_var("issue_var").get().strip().upper()
         repo_path = self.context.get_var("impl_repo_var").get().strip()
-        shared_folder = self.context.get_var("compile_raw_zip").get().strip().replace("\\RAW_ZIP", "")
+        _raw_zip = self.context.get_var("compile_raw_zip").get().strip()
+        shared_folder = os.path.dirname(_raw_zip.rstrip("/\\"))
         hostnames = self._get_selected_hostnames()
 
         if not hostnames:
@@ -962,7 +964,8 @@ class CompilationTab(BaseTab):
         issue_key = self.context.get_var("issue_var").get().strip().upper()
         # Original reads source_dir from impl_repo_var
         source_dir = self.context.get_var("impl_repo_var").get().strip()
-        shared_folder = self.context.get_var("compile_raw_zip").get().strip().replace("\\RAW_ZIP", "") # Hack to get parent
+        _raw_zip = self.context.get_var("compile_raw_zip").get().strip()
+        shared_folder = os.path.dirname(_raw_zip.rstrip("/\\"))
         label = self.context.get_var("tgz_label_var").get().strip()
         hostnames = self._get_selected_hostnames()
         testers = self._get_selected_testers()
@@ -1078,9 +1081,10 @@ class CompilationTab(BaseTab):
         raw_zip = self.context.get_var("compile_raw_zip").get().strip()
         release_tgz = self.context.get_var("compile_release_tgz").get().strip()
 
-        # Resolve repo_dir from the first selected tester's registry entry,
-        # falling back to a sensible default if nothing is selected.
-        repo_dir = r"C:\BENTO\adv_ibir_master"
+        # Resolve repo_dir from the selected tester's registry entry.
+        # Falls back to "" (no lock-file check) if the registry can't be read
+        # or no tester is registered — avoids checking a wrong hardcoded path.
+        repo_dir = self.context.config.get("default_repo_dir", "")
         try:
             registry_path = self.context.config.get(
                 "registry_path", r"P:\temp\BENTO\bento_testers.json")
@@ -1105,7 +1109,7 @@ class CompilationTab(BaseTab):
                     elif isinstance(first, list) and len(first) > 2:
                         repo_dir = first[2]
         except Exception:
-            pass  # keep default
+            pass  # keep whatever repo_dir resolved to above
 
         # 1. Folder Reachability
         if os.path.isdir(raw_zip):
@@ -1119,9 +1123,9 @@ class CompilationTab(BaseTab):
             self.health_release_lbl.config(text="❌ NOT REACHABLE: " + release_tgz, foreground="#dc3545")
 
         # 2. Watcher Process & Locks
-        lock_path = os.path.join(repo_dir, ".bento_build_lock")
+        lock_path = os.path.join(repo_dir, ".bento_build_lock") if repo_dir else ""
         local_lock_msg = ""
-        if os.path.exists(lock_path):
+        if lock_path and os.path.exists(lock_path):
             age = int(time.time() - os.path.getmtime(lock_path))
             local_lock_msg = f"Local lock ({age}s) "
 
@@ -1213,8 +1217,13 @@ class CompilationTab(BaseTab):
         now_str = datetime.datetime.now().strftime("%H:%M:%S")
         self._health_last_refresh_var.set(f"Auto-refresh active · Last updated: {now_str}")
 
-        # Auto-refresh loop — only when this tab is visible (Item 8)
-        self._schedule_health_refresh()
+        # Auto-refresh loop — scheduled in a try/finally so any earlier
+        # exception in _refresh_health cannot break the loop.
+        try:
+            self._schedule_health_refresh()
+        except Exception:
+            # Last-resort: keep the loop alive even if scheduling fails
+            self.after(30000, self._refresh_health)
 
     def _schedule_health_refresh(self):
         """Schedule next health refresh only if the Compilation sub-tab is

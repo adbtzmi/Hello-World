@@ -45,8 +45,9 @@ class PRReviewTab(BaseTab):
         # H2: Approval polling state
         self._polling_active = False
         self._poll_after_id = None       # root.after() handle for cancellation
-        self._poll_interval = 30         # seconds between polls
+        self._poll_interval = 30         # seconds between polls; configurable via settings.json → pr_review.poll_interval_seconds
         self._poll_countdown = 0         # seconds remaining until next poll
+        self._target_branch_user_edited = False  # True once user manually edits the target branch field
         self._poll_countdown_id = None   # root.after() handle for countdown tick
         # H3: Elapsed timer state
         self._elapsed_start: float = 0.0
@@ -181,12 +182,16 @@ class PRReviewTab(BaseTab):
 
         # Chip container (Improvement 3: shows added reviewers as removable tags)
         self._chip_frame = ttk.Frame(reviewer_outer)
-        self._chip_frame.grid(row=0, column=0, sticky="we", pady=(0, 3))
+        self._chip_frame.grid(row=0, column=0, columnspan=2, sticky="we", pady=(0, 3))
 
         # Search entry for autocomplete (below chips)
         self._reviewers_entry = ttk.Entry(
             reviewer_outer, textvariable=self._reviewers_var, width=48)
         self._reviewers_entry.grid(row=1, column=0, sticky="we")
+
+        # Clear All button — removes every reviewer chip at once
+        ttk.Button(reviewer_outer, text="✕ Clear", width=7,
+                   command=self._clear_all_chips).grid(row=1, column=1, padx=(4, 0))
 
         # Autocomplete dropdown (Listbox in a Toplevel — floats over the UI)
         self._ac_listbox: tk.Listbox | None = None
@@ -204,7 +209,7 @@ class PRReviewTab(BaseTab):
         # L5: Backspace in empty entry removes last reviewer chip
         self._reviewers_entry.bind("<BackSpace>", self._on_reviewer_backspace)
 
-        ttk.Label(config_frame, text="(Type to search, chips appear above)",
+        ttk.Label(config_frame, text="(Type 4+ chars to search; chips appear above)",
                   font=('Arial', 8), foreground='gray').grid(
             row=row, column=3, sticky=tk.W, padx=5)
         row += 1
@@ -253,11 +258,16 @@ class PRReviewTab(BaseTab):
         # PR Description (Improvement 2: editable multi-line description)
         ttk.Label(config_frame, text="PR Description:").grid(
             row=row, column=0, sticky=tk.NW, pady=3)
+        _pr_desc_frame = ttk.Frame(config_frame)
+        _pr_desc_frame.grid(row=row, column=1, sticky="we", pady=3, padx=5)
         self._pr_desc_text = tk.Text(
-            config_frame, height=3, width=50, wrap=tk.WORD,
+            _pr_desc_frame, height=3, width=50, wrap=tk.WORD,
             font=('Arial', 9))
-        self._pr_desc_text.grid(
-            row=row, column=1, sticky="we", pady=3, padx=5)
+        self._pr_desc_text.pack(fill=tk.X)
+        self._pr_desc_char_var = tk.StringVar(value="0 chars")
+        ttk.Label(_pr_desc_frame, textvariable=self._pr_desc_char_var,
+                  font=('Arial', 7), foreground='gray').pack(anchor='e')
+        self._pr_desc_text.bind("<<Modified>>", self._on_pr_desc_changed)
         ttk.Label(config_frame,
                   text="(Optional — auto-generated if empty)",
                   font=('Arial', 8), foreground='gray').grid(
@@ -308,12 +318,18 @@ class PRReviewTab(BaseTab):
         options_frame.grid(row=row, column=0, columnspan=4, sticky=tk.W, pady=5)
 
         self._auto_merge_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(options_frame, text="Auto-merge on approval",
-                        variable=self._auto_merge_var).pack(side=tk.LEFT, padx=(0, 15))
+        _auto_merge_cb = ttk.Checkbutton(options_frame, text="Auto-merge on approval",
+                                         variable=self._auto_merge_var)
+        _auto_merge_cb.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(_auto_merge_cb, "Automatically merge the PR once all reviewers approve.\n"
+                "Skips the manual '🔀 Merge PR' quick-action step.")
 
         self._auto_close_jira_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(options_frame, text="Auto-close JIRA after merge",
-                        variable=self._auto_close_jira_var).pack(side=tk.LEFT, padx=(0, 15))
+        _auto_close_cb = ttk.Checkbutton(options_frame, text="Auto-close JIRA after merge",
+                                         variable=self._auto_close_jira_var)
+        _auto_close_cb.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(_auto_close_cb, "Automatically transition the JIRA issue after PR merge.\n"
+                "Uses the 'JIRA Close Status' dropdown above.")
         row += 1
 
         # ══════════════════════════════════════════════════════════════════
@@ -393,7 +409,7 @@ class PRReviewTab(BaseTab):
             qa_row2, text="⏳ Poll Approval",
             command=self._toggle_polling)
         self._poll_btn.pack(side=tk.LEFT, padx=3)
-        ToolTip(self._poll_btn, "Auto-refresh PR approval status every 60s")
+        ToolTip(self._poll_btn, "Auto-refresh PR approval status every 30s\n(configurable via settings.json → pr_review.poll_interval_seconds)")
 
         # ══════════════════════════════════════════════════════════════════
         # SECTION 3: Pipeline Progress
@@ -457,7 +473,7 @@ class PRReviewTab(BaseTab):
         self._pipeline_progress.pack(fill=tk.X, pady=(2, 5))
 
         self._status_text = scrolledtext.ScrolledText(
-            progress_frame, height=8, width=80, wrap=tk.WORD,
+            progress_frame, height=12, width=80, wrap=tk.WORD,
             state=tk.DISABLED)
         self._status_text.pack(fill=tk.BOTH, expand=True, pady=(2, 5))
 
@@ -497,7 +513,7 @@ class PRReviewTab(BaseTab):
     def _get_min_reviewers(self) -> int:
         """M5: Read minimum reviewer count from settings.json (default 1)."""
         try:
-            with open("settings.json", "r") as f:
+            with open(self._settings_path(), "r") as f:
                 cfg = json.load(f)
             return int(cfg.get("pr_review", {}).get("min_reviewers", 1))
         except Exception:
@@ -559,12 +575,15 @@ class PRReviewTab(BaseTab):
         desc_preview = pr_description[:200] + "..." if len(pr_description) > 200 else pr_description
         desc_line = f"\nPR Description: {desc_preview}" if desc_preview else "\nPR Description: (auto-generated)"
         title_line = f"\nPR Title: {pr_title}" if pr_title else "\nPR Title: (auto-generated)"
+        _rev_display = ', '.join(reviewers[:5])
+        if len(reviewers) > 5:
+            _rev_display += f" ...and {len(reviewers) - 5} more"
         msg = (
             f"Run full PR pipeline?\n\n"
             f"JIRA: {issue_key}\n"
             f"Source: {source_branch}\n"
             f"Target: {target_branch}\n"
-            f"Reviewers: {', '.join(reviewers)}"
+            f"Reviewers: {_rev_display}"
             f"{title_line}"
             f"{desc_line}\n\n"
             f"Auto-merge: {'Yes' if self._auto_merge_var.get() else 'No'}\n"
@@ -803,7 +822,7 @@ class PRReviewTab(BaseTab):
             # Item 15: Mark all phases ✅ on success
             for lbl in self._phase_steps:
                 text = lbl.cget("text")
-                clean = text.lstrip("⬜✅🔄❌ ")
+                clean = re.sub(r'^[⬜✅🔄❌]\s*', '', text)
                 lbl.config(text=f"✅ {clean}", foreground='green')
 
             self._append_status(f"\n{'='*60}")
@@ -826,8 +845,7 @@ class PRReviewTab(BaseTab):
             completed_count = len(phases)
             for i, lbl in enumerate(self._phase_steps):
                 text = lbl.cget("text")
-                # Strip existing indicator prefix
-                clean = text.lstrip("⬜✅🔄❌ ")
+                clean = re.sub(r'^[⬜✅🔄❌]\s*', '', text)
                 if i < completed_count:
                     lbl.config(text=f"✅ {clean}", foreground='green')
                 elif i == completed_count and i < total_phases:
@@ -1009,16 +1027,22 @@ class PRReviewTab(BaseTab):
         self._status_text.configure(state=tk.NORMAL)
         self._status_text.delete("1.0", tk.END)
         self._status_text.configure(state=tk.DISABLED)
+        self._diff_btn.config(text="📊 View Diff")
 
     # ──────────────────────────────────────────────────────────────────────
     # L3: REMEMBER LAST USED SETTINGS
     # ──────────────────────────────────────────────────────────────────────
 
+    def _settings_path(self) -> str:
+        """Return the absolute path to settings.json (project root)."""
+        return os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "..", "settings.json")
+
     def _restore_last_settings(self):
         """L3: Restore last used settings (target branch, transition, auto-merge,
-        auto-close) from settings.json on tab init."""
+        auto-close, poll interval) from settings.json on tab init."""
         try:
-            with open("settings.json", "r") as f:
+            with open(self._settings_path(), "r") as f:
                 cfg = json.load(f)
             pr_cfg = cfg.get("pr_review", {})
 
@@ -1035,13 +1059,27 @@ class PRReviewTab(BaseTab):
 
             if "auto_close_jira" in pr_cfg:
                 self._auto_close_jira_var.set(bool(pr_cfg["auto_close_jira"]))
+
+            # Load configurable poll interval (minimum 10s to avoid API flooding)
+            poll_secs = pr_cfg.get("poll_interval_seconds", 30)
+            if isinstance(poll_secs, int) and poll_secs >= 10:
+                self._poll_interval = poll_secs
+
+            # Restore last used reviewer chips
+            last_reviewers = pr_cfg.get("last_reviewers", [])
+            if last_reviewers and isinstance(last_reviewers, list):
+                self._clear_all_chips()
+                for reviewer in last_reviewers:
+                    if isinstance(reviewer, str) and reviewer.strip():
+                        self._add_reviewer_chip(reviewer.strip())
         except Exception:
             pass
 
     def _save_last_settings(self):
         """L3: Save current settings to settings.json for next session."""
         try:
-            with open("settings.json", "r") as f:
+            settings_path = self._settings_path()
+            with open(settings_path, "r") as f:
                 cfg = json.load(f)
 
             pr_cfg = cfg.setdefault("pr_review", {})
@@ -1049,8 +1087,9 @@ class PRReviewTab(BaseTab):
             pr_cfg["last_transition"] = self._transition_var.get().strip()
             pr_cfg["auto_merge"] = self._auto_merge_var.get()
             pr_cfg["auto_close_jira"] = self._auto_close_jira_var.get()
+            pr_cfg["last_reviewers"] = list(self._reviewer_chips)
 
-            with open("settings.json", "w") as f:
+            with open(settings_path, "w") as f:
                 json.dump(cfg, f, indent=2)
         except Exception:
             pass
@@ -1120,9 +1159,11 @@ class PRReviewTab(BaseTab):
                                   result_holder: list,
                                   on_valid=None) -> None:
         """Complete branch validation on the main thread (non-blocking)."""
-        # Restore button
-        self._run_pipeline_btn.configure(state="normal",
-                                         text="▶ Run Full Pipeline")
+        # Restore button only when the pipeline is not already running
+        _ctrl = getattr(self.context.controller, 'pr_review_controller', None)
+        if not (_ctrl and _ctrl.is_running()):
+            self._run_pipeline_btn.configure(state="normal",
+                                             text="▶ Run Full Pipeline")
 
         # Already handled (timeout vs callback race)
         if getattr(self, '_branch_validation_done', False):
@@ -1385,15 +1426,19 @@ class PRReviewTab(BaseTab):
         Uses silent controller lookup (no error dialog) since this runs
         during startup when the controller may not be initialized yet.
         Also M3: auto-detect source branch from local git repo.
+
+        Target branch is only set when the user has not manually edited it,
+        preventing accidental overwrite of intentional user input on tab switch.
         """
         try:
             ctrl = getattr(self.context.controller, 'pr_review_controller', None)
             if ctrl:
                 branch = ctrl.get_target_branch_from_workflow()
-                if branch:
+                # Only auto-fill if user has not manually edited the branch field
+                if branch and not self._target_branch_user_edited:
                     self._target_branch_var.set(branch)
 
-                # M3: Auto-detect source branch
+                # M3: Auto-detect source branch (always refreshed — read-only display)
                 repo_path = ctrl.workflow.get_workflow_step("REPOSITORY_PATH")
                 if repo_path:
                     from model.orchestrators.pr_review_orchestrator import git_get_current_branch
@@ -1415,8 +1460,9 @@ class PRReviewTab(BaseTab):
         issue_key = self.context.get_var('issue_var').get().strip().upper()
         current_msg = self._commit_msg_text.get("1.0", tk.END).strip()
 
-        # Only auto-fill if the field is empty or matches the auto pattern
-        if not current_msg or current_msg.startswith("[") and current_msg.endswith("]"):
+        # Only auto-fill if field is empty or still contains an auto-generated
+        # pattern like "[KEY] Validation updates" (starts with a bracketed key)
+        if not current_msg or (current_msg.startswith("[") and "] " in current_msg):
             if issue_key and not issue_key.endswith("-"):
                 self._commit_msg_text.delete("1.0", tk.END)
                 self._commit_msg_text.insert("1.0", f"[{issue_key}] Validation updates")
@@ -1430,6 +1476,16 @@ class PRReviewTab(BaseTab):
                 # e.g. "[TSESSD-99999] Validation updates" → "Validation updates"
                 msg_clean = re.sub(r'^\[' + re.escape(issue_key) + r'\]\s*', '', msg)
                 self._pr_title_var.set(f"[{issue_key}] {msg_clean}" if msg_clean else f"[{issue_key}] Feature branch merge")
+
+    def _on_pr_desc_changed(self, _event=None):
+        """Update the live character counter below the PR description widget."""
+        try:
+            self._pr_desc_text.edit_modified(False)
+        except Exception:
+            pass
+        text = self._pr_desc_text.get("1.0", tk.END).rstrip("\n")
+        n = len(text)
+        self._pr_desc_char_var.set(f"{n} char{'s' if n != 1 else ''}")
 
     def _on_commit_msg_changed(self, _event=None):
         """Auto-sync PR title from the first line of the commit message.
@@ -1858,6 +1914,10 @@ class PRReviewTab(BaseTab):
                             "Control_L", "Control_R", "Alt_L", "Alt_R"):
             return
 
+        # Mark as user-edited so auto-populate doesn't overwrite on tab switch
+        if event.char and event.char.isprintable():
+            self._target_branch_user_edited = True
+
         # Cancel any pending debounce
         if self._branch_ac_debounce_id is not None:
             self.root.after_cancel(self._branch_ac_debounce_id)
@@ -1922,7 +1982,7 @@ class PRReviewTab(BaseTab):
         for branch in filtered:
             listbox.insert(tk.END, branch)
 
-        listbox.bind("<ButtonRelease-1>", self._branch_ac_on_click)
+        listbox.bind("<ButtonPress-1>", self._branch_ac_on_click)
         listbox.bind("<Return>", self._branch_ac_on_listbox_return)
         listbox.bind("<Escape>", self._hide_branch_autocomplete)
 
@@ -2123,7 +2183,11 @@ class PRReviewTab(BaseTab):
                 f"JIRA: {issue_key}\n"
                 f"Target: {target_branch}\n"
                 f"Last completed phase: {last_phase}\n\n"
-                f"Would you like to resume from where it left off?"
+                f"⚠ Note: resuming will restore your settings and let you\n"
+                f"re-run the pipeline. Phases already completed (e.g. file\n"
+                f"attachment, commits, PR creation) will run again — review\n"
+                f"the fields before clicking Run to avoid duplicates.\n\n"
+                f"Would you like to restore the saved state?"
             )
             if messagebox.askyesno("Resume Pipeline?", msg):
                 self._resume_pipeline(state)
