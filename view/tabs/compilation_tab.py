@@ -1634,11 +1634,11 @@ class AddTesterDialog:
         def open_guide():
             import os, sys, webbrowser
             from tkinter import messagebox
-            pdf_name = "BENTO_Watcher_Setup_Guide.pdf"
+            guide_name = "BENTO_Watcher_Setup_Guide.html"
             candidates = [
-                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), pdf_name),
-                os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), pdf_name),
-                os.path.join(os.getcwd(), pdf_name),
+                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), guide_name),
+                os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), guide_name),
+                os.path.join(os.getcwd(), guide_name),
             ]
             guide_path = None
             for path in candidates:
@@ -1646,16 +1646,13 @@ class AddTesterDialog:
                     guide_path = path
                     break
             if guide_path:
-                try:
-                    os.startfile(guide_path)
-                except Exception:
-                    webbrowser.open("file:///" + guide_path.replace("\\", "/"))
+                webbrowser.open("file:///" + guide_path.replace("\\", "/"))
             else:
                 messagebox.showwarning("Guide Not Found",
-                    f"Setup guide PDF not found.\n\nSearched:\n" +
+                    f"Setup guide not found.\n\nSearched:\n" +
                     "\n".join(candidates))
 
-        ttk.Button(self._checklist_frame, text="📄 Open Setup Guide (PDF)", command=open_guide).pack(anchor=tk.W, pady=(6, 0))
+        ttk.Button(self._checklist_frame, text="📄 Open Setup Guide", command=open_guide).pack(anchor=tk.W, pady=(6, 0))
 
         ttk.Separator(self.main_frame, orient="horizontal").grid(
             row=4, column=0, columnspan=3, sticky="we", pady=8)

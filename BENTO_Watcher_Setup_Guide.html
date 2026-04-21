@@ -1,0 +1,1089 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BENTO - Watcher Setup Guide</title>
+    <style>
+        /* ── Reset & Base ── */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html { scroll-behavior: smooth; }
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: #f0f2f5;
+            color: #333;
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* ── Sidebar Navigation ── */
+        #sidebar {
+            position: fixed;
+            top: 0; left: 0;
+            width: 270px;
+            height: 100vh;
+            background: #1a237e;
+            color: #fff;
+            overflow-y: auto;
+            padding: 0 0 30px 0;
+            z-index: 100;
+            box-shadow: 3px 0 12px rgba(0,0,0,0.18);
+            display: flex;
+            flex-direction: column;
+        }
+        #sidebar .sidebar-header {
+            background: #0d1757;
+            padding: 22px 20px 16px 20px;
+            border-bottom: 2px solid #e94560;
+        }
+        #sidebar .sidebar-header h2 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: 1px;
+            color: #fff;
+        }
+        #sidebar .sidebar-header p {
+            font-size: 0.72rem;
+            color: #aab4e8;
+            margin-top: 4px;
+        }
+        #sidebar nav { flex: 1; padding: 12px 0; }
+        #sidebar nav a {
+            display: block;
+            padding: 9px 20px 9px 24px;
+            color: #c5cae9;
+            text-decoration: none;
+            font-size: 0.88rem;
+            border-left: 3px solid transparent;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+            line-height: 1.4;
+        }
+        #sidebar nav a:hover,
+        #sidebar nav a.active {
+            background: rgba(233,69,96,0.15);
+            color: #fff;
+            border-left-color: #e94560;
+        }
+        #sidebar nav .nav-section {
+            padding: 14px 20px 4px 20px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: #7986cb;
+        }
+        #sidebar nav .nav-sub {
+            padding-left: 38px;
+            font-size: 0.82rem;
+            color: #9fa8da;
+        }
+        #sidebar nav .nav-sub:hover,
+        #sidebar nav .nav-sub.active {
+            color: #fff;
+        }
+        #sidebar .sidebar-footer {
+            padding: 14px 20px;
+            font-size: 0.72rem;
+            color: #7986cb;
+            border-top: 1px solid #283593;
+            text-align: center;
+        }
+
+        /* ── Main Content ── */
+        #content {
+            margin-left: 270px;
+            flex: 1;
+            padding: 40px 48px 60px 48px;
+            min-width: 0;
+        }
+
+        /* ── Page Header ── */
+        .page-header {
+            margin-bottom: 36px;
+            padding-bottom: 20px;
+            border-bottom: 3px solid #e94560;
+        }
+        .page-header h1 {
+            font-size: 2rem;
+            color: #1a237e;
+            font-weight: 800;
+        }
+        .page-header .subtitle {
+            color: #555;
+            margin-top: 6px;
+            font-size: 1rem;
+        }
+        .page-header .version-badge {
+            display: inline-block;
+            background: #e94560;
+            color: #fff;
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 2px 10px;
+            border-radius: 12px;
+            margin-left: 10px;
+            vertical-align: middle;
+        }
+
+        /* ── Section Headings ── */
+        .section { margin-bottom: 52px; }
+        .section h2 {
+            font-size: 1.45rem;
+            color: #0d47a1;
+            border-left: 5px solid #e94560;
+            padding-left: 14px;
+            margin-bottom: 18px;
+            margin-top: 0;
+        }
+        .section h3 {
+            font-size: 1.1rem;
+            color: #1565c0;
+            margin: 24px 0 10px 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .section h4 {
+            font-size: 0.97rem;
+            color: #283593;
+            margin: 16px 0 6px 0;
+        }
+
+        /* ── Cards / Steps ── */
+        .card {
+            background: #fff;
+            border-radius: 10px;
+            padding: 18px 22px;
+            margin: 12px 0;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+            border-left: 4px solid #1a237e;
+        }
+        .card.accent { border-left-color: #e94560; }
+        .step-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+            margin: 10px 0;
+        }
+        .step-num {
+            flex-shrink: 0;
+            background: #e94560;
+            color: #fff;
+            border-radius: 50%;
+            width: 30px; height: 30px;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 700;
+            font-size: 0.9rem;
+        }
+        .step-body { flex: 1; }
+        .step-body strong { display: block; margin-bottom: 4px; color: #1a237e; }
+
+        /* ── Tip / Warning / Error boxes ── */
+        .tip, .warning, .error-box, .info-box {
+            padding: 12px 16px;
+            margin: 12px 0;
+            border-radius: 0 8px 8px 0;
+            font-size: 0.92rem;
+        }
+        .tip    { background: #e8f5e9; border-left: 4px solid #4caf50; }
+        .warning{ background: #fff3e0; border-left: 4px solid #ff9800; }
+        .error-box { background: #fce4ec; border-left: 4px solid #e91e63; }
+        .info-box  { background: #e3f2fd; border-left: 4px solid #1976d2; }
+
+        /* ── Prereq badge ── */
+        .prereq {
+            display: inline-block;
+            background: #fff3e0;
+            border: 1px solid #ff9800;
+            color: #e65100;
+            font-size: 0.78rem;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 12px;
+            margin-bottom: 10px;
+        }
+
+        /* ── Tables ── */
+        table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 0.92rem; }
+        th, td { border: 1px solid #ddd; padding: 9px 13px; text-align: left; }
+        th { background: #1a237e; color: #fff; }
+        tr:nth-child(even) { background: #f5f5f5; }
+
+        /* ── Code ── */
+        code {
+            background: #e8eaf6;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            font-family: 'Consolas', 'Courier New', monospace;
+            color: #c62828;
+        }
+        pre {
+            background: #1a237e;
+            color: #e8eaf6;
+            padding: 14px 18px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 0.88rem;
+            margin: 10px 0;
+        }
+        pre code { background: none; color: inherit; padding: 0; }
+
+        /* ── Feature tag ── */
+        .feature-tag {
+            display: inline-block;
+            background: #1a237e;
+            color: #fff;
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 2px 9px;
+            border-radius: 10px;
+            margin-right: 6px;
+            vertical-align: middle;
+        }
+
+        /* ── Troubleshooting error entry ── */
+        .ts-entry {
+            background: #fff;
+            border-radius: 10px;
+            margin: 14px 0;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+            overflow: hidden;
+        }
+        .ts-entry .ts-header {
+            background: #fce4ec;
+            padding: 12px 18px;
+            font-weight: 700;
+            color: #b71c1c;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.97rem;
+        }
+        .ts-entry .ts-body {
+            padding: 14px 18px;
+        }
+        .ts-entry .ts-body dl { margin: 0; }
+        .ts-entry .ts-body dt {
+            font-weight: 700;
+            color: #1a237e;
+            margin-top: 10px;
+            font-size: 0.9rem;
+        }
+        .ts-entry .ts-body dd {
+            margin-left: 16px;
+            color: #444;
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+        .ts-entry .ts-body dd ul { margin: 4px 0 0 16px; }
+
+        /* ── Divider ── */
+        hr { border: none; border-top: 1px solid #e0e0e0; margin: 36px 0; }
+
+        /* ── Scroll-to-top ── */
+        #back-to-top {
+            position: fixed;
+            bottom: 28px; right: 28px;
+            background: #e94560;
+            color: #fff;
+            border: none;
+            border-radius: 50%;
+            width: 44px; height: 44px;
+            font-size: 1.3rem;
+            cursor: pointer;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.2);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+            transition: background 0.2s;
+        }
+        #back-to-top:hover { background: #c62828; }
+
+        /* ── Copy-able code blocks ── */
+        .code-block {
+            position: relative;
+            margin-top: 8px;
+            max-width: 100%;
+            box-sizing: border-box;
+        }
+        .code-block pre {
+            background: #1e1e2e;
+            color: #cdd6f4;
+            padding: 10px 14px;
+            padding-right: 90px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 0.88em;
+            margin: 0;
+            white-space: pre;
+            max-width: 100%;
+            box-sizing: border-box;
+        }
+        .copy-btn {
+            position: absolute;
+            top: 6px;
+            right: 8px;
+            background: #313244;
+            color: #cdd6f4;
+            border: 1px solid #45475a;
+            border-radius: 4px;
+            padding: 3px 9px;
+            font-size: 0.78em;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+            white-space: nowrap;
+        }
+        .copy-btn:hover { background: #45475a; }
+        .copy-btn.copied { background: #a6e3a1; color: #1e1e2e; border-color: #a6e3a1; }
+
+        /* ── Checklist ── */
+        .checklist {
+            list-style: none;
+            padding: 0;
+            margin: 10px 0;
+        }
+        .checklist li {
+            padding: 6px 0 6px 28px;
+            position: relative;
+            line-height: 1.5;
+        }
+        .checklist li::before {
+            content: '☐';
+            position: absolute;
+            left: 4px;
+            font-size: 1.1em;
+            color: #1a237e;
+        }
+
+        /* ── Architecture diagram ── */
+        .arch-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 14px;
+            margin: 14px 0;
+        }
+        .arch-box {
+            background: #e8eaf6;
+            border: 2px solid #7986cb;
+            border-radius: 8px;
+            padding: 16px;
+            text-align: center;
+        }
+        .arch-box .arch-title {
+            font-weight: 700;
+            color: #1a237e;
+            font-size: 0.95rem;
+            margin-bottom: 6px;
+        }
+        .arch-box .arch-desc {
+            font-size: 0.82rem;
+            color: #444;
+        }
+        .arch-arrow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            color: #e94560;
+        }
+
+        /* ── Responsive ── */
+        @media (max-width: 900px) {
+            #sidebar { width: 220px; }
+            #content { margin-left: 220px; padding: 24px 20px 40px 20px; }
+        }
+        @media (max-width: 650px) {
+            #sidebar { display: none; }
+            #content { margin-left: 0; padding: 20px 12px; }
+            .arch-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════
+     SIDEBAR NAVIGATION
+══════════════════════════════════════════════════════════ -->
+<aside id="sidebar">
+    <div class="sidebar-header">
+        <h2>🍱 BENTO</h2>
+        <p>Watcher Setup Guide</p>
+    </div>
+    <nav id="toc">
+        <!-- Overview -->
+        <span class="nav-section">Overview</span>
+        <a href="#overview">What is the Watcher?</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#files-reference">Files Reference</a>
+        <a href="#env-tokens">ENV Tokens</a>
+
+        <!-- Prerequisites -->
+        <span class="nav-section">Prerequisites</span>
+        <a href="#prerequisites">Checklist</a>
+
+        <!-- Installation -->
+        <span class="nav-section">Installation</span>
+        <a href="#step1">1 · Locate Watcher Files</a>
+        <a href="#step2">2 · Copy the TP Repository</a>
+        <a class="nav-sub" href="#step2a">↳ Part A — Tester Machine</a>
+        <a class="nav-sub" href="#step2b">↳ Part B — Local PC</a>
+        <a href="#step3">3 · Verify Cygwin &amp; make</a>
+        <a href="#step4">4 · Verify Tester Registry</a>
+
+        <!-- Running -->
+        <span class="nav-section">Running</span>
+        <a href="#step5">5 · Run Manually to Test</a>
+        <a href="#step6">6 · Task Scheduler Setup</a>
+
+        <!-- BENTO GUI -->
+        <span class="nav-section">BENTO GUI</span>
+        <a href="#step7">7 · Register Tester in BENTO</a>
+
+        <!-- Troubleshooting -->
+        <span class="nav-section">Troubleshooting</span>
+        <a href="#ts-zip">Watcher Not Picking Up ZIP</a>
+        <a href="#ts-build">Build Fails (make release)</a>
+        <a href="#ts-tgz">TGZ Not Appearing</a>
+        <a href="#ts-logs">Log File Locations</a>
+        <a href="#ts-contact">Contact / Escalation</a>
+    </nav>
+    <div class="sidebar-footer">BENTO v1.0 · Document v1.3</div>
+</aside>
+
+<!-- ══════════════════════════════════════════════════════════
+     MAIN CONTENT
+══════════════════════════════════════════════════════════ -->
+<main id="content">
+
+    <div class="page-header">
+        <h1>🍱 BENTO Tester Watcher Setup Guide <span class="version-badge">v1.3</span></h1>
+        <p class="subtitle">How to deploy and configure the BENTO watcher script on a new tester machine for automated TP compilation</p>
+        <p style="margin-top:8px; font-size:0.85rem; color:#888;">Micron Technology | SSD Firmware Test Engineering</p>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════
+         SECTION 1 — OVERVIEW
+    ══════════════════════════════════════════════════════ -->
+    <section class="section" id="overview-section">
+        <h2>📖 Overview</h2>
+
+        <div id="overview">
+            <h3>🔍 What is the BENTO Tester Watcher?</h3>
+            <div class="card">
+                <p>
+                    The <strong>BENTO Tester Watcher</strong> is a Python script that runs continuously on a tester machine (Advantest).
+                    It watches a shared network folder for incoming TP packages (ZIP files) generated by BENTO on the
+                    local PC, compiles them using <code>make release</code> (or <code>make release_supermicro</code> for CNFG), and places the
+                    resulting TGZ file back in the shared release folder.
+                </p>
+                <br>
+                <p>This guide covers:</p>
+                <ul style="margin-top:6px; padding-left:18px; line-height:1.8;">
+                    <li><strong>Prerequisites</strong> — what must exist on the tester before setup</li>
+                    <li><strong>Verifying the watcher files</strong> on the shared folder</li>
+                    <li><strong>Copying the TP repository</strong> to the local PC and tester machine</li>
+                    <li><strong>Verifying the shared folder</strong> connection</li>
+                    <li><strong>Running the watcher manually</strong> to test</li>
+                    <li><strong>Configuring Windows Task Scheduler</strong> for automatic startup</li>
+                    <li><strong>Adding the tester</strong> to the BENTO GUI</li>
+                    <li><strong>Troubleshooting</strong></li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Architecture -->
+        <div id="architecture">
+            <h3>🏗️ Architecture</h3>
+            <div class="card">
+                <p>Understanding the data flow helps diagnose issues:</p>
+                <br>
+                <div class="arch-grid">
+                    <div class="arch-box">
+                        <div class="arch-title">💻 Local PC</div>
+                        <div class="arch-desc">Runs BENTO GUI (<code>main.py</code>). Creates ZIP and drops it in <code>RAW_ZIP</code>.</div>
+                    </div>
+                    <div class="arch-box" style="border-color: #e94560;">
+                        <div class="arch-title">📁 Shared Folder</div>
+                        <div class="arch-desc"><code>P:\temp\BENTO\</code> — visible from both local PC and all testers.</div>
+                    </div>
+                    <div class="arch-box">
+                        <div class="arch-title">🖥️ Tester Machine</div>
+                        <div class="arch-desc">Runs <code>watcher_main.py</code>. Picks up ZIP, builds, copies TGZ to <code>RELEASE_TGZ</code>.</div>
+                    </div>
+                </div>
+                <br>
+                <table>
+                    <tr><th>Folder</th><th>Path</th><th>Purpose</th></tr>
+                    <tr><td><strong>RAW_ZIP</strong></td><td><code>P:\temp\BENTO\RAW_ZIP\</code></td><td>BENTO drops ZIPs here</td></tr>
+                    <tr><td><strong>RELEASE_TGZ</strong></td><td><code>P:\temp\BENTO\RELEASE_TGZ\</code></td><td>Tester places compiled TGZ here</td></tr>
+                </table>
+            </div>
+        </div>
+
+        <!-- Files Reference -->
+        <div id="files-reference">
+            <h3>📄 Files Reference</h3>
+            <div class="card">
+                <table>
+                    <tr><th>File</th><th>Description</th></tr>
+                    <tr><td><code>watcher_main.py</code></td><td>Entry point. Run with: <code>python watcher_main.py --env ABIT</code> (or SFN2 / CNFG)</td></tr>
+                    <tr><td><code>watcher_config.py</code></td><td>All paths and settings. Edit this for path changes.</td></tr>
+                    <tr><td><code>watcher_builder.py</code></td><td>Runs <code>make release</code> via Cygwin bash. Handles memory cleanup.</td></tr>
+                    <tr><td><code>watcher_copier.py</code></td><td>Binary copy of TGZ to shared release folder.</td></tr>
+                    <tr><td><code>watcher_lock.py</code></td><td>Lock file and build status logic.</td></tr>
+                </table>
+            </div>
+        </div>
+
+        <!-- ENV Tokens -->
+        <div id="env-tokens">
+            <h3>🏷️ ENV Tokens</h3>
+            <div class="card">
+                <p>Each tester is identified by both its <strong>hostname</strong> AND its <strong>ENV token</strong>. The watcher only picks up ZIPs whose filename contains <em>BOTH</em> this tester's hostname AND its ENV token. This means two testers sharing the same ENV (e.g. two ABIT testers) will never claim each other's ZIPs.</p>
+                <br>
+                <table>
+                    <tr><th>ENV Token</th><th>Tester Hostname</th><th>Build Command</th></tr>
+                    <tr><td><span class="feature-tag">ABIT</span></td><td>IBIR-0383</td><td><code>make release</code></td></tr>
+                    <tr><td><span class="feature-tag">SFN2</span></td><td>MPT3HVM-0156</td><td><code>make release</code></td></tr>
+                    <tr><td><span class="feature-tag">CNFG</span></td><td>CTOWTST-0031</td><td><code>make release_supermicro</code></td></tr>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <hr>
+
+    <!-- ══════════════════════════════════════════════════════
+         SECTION 2 — PREREQUISITES
+    ══════════════════════════════════════════════════════ -->
+    <section class="section" id="prerequisites">
+        <h2>✅ Prerequisites</h2>
+        <p>Before running any steps, confirm all of the following are true on the tester machine:</p>
+
+        <div class="card accent">
+            <h4>Checklist</h4>
+            <ul class="checklist">
+                <li>Cygwin is installed (typically <code>C:\cygwin64\</code>)</li>
+                <li><code>make</code>, <code>gcc</code>, and <code>bash</code> are available in Cygwin (check: <code>C:\cygwin64\bin\make.exe</code> exists)</li>
+                <li>The TP repo exists at <code>C:\BENTO\adv_ibir_master</code> on the tester (or your team's configured path)</li>
+                <li>The shared folder <code>P:\temp\BENTO</code> is accessible from the tester (P: drive mapped)</li>
+                <li><code>P:\temp\BENTO\RAW_ZIP\</code> and <code>P:\temp\BENTO\RELEASE_TGZ\</code> folders exist</li>
+                <li>Python is installed and accessible on Windows (run: <code>python --version</code> in Command Prompt)</li>
+                <li>You have VNC or remote desktop access to the tester</li>
+                <li>You have Administrator rights (needed for Task Scheduler)</li>
+            </ul>
+            <div class="info-box">ℹ If P: drive is not mapped on the tester, map it manually: open <strong>File Explorer → This PC → Map network drive</strong> → enter <code>\\server\temp\BENTO</code> as the target.</div>
+        </div>
+    </section>
+
+    <hr>
+
+    <!-- ══════════════════════════════════════════════════════
+         SECTION 3 — INSTALLATION
+    ══════════════════════════════════════════════════════ -->
+    <section class="section" id="installation">
+        <h2>📦 Installation</h2>
+
+        <!-- STEP 1 -->
+        <div id="step1">
+            <h3>📁 Step 1 · Locate the Watcher Files on the Shared Folder</h3>
+            <div class="card">
+                <p>All watcher files are already available on the shared network folder. You do <strong>NOT</strong> need to copy or transfer any files manually — every tester reads from the same location.</p>
+                <br>
+                <p>From the tester machine, verify you can see these files at:</p>
+                <div class="code-block">
+                    <button class="copy-btn" onclick="copyCode(this)">📋 Copy</button>
+                    <pre>P:\temp\BENTO\watcher\</pre>
+                </div>
+                <br>
+                <p><strong>Expected files:</strong></p>
+                <ul style="margin-top:6px; padding-left:18px; line-height:1.8;">
+                    <li><code>watcher_main.py</code> — entry point, run this to start the watcher</li>
+                    <li><code>watcher_config.py</code> — all paths and settings</li>
+                    <li><code>watcher_builder.py</code> — handles build execution</li>
+                    <li><code>watcher_copier.py</code> — handles TGZ copy to release folder</li>
+                    <li><code>watcher_lock.py</code> — manages lock and status files</li>
+                </ul>
+                <div class="info-box">ℹ If the files are not visible at <code>P:\temp\BENTO\watcher\</code>, check that the P: drive is mapped correctly on this tester. See the <a href="#prerequisites">Prerequisites</a> section for drive mapping instructions.</div>
+                <div class="tip">💡 There is no installation required. The watcher runs directly from the shared folder. All testers always use the latest version automatically.</div>
+            </div>
+        </div>
+
+        <!-- STEP 2 -->
+        <div id="step2">
+            <h3>📦 Step 2 · Copy the TP Repository</h3>
+            <div class="card accent">
+                <p>The shared folder contains a pre-configured copy of the TP repository at <code>P:\temp\BENTO\adv_ibir_master</code>. This copy has been specifically modified for compilation purposes (the Makefile tar compression was changed to use a pipe-based approach to prevent OOM kills on tester machines). <strong>You must use this copy — not the standard Bitbucket clone — for BENTO compilation.</strong></p>
+
+                <br>
+                <div id="step2a">
+                    <h4>Part A — Copy to the Tester Machine</h4>
+                    <p>From the tester machine, copy the TP repo from the shared folder to the local <code>C:\BENTO</code> directory:</p>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)">📋 Copy</button>
+                        <pre>xcopy /E /I /H P:\temp\BENTO\adv_ibir_master C:\BENTO\adv_ibir_master</pre>
+                    </div>
+                    <p style="margin-top:8px;">After copying, the tester repo dir will be <code>C:\BENTO\adv_ibir_master</code>. This is the path you will enter when registering the tester in <a href="#step7">Step 7</a>.</p>
+                </div>
+
+                <br>
+                <div id="step2b">
+                    <h4>Part B — Copy to the Local PC</h4>
+                    <p>From your local PC, copy the same repo to a local folder of your choice (e.g. <code>C:\Users\YourName\Repos\adv_ibir_master</code>):</p>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)">📋 Copy</button>
+                        <pre>xcopy /E /I /H P:\temp\BENTO\adv_ibir_master C:\Users\YourName\Repos\adv_ibir_master</pre>
+                    </div>
+                    <p style="margin-top:8px;">Then update the Repo Path in the BENTO GUI — go to the <strong>Implementation tab → AI Plan Generator tab</strong> → set the <strong>Local Repo Path</strong> field to the folder you just copied.</p>
+                </div>
+
+                <div class="warning">⚠ <strong>IMPORTANT — Two Separate Repo Paths:</strong> The copy from the shared folder is for <em>BENTO compilation only</em>. If you want to generate an Implementation Plan using the AI, you must switch back to your original Bitbucket-cloned repo path in the Implementation tab inside the AI Plan Generator tab. The shared folder copy uses a modified Makefile (different tar compression) optimised for tester compilation — it should not be used for code review or AI analysis.</div>
+            </div>
+        </div>
+
+        <!-- STEP 3 -->
+        <div id="step3">
+            <h3>🔧 Step 3 · Verify Cygwin and make are Available</h3>
+            <div class="card">
+                <p>The BENTO watcher uses Cygwin bash to run <code>make release</code>. Here is why both Cygwin and Windows Command Prompt are involved:</p>
+                <br>
+                <table>
+                    <tr><th>Question</th><th>Answer</th></tr>
+                    <tr><td><strong>Why Cygwin bash?</strong></td><td>The tools used to build TP packages (<code>make</code>, <code>gcc</code>, <code>ld</code>) are Cygwin tools. They live in <code>C:/cygwin64/bin/</code> and only work inside a Cygwin environment. Windows Command Prompt cannot find or run them.</td></tr>
+                    <tr><td><strong>Why not just use Cygwin?</strong></td><td>Cygwin bash itself consumes significant RAM on top of the already heavy <code>make release</code> build. On tester machines with limited memory, this can cause the OS to kill the process (OOM kill) before the TGZ copy completes.</td></tr>
+                    <tr><td><strong>What BENTO does</strong></td><td>BENTO calls Cygwin <code>bash -l</code> (login shell) to load the full Cygwin environment and PATH, runs <code>make release</code> inside it, then the bash process exits. The subsequent TGZ copy runs as a lightweight Python operation — much lower RAM, very unlikely to be OOM killed.</td></tr>
+                </table>
+                <br>
+                <p>To verify Cygwin and make are correctly installed, open a <strong>Windows Command Prompt</strong> on the tester and run:</p>
+                <div class="code-block">
+                    <button class="copy-btn" onclick="copyCode(this)">📋 Copy</button>
+                    <pre>REM Check Cygwin bash exists:
+dir C:\cygwin64\bin\bash.exe
+
+REM Check make is available inside Cygwin:
+C:\cygwin64\bin\bash.exe -lc "which make"
+REM Expected: /usr/bin/make
+
+C:\cygwin64\bin\bash.exe -lc "make --version"
+REM Expected: GNU Make 4.x or similar</pre>
+                </div>
+                <br>
+                <p>If <code>make</code> is not found, install it via Cygwin:</p>
+                <div class="step-row">
+                    <div class="step-num">1</div>
+                    <div class="step-body">Run <code>C:\cygwin64\setup.exe</code></div>
+                </div>
+                <div class="step-row">
+                    <div class="step-num">2</div>
+                    <div class="step-body">Search for <code>make</code> in the package list and select it for installation</div>
+                </div>
+                <div class="step-row">
+                    <div class="step-num">3</div>
+                    <div class="step-body">Also ensure these are installed: <code>gcc-core</code>, <code>gcc-g++</code>, <code>binutils</code></div>
+                </div>
+                <div class="info-box">ℹ If Cygwin is installed in a non-standard path (e.g. <code>C:\cygwin\</code> instead of <code>C:\cygwin64\</code>), update <code>find_cygwin_bash()</code> in <code>watcher_builder.py</code> to add your path.</div>
+            </div>
+        </div>
+
+        <!-- STEP 4 -->
+        <div id="step4">
+            <h3>📋 Step 4 · Verify the Tester Registry</h3>
+            <div class="card">
+                <p>Tester settings (hostname, repo path, and build command) are managed through the <strong>BENTO GUI</strong> — you do <strong>NOT</strong> need to edit <code>watcher_config.py</code> directly. The watcher loads its configuration automatically from <code>P:\temp\BENTO\bento_testers.json</code> at startup.</p>
+                <br>
+                <table>
+                    <tr><th>Setting</th><th>Value</th></tr>
+                    <tr><td>RAW_ZIP_FOLDER</td><td><code>P:\temp\BENTO\RAW_ZIP</code></td></tr>
+                    <tr><td>RELEASE_TGZ_FOLDER</td><td><code>P:\temp\BENTO\RELEASE_TGZ</code></td></tr>
+                    <tr><td>repo_dir (ABIT)</td><td><code>C:\BENTO\adv_ibir_master</code></td></tr>
+                    <tr><td>build_cmd (ABIT)</td><td><code>make release</code></td></tr>
+                    <tr><td>build_cmd (CNFG)</td><td><code>make release_supermicro</code></td></tr>
+                    <tr><td>POLL_INTERVAL</td><td>60 (seconds)</td></tr>
+                    <tr><td>LOG_DIR</td><td><code>C:\BENTO\logs</code></td></tr>
+                </table>
+                <div class="tip">💡 To verify the registry, open <code>P:\temp\BENTO\bento_testers.json</code> in Notepad and confirm this tester's entry is present with the correct <code>hostname</code>, <code>repo_dir</code>, and <code>build_cmd</code>. If it is missing or incorrect, use the <strong>+ Add Tester</strong> dialog in the BENTO GUI (<a href="#step7">Step 7</a>) to register the tester — the GUI writes the file automatically.</div>
+            </div>
+        </div>
+    </section>
+
+    <hr>
+
+    <!-- ══════════════════════════════════════════════════════
+         SECTION 4 — RUNNING THE WATCHER
+    ══════════════════════════════════════════════════════ -->
+    <section class="section" id="running">
+        <h2>▶️ Running the Watcher</h2>
+
+        <!-- STEP 5 -->
+        <div id="step5">
+            <h3>🧪 Step 5 · Run Manually to Test</h3>
+            <div class="card accent">
+                <p>Before setting up Task Scheduler, <strong>always run the watcher manually first</strong> to confirm it works.</p>
+                <br>
+                <p>Open a <strong>Windows Command Prompt</strong> on the tester and run:</p>
+                <div class="code-block">
+                    <button class="copy-btn" onclick="copyCode(this)">📋 Copy</button>
+                    <pre>cd P:\temp\BENTO\watcher
+
+# For ABIT tester:
+python watcher_main.py --env ABIT
+
+# For SFN2 tester:
+python watcher_main.py --env SFN2
+
+# For CNFG tester:
+python watcher_main.py --env CNFG</pre>
+                </div>
+                <br>
+                <p><strong>Expected startup output:</strong></p>
+                <div class="code-block">
+                    <pre>2026-03-12 08:17:22 | INFO     | ========================
+2026-03-12 08:17:22 | INFO     | BENTO Tester Watcher  |  Environment: ABIT
+2026-03-12 08:17:22 | INFO     | Hostname   : IBIR-0383
+2026-03-12 08:17:22 | INFO     | RAW_ZIP    : P:\temp\BENTO\RAW_ZIP
+2026-03-12 08:17:22 | INFO     | ========================
+2026-03-12 08:17:22 | INFO     | Startup lock cleanup done. Removed: 0
+2026-03-12 08:17:22 | INFO     | Watching P:\temp\BENTO\RAW_ZIP every 60s ...</pre>
+                </div>
+                <br>
+                <p>Now trigger a compile from BENTO on your local PC and watch the log output. If it completes successfully, proceed to <a href="#step6">Step 6</a>.</p>
+                <div class="info-box">ℹ Press <code>Ctrl+C</code> to stop the watcher after testing. It does NOT need to stay running during Task Scheduler setup.</div>
+            </div>
+        </div>
+
+        <!-- STEP 6 -->
+        <div id="step6">
+            <h3>⏰ Step 6 · Configure Windows Task Scheduler</h3>
+            <div class="card">
+                <p>Task Scheduler will start the watcher automatically whenever the tester reboots, running it in the background as an Administrator.</p>
+                <br>
+                <div class="step-row">
+                    <div class="step-num">1</div>
+                    <div class="step-body"><strong>Open Task Scheduler</strong> — Start → search 'Task Scheduler' → open</div>
+                </div>
+                <div class="step-row">
+                    <div class="step-num">2</div>
+                    <div class="step-body"><strong>Click 'Create Task...'</strong> (not 'Create Basic Task') in the right panel</div>
+                </div>
+                <br>
+
+                <h4>📋 General Tab</h4>
+                <ul style="margin-top:6px; padding-left:18px; line-height:1.8;">
+                    <li><strong>Name:</strong> <code>BENTO Watcher ABIT</code> (use your ENV)</li>
+                    <li><strong>Description:</strong> BENTO tester watcher for TP package compilation</li>
+                    <li>Select: <strong>'Run whether user is logged on or not'</strong></li>
+                    <li>Check: <strong>'Run with highest privileges'</strong></li>
+                    <li>Configure for: <strong>Windows 10</strong> or your OS version</li>
+                </ul>
+                <br>
+
+                <h4>⏱️ Triggers Tab</h4>
+                <ul style="margin-top:6px; padding-left:18px; line-height:1.8;">
+                    <li>Click <strong>New</strong> → Begin the task: <strong>'At startup'</strong></li>
+                    <li>Check: <strong>Enabled</strong></li>
+                    <li>Optional: add a <strong>60-second delay</strong> (allows network drives to map before watcher starts)</li>
+                </ul>
+                <br>
+
+                <h4>▶️ Actions Tab</h4>
+                <ul style="margin-top:6px; padding-left:18px; line-height:1.8;">
+                    <li>Click <strong>New</strong> → Action: <strong>'Start a program'</strong></li>
+                </ul>
+                <table style="margin-top:8px;">
+                    <tr><th>Field</th><th>Value</th></tr>
+                    <tr><td>Program/script</td><td><code>python</code></td></tr>
+                    <tr><td>Add arguments</td><td><code>watcher_main.py --env ABIT</code></td></tr>
+                    <tr><td>Start in (required)</td><td><code>P:\temp\BENTO\watcher</code></td></tr>
+                </table>
+                <br>
+
+                <h4>⚙️ Settings Tab</h4>
+                <ul style="margin-top:6px; padding-left:18px; line-height:1.8;">
+                    <li>Check: <strong>'Allow task to be run on demand'</strong></li>
+                    <li>If task is already running: <strong>'Do not start a new instance'</strong></li>
+                    <li>Uncheck: <strong>'Stop task if it runs longer than'</strong> (watcher runs indefinitely)</li>
+                </ul>
+                <br>
+                <p>Click <strong>OK</strong> and enter your Windows credentials when prompted.</p>
+                <div class="tip">💡 To verify the task runs: right-click it in Task Scheduler → <strong>Run</strong>. Check <code>C:\BENTO\logs\</code> for the watcher log file.</div>
+            </div>
+        </div>
+    </section>
+
+    <hr>
+
+    <!-- ══════════════════════════════════════════════════════
+         SECTION 5 — ADDING TESTER TO BENTO GUI
+    ══════════════════════════════════════════════════════ -->
+    <section class="section" id="bento-gui">
+        <h2>🖥️ Adding the Tester to BENTO GUI</h2>
+
+        <div id="step7">
+            <h3>➕ Step 7 · Register Tester in BENTO</h3>
+            <div class="card accent">
+                <p>Once the watcher is running on the tester, add it to the BENTO GUI so it appears in the dropdown:</p>
+                <br>
+                <div class="step-row">
+                    <div class="step-num">1</div>
+                    <div class="step-body"><strong>Open BENTO</strong> on your local PC</div>
+                </div>
+                <div class="step-row">
+                    <div class="step-num">2</div>
+                    <div class="step-body">Go to the <strong>Implementation tab</strong></div>
+                </div>
+                <div class="step-row">
+                    <div class="step-num">3</div>
+                    <div class="step-body">In the <strong>'Compile TP Package'</strong> section, click <strong>'+ Add Tester'</strong></div>
+                </div>
+                <div class="step-row">
+                    <div class="step-num">4</div>
+                    <div class="step-body">
+                        <strong>Fill in all four fields (all required):</strong>
+                        <ul style="margin-top:6px; padding-left:18px; line-height:1.8;">
+                            <li><strong>Tester Hostname:</strong> the machine name (e.g. <code>IBIR-0999</code>)</li>
+                            <li><strong>Environment:</strong> select <code>ABIT</code>, <code>SFN2</code>, or <code>CNFG</code></li>
+                            <li><strong>Repo Path:</strong> full path to the TP repo on this tester (e.g. <code>C:\BENTO\adv_ibir_master</code>) — use the 📁 button to browse</li>
+                            <li><strong>Build Command:</strong> select <code>make release</code> or <code>make release_supermicro</code> (CNFG always uses <code>make release_supermicro</code>)</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="step-row">
+                    <div class="step-num">5</div>
+                    <div class="step-body"><strong>Click 'Add Tester'</strong> — the button is disabled until all three preflight checkboxes are ticked</div>
+                </div>
+                <br>
+                <p>The new tester will appear in the dropdown immediately. The registry is saved locally next to <code>main.py</code> and synced to <code>P:\temp\BENTO\bento_testers.json</code> on the shared folder so the watcher can read it.</p>
+                <div class="info-box">ℹ Restart the watcher on the tester for it to pick up the new entry.</div>
+            </div>
+        </div>
+    </section>
+
+    <hr>
+
+    <!-- ══════════════════════════════════════════════════════
+         SECTION 6 — TROUBLESHOOTING
+    ══════════════════════════════════════════════════════ -->
+    <section class="section" id="troubleshooting">
+        <h2>🔧 Troubleshooting</h2>
+        <p style="margin-bottom:18px;">This section covers common issues, their likely causes, and how to fix them.</p>
+
+        <!-- Watcher does not pick up ZIP -->
+        <div id="ts-zip">
+            <h3>📦 Watcher Does Not Pick Up ZIP</h3>
+
+            <div class="ts-entry">
+                <div class="ts-header">❌ ZIP hostname / ENV mismatch</div>
+                <div class="ts-body"><dl>
+                    <dt>What to look for</dt>
+                    <dd>The watcher is running but ignores the ZIP file in <code>RAW_ZIP</code>.</dd>
+                    <dt>Likely cause</dt>
+                    <dd>ZIP filename must contain <strong>BOTH</strong> the tester hostname AND the ENV token. Format: <code>&lt;JIRA&gt;_&lt;HOSTNAME&gt;_&lt;ENV&gt;_&lt;DATE&gt;_&lt;TIME&gt;.zip</code> — e.g. <code>TSESSD-14270_IBIR-0383_ABIT_20260312_0832.zip</code> is only claimed by the watcher running <code>--env ABIT</code> on host <code>IBIR-0383</code>. A different ABIT tester (e.g. <code>IBIR-0999</code>) will not pick it up.</dd>
+                    <dt>How to fix</dt>
+                    <dd>Verify the ZIP filename matches the tester's hostname and ENV. Re-trigger the compile from BENTO with the correct tester selected.</dd>
+                </dl></div>
+            </div>
+
+            <div class="ts-entry">
+                <div class="ts-header">❌ Watcher not running</div>
+                <div class="ts-body"><dl>
+                    <dt>How to fix</dt>
+                    <dd>Check Task Scheduler → BENTO Watcher task status. Logs are in <code>C:\BENTO\logs\</code></dd>
+                </dl></div>
+            </div>
+
+            <div class="ts-entry">
+                <div class="ts-header">❌ P: drive not mapped</div>
+                <div class="ts-body"><dl>
+                    <dt>Likely cause</dt>
+                    <dd>The tester cannot see <code>RAW_ZIP</code>.</dd>
+                    <dt>How to fix</dt>
+                    <dd>Re-map the P: drive or check network connectivity. See <a href="#prerequisites">Prerequisites</a>.</dd>
+                </dl></div>
+            </div>
+
+            <div class="ts-entry">
+                <div class="ts-header">❌ Pre-existing ZIP</div>
+                <div class="ts-body"><dl>
+                    <dt>Likely cause</dt>
+                    <dd>If the watcher started <strong>AFTER</strong> the ZIP was dropped, it ignores it.</dd>
+                    <dt>How to fix</dt>
+                    <dd>Drop a new ZIP by re-triggering the compile from BENTO.</dd>
+                </dl></div>
+            </div>
+        </div>
+
+        <!-- Build fails -->
+        <div id="ts-build">
+            <h3>🔨 Build Fails (make release)</h3>
+
+            <div class="ts-entry">
+                <div class="ts-header">❌ make not found</div>
+                <div class="ts-body"><dl>
+                    <dt>Likely cause</dt>
+                    <dd>Cygwin bash cannot find <code>make</code>.</dd>
+                    <dt>How to fix</dt>
+                    <dd>Run: <code>C:\cygwin64\bin\bash.exe -lc 'which make'</code> — if not found, install it via Cygwin setup. See <a href="#step3">Step 3</a>.</dd>
+                </dl></div>
+            </div>
+
+            <div class="ts-entry">
+                <div class="ts-header">❌ Wrong repo path</div>
+                <div class="ts-body"><dl>
+                    <dt>How to fix</dt>
+                    <dd>Check <code>repo_dir</code> in <code>watcher_config.py</code>. Path must exist on the tester.</dd>
+                </dl></div>
+            </div>
+
+            <div class="ts-entry">
+                <div class="ts-header">❌ Build error</div>
+                <div class="ts-body"><dl>
+                    <dt>How to fix</dt>
+                    <dd>Check the build log in <code>C:\BENTO\logs\build_&lt;ZIP_NAME&gt;.log</code> for compiler errors.</dd>
+                </dl></div>
+            </div>
+
+            <div class="ts-entry">
+                <div class="ts-header">❌ OOM / killed</div>
+                <div class="ts-body"><dl>
+                    <dt>Likely cause</dt>
+                    <dd>The watcher sleeps before and after the build to give the OS time to reclaim RAM. If still failing, the tester may not have enough memory.</dd>
+                    <dt>How to fix</dt>
+                    <dd>Increase <code>PRE_BUILD_SLEEP_SECONDS</code> (pre-build) or <code>POST_BUILD_SLEEP_SECONDS</code> (post-build) in <code>watcher_config.py</code>.</dd>
+                </dl></div>
+            </div>
+        </div>
+
+        <!-- TGZ not appearing -->
+        <div id="ts-tgz">
+            <h3>📤 TGZ Not Appearing in RELEASE_TGZ</h3>
+
+            <div class="ts-entry">
+                <div class="ts-header">❌ Copy failed</div>
+                <div class="ts-body"><dl>
+                    <dt>How to fix</dt>
+                    <dd>Check watcher log for <code>'Binary copy failed'</code>. Verify write permission on <code>P:\temp\BENTO\RELEASE_TGZ</code>.</dd>
+                </dl></div>
+            </div>
+
+            <div class="ts-entry">
+                <div class="ts-header">❌ Wrong folder</div>
+                <div class="ts-body"><dl>
+                    <dt>Likely cause</dt>
+                    <dd>TGZ is in <code>RELEASE_TGZ\TSESSD-14270_ABIT\</code> subfolder, not the root.</dd>
+                </dl></div>
+            </div>
+
+            <div class="ts-entry">
+                <div class="ts-header">❌ Size mismatch</div>
+                <div class="ts-body"><dl>
+                    <dt>Likely cause</dt>
+                    <dd>Watcher verifies copy size. If mismatch, it removes the partial file and logs an error.</dd>
+                    <dt>How to fix</dt>
+                    <dd>Check the watcher log for details and re-trigger the build.</dd>
+                </dl></div>
+            </div>
+        </div>
+
+        <!-- Log File Locations -->
+        <div id="ts-logs">
+            <h3>📄 Log File Locations</h3>
+            <div class="card">
+                <table>
+                    <tr><th>Log Type</th><th>Location</th></tr>
+                    <tr><td>Watcher log</td><td><code>C:\BENTO\logs\watcher_ABIT_&lt;DATE&gt;.log</code></td></tr>
+                    <tr><td>Build log</td><td><code>C:\BENTO\logs\build_&lt;ZIP_NAME&gt;.log</code></td></tr>
+                    <tr><td>Status file</td><td><code>P:\temp\BENTO\RAW_ZIP\&lt;ZIP_NAME&gt;.zip.bento_status</code> — persists after build (success and failure) so the BENTO GUI health panel can always read the latest result. Files older than 7 days are deleted automatically on watcher startup.</td></tr>
+                    <tr><td>Tester registry</td><td>Local: <code>bento_testers.json</code> next to <code>main.py</code> / Shared: <code>P:\temp\BENTO\bento_testers.json</code> (watcher reads from shared copy)</td></tr>
+                </table>
+            </div>
+        </div>
+
+        <!-- Contact / Escalation -->
+        <div id="ts-contact">
+            <h3>📧 Contact / Escalation</h3>
+            <div class="card">
+                <p>If you are unable to resolve the issue after following this guide:</p>
+                <ul style="margin-top:6px; padding-left:18px; line-height:1.8;">
+                    <li>Check the <code>bento_status</code> sidecar file — it contains the last error message from the tester</li>
+                    <li>Share the build log (<code>C:\BENTO\logs\build_*.log</code>) with your team lead</li>
+                    <li>Provide the watcher log for the relevant session</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <hr>
+    <p style="text-align:center; color:#888; font-size:0.88em; padding-bottom:20px;">
+        BENTO v1.0 · Micron Technology · SSD Firmware Test Engineering
+    </p>
+
+</main>
+
+<!-- Back to top button -->
+<button id="back-to-top" title="Back to top">↑</button>
+
+<script>
+    // ── Active nav link highlighting ──
+    const sections = document.querySelectorAll('[id]');
+    const navLinks = document.querySelectorAll('#toc a');
+
+    function setActiveLink() {
+        let current = '';
+        sections.forEach(sec => {
+            const top = sec.getBoundingClientRect().top;
+            if (top <= 120) current = sec.id;
+        });
+        navLinks.forEach(link => {
+            link.classList.remove('active');
+            if (link.getAttribute('href') === '#' + current) {
+                link.classList.add('active');
+            }
+        });
+    }
+
+    // ── Back to top ──
+    const btn = document.getElementById('back-to-top');
+    window.addEventListener('scroll', () => {
+        setActiveLink();
+        btn.style.display = window.scrollY > 300 ? 'flex' : 'none';
+    }, { passive: true });
+    btn.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+
+    // ── Smooth scroll offset for fixed sidebar ──
+    document.querySelectorAll('#toc a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener('click', function(e) {
+            e.preventDefault();
+            const target = document.querySelector(this.getAttribute('href'));
+            if (target) {
+                const offset = 24;
+                const top = target.getBoundingClientRect().top + window.scrollY - offset;
+                window.scrollTo({ top, behavior: 'smooth' });
+            }
+        });
+    });
+
+    // ── Copy code blocks ──
+    function copyCode(btn) {
+        const pre = btn.closest('.code-block').querySelector('pre');
+        const tmp = document.createElement('textarea');
+        tmp.value = pre.innerText;
+        document.body.appendChild(tmp);
+        tmp.select();
+        try {
+            document.execCommand('copy');
+        } catch(e) {
+            navigator.clipboard && navigator.clipboard.writeText(tmp.value);
+        }
+        document.body.removeChild(tmp);
+        btn.textContent = '✅ Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+            btn.textContent = '📋 Copy';
+            btn.classList.remove('copied');
+        }, 2000);
+    }
+</script>
+</body>
+</html>
