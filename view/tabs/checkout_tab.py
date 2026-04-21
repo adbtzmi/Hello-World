@@ -153,6 +153,9 @@ class CheckoutTab(BaseTab):
         self._redo_stack: List[List[Dict]] = []
         self._max_undo = 30
 
+        # Item 19: debounce id for tester-column sync
+        self._sync_tester_after_id = None
+
         # ── Checkout State Machine ────────────────────────────────────
         self._checkout_state = CheckoutState.IDLE
 
@@ -597,6 +600,9 @@ class CheckoutTab(BaseTab):
         idx = self._get_selected_row_idx()
         if idx < 0:
             self.show_error("No Selection", "Select a row to remove.")
+            self._profile_status_label.configure(
+                text="Click a row in the table to select it first.",
+                foreground="#ca5010")
             return
         self._push_undo_snapshot()
         if 0 <= idx < len(self._profile_data):
@@ -898,6 +904,14 @@ class CheckoutTab(BaseTab):
             filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")])
         if not path:
             return
+        # Item 22: warn before overwriting an existing profile table
+        if self._profile_data:
+            if not messagebox.askyesno(
+                "Overwrite Profile",
+                f"The current profile has {len(self._profile_data)} row(s).\n"
+                "Importing will replace all rows. Continue?",
+            ):
+                return
         # Update the Excel File path to the selected file
         self.context.get_var('checkout_excel_path').set(path)
         self._push_undo_snapshot()
@@ -1130,6 +1144,9 @@ class CheckoutTab(BaseTab):
         self._refresh_profile_grid()
         self._update_profile_status()
         self._validate_profile_realtime()
+        # Item 21: ensure row-count label is always current after paste
+        self._profile_row_count_label.configure(
+            text=f"{len(self._profile_data)} row(s)")
 
         # Show feedback
         n_rows = len(rows_data)
@@ -1413,6 +1430,13 @@ class CheckoutTab(BaseTab):
 
         def _reset_defaults():
             """Clear all and re-populate with defaults."""
+            if entries_tree.get_children():
+                if not messagebox.askyesno(
+                    "Reset Defaults",
+                    "This will clear all current entries and restore defaults.\nContinue?",
+                    parent=dialog,
+                ):
+                    return
             for child in entries_tree.get_children():
                 entries_tree.delete(child)
             fresh_defaults = self._get_default_temptraveler_attrs(row_idx)
@@ -1472,7 +1496,7 @@ class CheckoutTab(BaseTab):
             var = tk.BooleanVar(value=False)
             self._tester_vars[hostname] = var
             # Auto-fill Tester column when checkbox is toggled
-            var.trace_add("write", lambda *_a: self._sync_tester_column())
+            var.trace_add("write", lambda *_a: self._debounce_sync_tester())
 
             ttk.Checkbutton(self._tester_frame,
                              text=f"{hostname}  ({env})",
@@ -1492,6 +1516,11 @@ class CheckoutTab(BaseTab):
 
         # Sync tester column with the initial checkbox state
         self._sync_tester_column()
+
+    def _debounce_sync_tester(self):
+        if self._sync_tester_after_id:
+            self.after_cancel(self._sync_tester_after_id)
+        self._sync_tester_after_id = self.after(50, self._sync_tester_column)
 
     def _sync_tester_column(self):
         """Update the 'Tester' column in profile rows that haven't been manually edited.
@@ -1672,7 +1701,8 @@ class CheckoutTab(BaseTab):
             if not has_mid:
                 errors.append("No MID specified in any profile row.")
         if errors:
-            self.show_error("Validation Error",
+            _title = "Validation Error" if len(errors) == 1 else "Validation Errors"
+            self.show_error(_title,
                             "Please fix the following before starting checkout:\n\n"
                             + "\n".join(f"• {e}" for e in errors))
             return None
