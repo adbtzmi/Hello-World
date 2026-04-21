@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BENTO - Teams Webhook Setup Guide</title>
+    <style>
+        /* ── Reset & Base ── */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html { scroll-behavior: smooth; }
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: #f0f2f5;
+            color: #333;
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* ── Sidebar Navigation ── */
+        #sidebar {
+            position: fixed;
+            top: 0; left: 0;
+            width: 270px;
+            height: 100vh;
+            background: #1a237e;
+            color: #fff;
+            overflow-y: auto;
+            padding: 0 0 30px 0;
+            z-index: 100;
+            box-shadow: 3px 0 12px rgba(0,0,0,0.18);
+            display: flex;
+            flex-direction: column;
+        }
+        #sidebar .sidebar-header {
+            background: #0d1757;
+            padding: 22px 20px 16px 20px;
+            border-bottom: 2px solid #e94560;
+        }
+        #sidebar .sidebar-header h2 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: 1px;
+            color: #fff;
+        }
+        #sidebar .sidebar-header p {
+            font-size: 0.72rem;
+            color: #aab4e8;
+            margin-top: 4px;
+        }
+        #sidebar nav { flex: 1; padding: 12px 0; }
+        #sidebar nav a {
+            display: block;
+            padding: 9px 20px 9px 24px;
+            color: #c5cae9;
+            text-decoration: none;
+            font-size: 0.88rem;
+            border-left: 3px solid transparent;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+            line-height: 1.4;
+        }
+        #sidebar nav a:hover,
+        #sidebar nav a.active {
+            background: rgba(233,69,96,0.15);
+            color: #fff;
+            border-left-color: #e94560;
+        }
+        #sidebar nav .nav-section {
+            padding: 14px 20px 4px 20px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: #7986cb;
+        }
+        #sidebar nav .nav-sub {
+            padding-left: 38px;
+            font-size: 0.82rem;
+            color: #9fa8da;
+        }
+        #sidebar nav .nav-sub:hover,
+        #sidebar nav .nav-sub.active {
+            color: #fff;
+        }
+        #sidebar .sidebar-footer {
+            padding: 14px 20px;
+            font-size: 0.72rem;
+            color: #7986cb;
+            border-top: 1px solid #283593;
+            text-align: center;
+        }
+
+        /* ── Main Content ── */
+        #content {
+            margin-left: 270px;
+            flex: 1;
+            padding: 40px 48px 60px 48px;
+            min-width: 0;
+        }
+
+        /* ── Page Header ── */
+        .page-header {
+            margin-bottom: 36px;
+            padding-bottom: 20px;
+            border-bottom: 3px solid #e94560;
+        }
+        .page-header h1 {
+            font-size: 2rem;
+            color: #1a237e;
+            font-weight: 800;
+        }
+        .page-header .subtitle {
+            color: #555;
+            margin-top: 6px;
+            font-size: 1rem;
+        }
+        .page-header .version-badge {
+            display: inline-block;
+            background: #e94560;
+            color: #fff;
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 2px 10px;
+            border-radius: 12px;
+            margin-left: 10px;
+            vertical-align: middle;
+        }
+
+        /* ── Section Headings ── */
+        .section { margin-bottom: 52px; }
+        .section h2 {
+            font-size: 1.45rem;
+            color: #0d47a1;
+            border-left: 5px solid #e94560;
+            padding-left: 14px;
+            margin-bottom: 18px;
+            margin-top: 0;
+        }
+        .section h3 {
+            font-size: 1.1rem;
+            color: #1565c0;
+            margin: 24px 0 10px 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .section h4 {
+            font-size: 0.97rem;
+            color: #283593;
+            margin: 16px 0 6px 0;
+        }
+
+        /* ── Cards / Steps ── */
+        .card {
+            background: #fff;
+            border-radius: 10px;
+            padding: 18px 22px;
+            margin: 12px 0;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+            border-left: 4px solid #1a237e;
+        }
+        .card.accent { border-left-color: #e94560; }
+        .step-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+            margin: 10px 0;
+        }
+        .step-num {
+            flex-shrink: 0;
+            background: #e94560;
+            color: #fff;
+            border-radius: 50%;
+            width: 30px; height: 30px;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 700;
+            font-size: 0.9rem;
+        }
+        .step-body { flex: 1; }
+        .step-body strong { display: block; margin-bottom: 4px; color: #1a237e; }
+
+        /* ── Tip / Warning / Error boxes ── */
+        .tip, .warning, .error-box, .info-box {
+            padding: 12px 16px;
+            margin: 12px 0;
+            border-radius: 0 8px 8px 0;
+            font-size: 0.92rem;
+        }
+        .tip    { background: #e8f5e9; border-left: 4px solid #4caf50; }
+        .warning{ background: #fff3e0; border-left: 4px solid #ff9800; }
+        .error-box { background: #fce4ec; border-left: 4px solid #e91e63; }
+        .info-box  { background: #e3f2fd; border-left: 4px solid #1976d2; }
+
+        /* ── Tables ── */
+        table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 0.92rem; }
+        th, td { border: 1px solid #ddd; padding: 9px 13px; text-align: left; }
+        th { background: #1a237e; color: #fff; }
+        tr:nth-child(even) { background: #f5f5f5; }
+
+        /* ── Code ── */
+        code {
+            background: #e8eaf6;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            font-family: 'Consolas', 'Courier New', monospace;
+            color: #c62828;
+        }
+
+        /* ── Feature tag ── */
+        .feature-tag {
+            display: inline-block;
+            background: #1a237e;
+            color: #fff;
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 2px 9px;
+            border-radius: 10px;
+            margin-right: 6px;
+            vertical-align: middle;
+        }
+
+        /* ── Screenshot images ── */
+        .screenshot {
+            display: block;
+            max-width: 100%;
+            border-radius: 8px;
+            border: 2px solid #ddd;
+            margin: 14px 0;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.10);
+        }
+
+        /* ── Troubleshooting error entry ── */
+        .ts-entry {
+            background: #fff;
+            border-radius: 10px;
+            margin: 14px 0;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+            overflow: hidden;
+        }
+        .ts-entry .ts-header {
+            background: #fce4ec;
+            padding: 12px 18px;
+            font-weight: 700;
+            color: #b71c1c;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.97rem;
+        }
+        .ts-entry .ts-body {
+            padding: 14px 18px;
+        }
+        .ts-entry .ts-body dl { margin: 0; }
+        .ts-entry .ts-body dt {
+            font-weight: 700;
+            color: #1a237e;
+            margin-top: 10px;
+            font-size: 0.9rem;
+        }
+        .ts-entry .ts-body dd {
+            margin-left: 16px;
+            color: #444;
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+        .ts-entry .ts-body dd ul { margin: 4px 0 0 16px; }
+
+        /* ── Divider ── */
+        hr { border: none; border-top: 1px solid #e0e0e0; margin: 36px 0; }
+
+        /* ── Scroll-to-top ── */
+        #back-to-top {
+            position: fixed;
+            bottom: 28px; right: 28px;
+            background: #e94560;
+            color: #fff;
+            border: none;
+            border-radius: 50%;
+            width: 44px; height: 44px;
+            font-size: 1.3rem;
+            cursor: pointer;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.2);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+            transition: background 0.2s;
+        }
+        #back-to-top:hover { background: #c62828; }
+
+        /* ── Responsive ── */
+        @media (max-width: 900px) {
+            #sidebar { width: 220px; }
+            #content { margin-left: 220px; padding: 24px 20px 40px 20px; }
+        }
+        @media (max-width: 650px) {
+            #sidebar { display: none; }
+            #content { margin-left: 0; padding: 20px 12px; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════
+     SIDEBAR NAVIGATION
+══════════════════════════════════════════════════════════ -->
+<aside id="sidebar">
+    <div class="sidebar-header">
+        <h2>🍱 BENTO</h2>
+        <p>Teams Webhook Setup Guide</p>
+    </div>
+    <nav id="toc">
+        <!-- Overview -->
+        <span class="nav-section">Overview</span>
+        <a href="#overview">What is this Guide?</a>
+        <a href="#prerequisites">Prerequisites</a>
+
+        <!-- Create the Workflow -->
+        <span class="nav-section">Create the Workflow</span>
+        <a href="#step1">1 · Open Workflows App</a>
+        <a href="#step2">2 · Build From Scratch</a>
+        <a href="#step3">3 · Select a Trigger</a>
+        <a href="#step4">4 · Go to Power Automate</a>
+        <a href="#step5">5 · Confirm Power Automate</a>
+
+        <!-- Configure the Trigger -->
+        <span class="nav-section">Configure the Trigger</span>
+        <a href="#step6">6 · Search for Webhook</a>
+        <a href="#step7">7 · Choose Webhook Trigger</a>
+        <a href="#step8">8 · Configure Trigger URL</a>
+        <a href="#step9">9 · Set Trigger Permissions</a>
+
+        <!-- Add the Action -->
+        <span class="nav-section">Add the Action</span>
+        <a href="#step10">10 · Add a New Step</a>
+        <a href="#step11">11 · Search Post Card Action</a>
+        <a href="#step12">12 · Set 'Post as'</a>
+        <a href="#step13">13 · Set 'Post in'</a>
+        <a href="#step14">14 · Configure Recipient &amp; Card</a>
+        <a href="#step15">15 · Apply to Each Loop</a>
+
+        <!-- Save & Get URL -->
+        <span class="nav-section">Save &amp; Get URL</span>
+        <a href="#step16">16 · Save the Flow</a>
+        <a href="#step17">17 · View Your Workflows</a>
+        <a href="#step18">18 · Copy Webhook Link</a>
+
+        <!-- Troubleshooting -->
+        <span class="nav-section">Troubleshooting</span>
+        <a href="#ts-common">Common Issues</a>
+    </nav>
+    <div class="sidebar-footer">BENTO v1.0 · Document v1.0</div>
+</aside>
+
+<!-- ══════════════════════════════════════════════════════════
+     MAIN CONTENT
+══════════════════════════════════════════════════════════ -->
+<main id="content">
+
+    <div class="page-header">
+        <h1>🍱 BENTO Teams Webhook Setup Guide <span class="version-badge">v1.0</span></h1>
+        <p class="subtitle">How to create a Microsoft Teams webhook for receiving BENTO compilation notifications</p>
+        <p style="margin-top:8px; font-size:0.85rem; color:#888;">Micron Technology | SSD Firmware Test Engineering</p>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════
+         SECTION 1 — OVERVIEW
+    ══════════════════════════════════════════════════════ -->
+    <section class="section" id="overview-section">
+        <h2>📖 Overview</h2>
+
+        <div id="overview">
+            <h3>🔍 What is this Guide?</h3>
+            <div class="card">
+                <p>
+                    This guide walks you through creating a <strong>Microsoft Teams webhook</strong> using <strong>Power Automate</strong>
+                    so that <strong>BENTO</strong> can send compilation status notifications directly to your Teams chat.
+                    When a TP package compilation completes (success or failure), BENTO will send an Adaptive Card
+                    to the configured webhook URL, which Power Automate delivers as a Teams message.
+                </p>
+                <br>
+                <p>This guide covers:</p>
+                <ul style="margin-top:6px; padding-left:18px; line-height:1.8;">
+                    <li><strong>Creating a Power Automate workflow</strong> from Microsoft Teams</li>
+                    <li><strong>Configuring the webhook trigger</strong> to accept external requests</li>
+                    <li><strong>Adding the "Post card" action</strong> to deliver Adaptive Cards</li>
+                    <li><strong>Saving the flow</strong> and copying the webhook URL for use in BENTO</li>
+                </ul>
+                <div class="info-box">ℹ The entire setup takes approximately <strong>5–10 minutes</strong>. Each step includes a screenshot for reference.</div>
+            </div>
+        </div>
+
+        <div id="prerequisites">
+            <h3>✅ Prerequisites</h3>
+            <div class="card accent">
+                <ul style="padding-left:18px; line-height:1.8;">
+                    <li>Microsoft Teams desktop or web app</li>
+                    <li>Access to the <strong>Workflows</strong> app in Teams</li>
+                    <li>Access to <strong>Power Automate</strong> (included with most Microsoft 365 licenses)</li>
+                    <li>Permission to create flows in your organization</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <hr>
+
+    <!-- ══════════════════════════════════════════════════════
+         SECTION 2 — CREATE THE WORKFLOW (Steps 1–5)
+    ══════════════════════════════════════════════════════ -->
+    <section class="section" id="create-workflow">
+        <h2>🔧 Create the Workflow</h2>
+
+        <!-- STEP 1 -->
+        <div id="step1">
+            <h3><span class="feature-tag">Step 1</span> Open Workflows App</h3>
+            <div class="card">
+                <div class="step-row">
+                    <div class="step-num">1</div>
+                    <div class="step-body">
+                        <strong>Open Microsoft Teams</strong>
+                        Click on the <strong>'Apps'</strong> icon on the left menu (or the three dots <strong>⋯</strong>) and search for <strong>'Workflows'</strong>. Select the Workflows app.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 080007.png" alt="Step 1 - Open Workflows App" class="screenshot">
+            </div>
+        </div>
+
+        <!-- STEP 2 -->
+        <div id="step2">
+            <h3><span class="feature-tag">Step 2</span> Build From Scratch</h3>
+            <div class="card">
+                <div class="step-row">
+                    <div class="step-num">2</div>
+                    <div class="step-body">
+                        <strong>Click 'Build from scratch'</strong>
+                        In the Workflows app, look for the <strong>'Build from scratch'</strong> button near the top right and click on it.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 080028.png" alt="Step 2 - Build From Scratch" class="screenshot">
+            </div>
+        </div>
+
+        <!-- STEP 3 -->
+        <div id="step3">
+            <h3><span class="feature-tag">Step 3</span> Select a Trigger</h3>
+            <div class="card">
+                <div class="step-row">
+                    <div class="step-num">3</div>
+                    <div class="step-body">
+                        <strong>Open the trigger dropdown</strong>
+                        You will be presented with a <strong>'New workflow'</strong> screen. Click on the <strong>'/select a trigger'</strong> dropdown.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 080045.png" alt="Step 3 - Select a Trigger" class="screenshot">
+            </div>
+        </div>
+
+        <!-- STEP 4 -->
+        <div id="step4">
+            <h3><span class="feature-tag">Step 4</span> Go to Power Automate</h3>
+            <div class="card">
+                <div class="step-row">
+                    <div class="step-num">4</div>
+                    <div class="step-body">
+                        <strong>Select Power Automate option</strong>
+                        From the dropdown menu, click on the <strong>'Build with Power Automate to see more triggers'</strong> option.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 080105.png" alt="Step 4 - Go to Power Automate" class="screenshot">
+            </div>
+        </div>
+
+        <!-- STEP 5 -->
+        <div id="step5">
+            <h3><span class="feature-tag">Step 5</span> Confirm Power Automate</h3>
+            <div class="card">
+                <div class="step-row">
+                    <div class="step-num">5</div>
+                    <div class="step-body">
+                        <strong>Click 'Go to Power Automate'</strong>
+                        A popup will appear asking to take you to Power Automate. Click on <strong>'Go to Power Automate'</strong>.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 080134.png" alt="Step 5 - Confirm Power Automate" class="screenshot">
+            </div>
+        </div>
+    </section>
+
+    <hr>
+
+    <!-- ══════════════════════════════════════════════════════
+         SECTION 3 — CONFIGURE THE TRIGGER (Steps 6–9)
+    ══════════════════════════════════════════════════════ -->
+    <section class="section" id="configure-trigger">
+        <h2>⚡ Configure the Trigger</h2>
+
+        <!-- STEP 6 -->
+        <div id="step6">
+            <h3><span class="feature-tag">Step 6</span> Search for Webhook</h3>
+            <div class="card">
+                <div class="step-row">
+                    <div class="step-num">6</div>
+                    <div class="step-body">
+                        <strong>Search for 'webhook'</strong>
+                        In the Power Automate <strong>'Untitled flow'</strong> screen, type <strong>'webhook'</strong> into the <strong>'Search connectors and triggers'</strong> bar.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 080250.png" alt="Step 6 - Search for Webhook" class="screenshot">
+            </div>
+        </div>
+
+        <!-- STEP 7 -->
+        <div id="step7">
+            <h3><span class="feature-tag">Step 7</span> Choose Teams Webhook Trigger</h3>
+            <div class="card">
+                <div class="step-row">
+                    <div class="step-num">7</div>
+                    <div class="step-body">
+                        <strong>Select the webhook trigger</strong>
+                        Under the <strong>Triggers</strong> tab, locate and select the <strong>'When a Teams webhook request is received'</strong> trigger.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 080324.png" alt="Step 7 - Choose Teams Webhook Trigger" class="screenshot">
+            </div>
+        </div>
+
+        <!-- STEP 8 -->
+        <div id="step8">
+            <h3><span class="feature-tag">Step 8</span> Configure Trigger URL</h3>
+            <div class="card">
+                <div class="step-row">
+                    <div class="step-num">8</div>
+                    <div class="step-body">
+                        <strong>Trigger added to your flow</strong>
+                        The trigger is added to your flow. Note that the <strong>'HTTP POST URL'</strong> field will be automatically generated and populated <em>after you save the flow</em>.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 080343.png" alt="Step 8 - Configure Trigger URL" class="screenshot">
+                <div class="info-box">ℹ Don't worry that the URL field is empty — it will be generated automatically when you save the flow in <a href="#step16">Step 16</a>.</div>
+            </div>
+        </div>
+
+        <!-- STEP 9 -->
+        <div id="step9">
+            <h3><span class="feature-tag">Step 9</span> Set Trigger Permissions</h3>
+            <div class="card accent">
+                <div class="step-row">
+                    <div class="step-num">9</div>
+                    <div class="step-body">
+                        <strong>Set 'Who can trigger the flow?' to 'Anyone'</strong>
+                        Click on the <strong>'Who can trigger the flow?'</strong> dropdown and select <strong>'Anyone'</strong>. This allows external services like BENTO to trigger it.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 080412.png" alt="Step 9 - Set Trigger Permissions" class="screenshot">
+                <div class="warning">⚠ <strong>Important:</strong> You must select <strong>'Anyone'</strong> for the trigger permission. If left as the default, BENTO will not be able to send webhook requests to this flow.</div>
+            </div>
+        </div>
+    </section>
+
+    <hr>
+
+    <!-- ══════════════════════════════════════════════════════
+         SECTION 4 — ADD THE ACTION (Steps 10–15)
+    ══════════════════════════════════════════════════════ -->
+    <section class="section" id="add-action">
+        <h2>📬 Add the Action</h2>
+
+        <!-- STEP 10 -->
+        <div id="step10">
+            <h3><span class="feature-tag">Step 10</span> Add a New Step</h3>
+            <div class="card">
+                <div class="step-row">
+                    <div class="step-num">10</div>
+                    <div class="step-body">
+                        <strong>Click '+ New step'</strong>
+                        Click on the <strong>'+ New step'</strong> button below your trigger to add an action.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 080443.png" alt="Step 10 - Add a New Step" class="screenshot">
+            </div>
+        </div>
+
+        <!-- STEP 11 -->
+        <div id="step11">
+            <h3><span class="feature-tag">Step 11</span> Search for Post Card Action</h3>
+            <div class="card">
+                <div class="step-row">
+                    <div class="step-num">11</div>
+                    <div class="step-body">
+                        <strong>Search for 'Post card'</strong>
+                        In the <strong>'Choose an operation'</strong> search box, search for <strong>'Post card'</strong> and select the <strong>'Post card in a chat or channel'</strong> action under Microsoft Teams.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 080534.png" alt="Step 11 - Search for Post Card Action" class="screenshot">
+            </div>
+        </div>
+
+        <!-- STEP 12 -->
+        <div id="step12">
+            <h3><span class="feature-tag">Step 12</span> Set 'Post as'</h3>
+            <div class="card">
+                <div class="step-row">
+                    <div class="step-num">12</div>
+                    <div class="step-body">
+                        <strong>Select 'Flow bot'</strong>
+                        In the newly added action, click the <strong>'Post as'</strong> dropdown and select <strong>'Flow bot'</strong>.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 080557.png" alt="Step 12 - Set Post as" class="screenshot">
+            </div>
+        </div>
+
+        <!-- STEP 13 -->
+        <div id="step13">
+            <h3><span class="feature-tag">Step 13</span> Set 'Post in'</h3>
+            <div class="card">
+                <div class="step-row">
+                    <div class="step-num">13</div>
+                    <div class="step-body">
+                        <strong>Select 'Chat with Flow bot'</strong>
+                        Next, click the <strong>'Post in'</strong> dropdown and select <strong>'Chat with Flow bot'</strong> (or channel, depending on your preference).
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 080620.png" alt="Step 13 - Set Post in" class="screenshot">
+                <div class="tip">💡 Choosing <strong>'Chat with Flow bot'</strong> sends notifications as a private chat. If you want the whole team to see them, select <strong>'Channel'</strong> instead and specify the target channel.</div>
+            </div>
+        </div>
+
+        <!-- STEP 14 -->
+        <div id="step14">
+            <h3><span class="feature-tag">Step 14</span> Configure Recipient and Card</h3>
+            <div class="card accent">
+                <div class="step-row">
+                    <div class="step-num">14</div>
+                    <div class="step-body">
+                        <strong>Set Recipient and Adaptive Card</strong>
+                        Enter the recipient's email or name in the <strong>'Recipient'</strong> field. Click inside the <strong>'Adaptive Card'</strong> field, select <strong>'Add dynamic content'</strong>, and choose <strong>'Attachments'</strong> from the webhook trigger.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 080715.png" alt="Step 14 - Configure Recipient and Card" class="screenshot">
+                <div class="info-box">ℹ The <strong>'Attachments'</strong> dynamic content comes from the webhook trigger. BENTO sends the Adaptive Card JSON as an attachment in the webhook payload.</div>
+            </div>
+        </div>
+
+        <!-- STEP 15 -->
+        <div id="step15">
+            <h3><span class="feature-tag">Step 15</span> Apply to Each Loop</h3>
+            <div class="card">
+                <div class="step-row">
+                    <div class="step-num">15</div>
+                    <div class="step-body">
+                        <strong>Automatic 'Apply to each' loop</strong>
+                        Power Automate will automatically wrap your action in an <strong>'Apply to each'</strong> loop because <strong>'Attachments'</strong> is an array. This is expected — do not remove it.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 080734.png" alt="Step 15 - Apply to Each Loop" class="screenshot">
+                <div class="tip">💡 The 'Apply to each' loop is automatically created by Power Automate. It ensures each attachment in the webhook payload is processed. This is normal behavior.</div>
+            </div>
+        </div>
+    </section>
+
+    <hr>
+
+    <!-- ══════════════════════════════════════════════════════
+         SECTION 5 — SAVE & GET URL (Steps 16–18)
+    ══════════════════════════════════════════════════════ -->
+    <section class="section" id="save-get-url">
+        <h2>💾 Save &amp; Get Webhook URL</h2>
+
+        <!-- STEP 16 -->
+        <div id="step16">
+            <h3><span class="feature-tag">Step 16</span> Save the Flow</h3>
+            <div class="card accent">
+                <div class="step-row">
+                    <div class="step-num">16</div>
+                    <div class="step-body">
+                        <strong>Click 'Save'</strong>
+                        Click the <strong>'Save'</strong> button at the top right of the screen to save your workflow. The <strong>HTTP POST URL</strong> will now be generated.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 080759.png" alt="Step 16 - Save the Flow" class="screenshot">
+                <div class="warning">⚠ <strong>Important:</strong> The webhook URL is only generated after saving. Make sure all steps are configured correctly before saving.</div>
+            </div>
+        </div>
+
+        <!-- STEP 17 -->
+        <div id="step17">
+            <h3><span class="feature-tag">Step 17</span> View Your Workflows</h3>
+            <div class="card">
+                <div class="step-row">
+                    <div class="step-num">17</div>
+                    <div class="step-body">
+                        <strong>Find your new workflow</strong>
+                        Go back to the Workflows app in Teams. Under <strong>'Your workflows'</strong>, you will see your newly created flow. Click on it.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 081030.png" alt="Step 17 - View Your Workflows" class="screenshot">
+            </div>
+        </div>
+
+        <!-- STEP 18 -->
+        <div id="step18">
+            <h3><span class="feature-tag">Step 18</span> Copy Webhook Link</h3>
+            <div class="card accent">
+                <div class="step-row">
+                    <div class="step-num">18</div>
+                    <div class="step-body">
+                        <strong>Copy the webhook URL</strong>
+                        On the flow's details page, click on the <strong>'Copy webhook link'</strong> button (highlighted in red). You will use this URL in BENTO to send notifications to this Teams workflow.
+                    </div>
+                </div>
+                <img src="Screenshot Webhook Tuto/Screenshot 2026-04-13 081051.png" alt="Step 18 - Copy Webhook Link" class="screenshot">
+                <div class="tip">💡 Paste this webhook URL into the BENTO settings (<code>settings.json</code> → <code>teams_webhook_url</code> field) to enable Teams notifications for compilation results.</div>
+            </div>
+        </div>
+    </section>
+
+    <hr>
+
+    <!-- ══════════════════════════════════════════════════════
+         SECTION 6 — USING IN BENTO
+    ══════════════════════════════════════════════════════ -->
+    <section class="section" id="using-in-bento">
+        <h2>🍱 Using the Webhook in BENTO</h2>
+
+        <div class="card">
+            <p>Once you have the webhook URL, configure it in BENTO:</p>
+            <br>
+            <div class="step-row">
+                <div class="step-num">1</div>
+                <div class="step-body"><strong>Open BENTO</strong> on your local PC</div>
+            </div>
+            <div class="step-row">
+                <div class="step-num">2</div>
+                <div class="step-body"><strong>Go to Settings</strong> — open <code>settings.json</code> or use the BENTO settings UI</div>
+            </div>
+            <div class="step-row">
+                <div class="step-num">3</div>
+                <div class="step-body"><strong>Paste the webhook URL</strong> into the <code>teams_webhook_url</code> field</div>
+            </div>
+            <div class="step-row">
+                <div class="step-num">4</div>
+                <div class="step-body"><strong>Save and restart BENTO</strong> — compilation notifications will now be sent to your Teams chat</div>
+            </div>
+            <br>
+            <div class="info-box">ℹ BENTO sends an Adaptive Card with compilation details including: JIRA ticket, tester hostname, environment, build status (success/failure), and timestamp.</div>
+        </div>
+    </section>
+
+    <hr>
+
+    <!-- ══════════════════════════════════════════════════════
+         SECTION 7 — TROUBLESHOOTING
+    ══════════════════════════════════════════════════════ -->
+    <section class="section" id="troubleshooting">
+        <h2>🔧 Troubleshooting</h2>
+        <p style="margin-bottom:18px;">Common issues and how to resolve them.</p>
+
+        <div id="ts-common">
+            <h3>❓ Common Issues</h3>
+
+            <div class="ts-entry">
+                <div class="ts-header">❌ Webhook URL not generated</div>
+                <div class="ts-body"><dl>
+                    <dt>Likely cause</dt>
+                    <dd>The flow was not saved, or there is an error in the flow configuration.</dd>
+                    <dt>How to fix</dt>
+                    <dd><ul>
+                        <li>Ensure all steps are properly configured (no red error indicators)</li>
+                        <li>Click <strong>Save</strong> again and wait for the URL to appear in the trigger step</li>
+                        <li>If the URL still doesn't appear, delete the flow and recreate it</li>
+                    </ul></dd>
+                </dl></div>
+            </div>
+
+            <div class="ts-entry">
+                <div class="ts-header">❌ BENTO notifications not arriving in Teams</div>
+                <div class="ts-body"><dl>
+                    <dt>Likely cause</dt>
+                    <dd>The webhook URL is incorrect, or the trigger permission is not set to 'Anyone'.</dd>
+                    <dt>How to fix</dt>
+                    <dd><ul>
+                        <li>Verify the webhook URL in <code>settings.json</code> matches the one from Power Automate</li>
+                        <li>Check that <strong>'Who can trigger the flow?'</strong> is set to <strong>'Anyone'</strong> (see <a href="#step9">Step 9</a>)</li>
+                        <li>Check the flow's <strong>Run history</strong> in Power Automate for error details</li>
+                    </ul></dd>
+                </dl></div>
+            </div>
+
+            <div class="ts-entry">
+                <div class="ts-header">❌ 'Workflows' app not found in Teams</div>
+                <div class="ts-body"><dl>
+                    <dt>Likely cause</dt>
+                    <dd>The Workflows app may not be enabled for your organization.</dd>
+                    <dt>How to fix</dt>
+                    <dd><ul>
+                        <li>Contact your IT administrator to enable the Workflows app</li>
+                        <li>Alternatively, go directly to <a href="https://make.powerautomate.com" target="_blank">make.powerautomate.com</a> to create the flow</li>
+                    </ul></dd>
+                </dl></div>
+            </div>
+
+            <div class="ts-entry">
+                <div class="ts-header">❌ 'Post card in a chat or channel' action not available</div>
+                <div class="ts-body"><dl>
+                    <dt>Likely cause</dt>
+                    <dd>The Microsoft Teams connector may not be available in your Power Automate environment.</dd>
+                    <dt>How to fix</dt>
+                    <dd><ul>
+                        <li>Ensure you are signed in with your organizational account</li>
+                        <li>Try searching for <strong>'Microsoft Teams'</strong> in the connectors list</li>
+                        <li>Contact your IT administrator if the connector is blocked</li>
+                    </ul></dd>
+                </dl></div>
+            </div>
+
+            <div class="ts-entry">
+                <div class="ts-header">❌ Flow runs but card is not delivered</div>
+                <div class="ts-body"><dl>
+                    <dt>Likely cause</dt>
+                    <dd>The recipient email may be incorrect, or the Adaptive Card JSON may be malformed.</dd>
+                    <dt>How to fix</dt>
+                    <dd><ul>
+                        <li>Check the <strong>Run history</strong> in Power Automate — click on the failed run to see error details</li>
+                        <li>Verify the recipient email address is correct</li>
+                        <li>Ensure the <strong>'Attachments'</strong> dynamic content is selected in the Adaptive Card field (see <a href="#step14">Step 14</a>)</li>
+                    </ul></dd>
+                </dl></div>
+            </div>
+        </div>
+    </section>
+
+    <hr>
+    <p style="text-align:center; color:#888; font-size:0.88em; padding-bottom:20px;">
+        BENTO v1.0 · Micron Technology · SSD Firmware Test Engineering
+    </p>
+
+</main>
+
+<!-- Back to top button -->
+<button id="back-to-top" title="Back to top">↑</button>
+
+<script>
+    // ── Active nav link highlighting ──
+    const sections = document.querySelectorAll('[id]');
+    const navLinks = document.querySelectorAll('#toc a');
+
+    function setActiveLink() {
+        let current = '';
+        sections.forEach(sec => {
+            const top = sec.getBoundingClientRect().top;
+            if (top <= 120) current = sec.id;
+        });
+        navLinks.forEach(link => {
+            link.classList.remove('active');
+            if (link.getAttribute('href') === '#' + current) {
+                link.classList.add('active');
+            }
+        });
+    }
+
+    // ── Back to top ──
+    const btn = document.getElementById('back-to-top');
+    window.addEventListener('scroll', () => {
+        setActiveLink();
+        btn.style.display = window.scrollY > 300 ? 'flex' : 'none';
+    }, { passive: true });
+    btn.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+
+    // ── Smooth scroll offset for fixed sidebar ──
+    document.querySelectorAll('#toc a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener('click', function(e) {
+            e.preventDefault();
+            const target = document.querySelector(this.getAttribute('href'));
+            if (target) {
+                const offset = 24;
+                const top = target.getBoundingClientRect().top + window.scrollY - offset;
+                window.scrollTo({ top, behavior: 'smooth' });
+            }
+        });
+    });
+</script>
+</body>
+</html>
