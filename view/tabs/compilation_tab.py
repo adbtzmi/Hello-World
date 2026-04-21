@@ -376,8 +376,8 @@ class CompilationTab(BaseTab):
 
         history_wrapper.rowconfigure(1, weight=1)
 
-        # Initial history load
-        self._refresh_history_from_disk()
+        # Initial history load — deferred 2 s so site/path vars initialise first
+        self.root.after(2000, self._refresh_history_from_disk)
 
         # ══════════════════════════════════════════════════════════════════
         # 5. Proceed to Checkout (C2: workflow connection)
@@ -545,6 +545,9 @@ class CompilationTab(BaseTab):
         if enabled:
             self._ff_status_var.set("Force fail enabled — generate cases to proceed")
             self._ff_status_lbl.config(foreground="#0066cc")
+            # Restore Compile button if cases were already generated before toggle
+            if self._ff_tree.get_children():
+                self._ff_compile_btn.config(state=tk.NORMAL)
         else:
             self._ff_status_var.set("Force fail disabled")
             self._ff_status_lbl.config(foreground="gray")
@@ -660,16 +663,18 @@ class CompilationTab(BaseTab):
 
     def _update_ff_diff_preview(self):
         """Update the diff preview with current force-fail cases."""
-        ctrl = getattr(self.context.controller, "force_fail_controller", None)
-        if ctrl is None:
-            return
-
         self._ff_diff_text.config(state=tk.NORMAL)
         self._ff_diff_text.delete("1.0", tk.END)
 
+        ctrl = getattr(self.context.controller, "force_fail_controller", None)
+        if ctrl is None:
+            self._ff_diff_text.insert(tk.END, "No cases generated yet.", "normal")
+            self._ff_diff_text.config(state=tk.DISABLED)
+            return
+
         display = ctrl.get_cases_display()
         if not display or display.startswith("No force-fail"):
-            self._ff_diff_text.insert(tk.END, display or "No cases generated.", "normal")
+            self._ff_diff_text.insert(tk.END, display or "No cases generated yet.", "normal")
             self._ff_diff_text.config(state=tk.DISABLED)
             return
 
@@ -803,6 +808,13 @@ class CompilationTab(BaseTab):
         if self._placeholder_active:
             return
         query = self._tester_search_var.get().lower().strip()
+
+        # Save currently selected hostnames so they survive the repopulate
+        selected_hostnames = {
+            self._tester_listbox.get(i).split(" (")[0].strip()
+            for i in self._tester_listbox.curselection()
+        }
+
         self._tester_listbox.delete(0, tk.END)
         ctrl = getattr(self.context.controller, "compile_controller", None)
         testers = ctrl.get_available_testers() if ctrl else []
@@ -810,6 +822,9 @@ class CompilationTab(BaseTab):
             label = f"{hostname} ({env})"
             if not query or query in hostname.lower() or query in env.lower():
                 self._tester_listbox.insert(tk.END, label)
+                # Restore selection for this hostname if it was selected before
+                if hostname in selected_hostnames:
+                    self._tester_listbox.selection_set(tk.END)
         self._on_tester_selected()
 
     def _on_tester_selected(self, event=None):
@@ -867,11 +882,13 @@ class CompilationTab(BaseTab):
         testers_to_remove = [self._tester_listbox.get(idx) for idx in selections]
 
         if len(testers_to_remove) == 1:
-            msg = f"Remove '{testers_to_remove[0]}' from the registry?"
+            confirmed = messagebox.askyesno(
+                "Remove Tester(s)",
+                f"Remove '{testers_to_remove[0]}' from the registry?")
         else:
-            msg = f"Remove {len(testers_to_remove)} testers from the registry?\n\n" + "\n".join(f"  • {t}" for t in testers_to_remove)
+            confirmed = self._confirm_remove_testers_dialog(testers_to_remove)
 
-        if messagebox.askyesno("Remove Tester(s)", msg):
+        if confirmed:
             # Load current registry to delete correctly
             registry_path = self.context.config.get("registry_path", r"P:\temp\BENTO\bento_testers.json")
             registry_data = {}
@@ -912,6 +929,44 @@ class CompilationTab(BaseTab):
 
             self._save_tester_registry(registry_data)
             self._refresh_testers()
+
+    def _confirm_remove_testers_dialog(self, testers: list) -> bool:
+        """Custom confirmation dialog with a scrollable tester list (item 13)."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Remove Tester(s)")
+        dialog.geometry("420x260")
+        dialog.resizable(False, True)
+        dialog.grab_set()
+        self._centre_dialog(dialog, 420, 260)
+
+        ttk.Label(
+            dialog,
+            text=f"Remove {len(testers)} tester(s) from the registry?",
+            font=("Segoe UI", 10, "bold"), wraplength=380,
+        ).pack(pady=(14, 4), padx=15)
+
+        list_frame = ttk.Frame(dialog)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=4)
+        lb = tk.Listbox(list_frame, height=6, font=("Segoe UI", 9), selectmode=tk.NONE)
+        sb = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=lb.yview)
+        lb.config(yscrollcommand=sb.set)
+        for t in testers:
+            lb.insert(tk.END, t)
+        lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        result = [False]
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=8)
+
+        def _yes():
+            result[0] = True
+            dialog.destroy()
+
+        ttk.Button(btn_frame, text="Yes, Remove", command=_yes).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+        dialog.wait_window()
+        return result[0]
 
     def _save_tester_registry(self, registry_data=None):
         """
@@ -1028,19 +1083,35 @@ class CompilationTab(BaseTab):
         """
         dialog = tk.Toplevel(self.root)
         dialog.title("Set Custom TGZ Labels")
-        h = 180 + len(targets) * 40
-        dialog.geometry(f"500x{h}")
+        max_h = min(self.root.winfo_screenheight() - 120, 600)
+        h = min(220 + len(targets) * 44, max_h)
+        dialog.geometry(f"520x{h}")
+        dialog.resizable(True, True)
         dialog.grab_set()
-        self._centre_dialog(dialog, 500, h)
+        self._centre_dialog(dialog, 520, h)
 
         ttk.Label(dialog, text="Set Custom TGZ Labels",
                   font=("Segoe UI", 12, "bold")).pack(pady=(15, 5))
         ttk.Label(dialog,
                   text="Enter a specific TGZ label for each tester (leave blank for no label):"
-                  ).pack(pady=(0, 10))
+                  ).pack(pady=(0, 6))
 
-        frame = ttk.Frame(dialog, padding=10)
-        frame.pack(fill=tk.BOTH, expand=True, padx=20)
+        # Scrollable container so 10+ testers don't overflow the screen
+        outer = ttk.Frame(dialog)
+        outer.pack(fill=tk.BOTH, expand=True, padx=20)
+        _canvas = tk.Canvas(outer, highlightthickness=0)
+        _sb = ttk.Scrollbar(outer, orient=tk.VERTICAL, command=_canvas.yview)
+        _canvas.configure(yscrollcommand=_sb.set)
+        _canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        _sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        frame = ttk.Frame(_canvas, padding=(0, 4))
+        _fw = _canvas.create_window((0, 0), window=frame, anchor="nw")
+
+        def _on_frame_cfg(event):
+            _canvas.configure(scrollregion=_canvas.bbox("all"))
+            _canvas.itemconfig(_fw, width=event.width)
+        frame.bind("<Configure>", _on_frame_cfg)
 
         label_vars = {}
         for i, (hostname, env) in enumerate(targets):
@@ -1051,7 +1122,7 @@ class CompilationTab(BaseTab):
             ttk.Entry(frame, textvariable=var, width=30).grid(row=i, column=1, pady=5, sticky=tk.W)
 
         btn_frame = ttk.Frame(dialog)
-        btn_frame.pack(pady=15)
+        btn_frame.pack(pady=10)
 
         def on_confirm():
             labels = {h: label_vars[h].get().strip() for h in label_vars}
@@ -1213,8 +1284,8 @@ class CompilationTab(BaseTab):
         finally:
             self.builds_text.config(state="disabled")
 
-        # A8: Update last-refreshed timestamp
-        now_str = datetime.datetime.now().strftime("%H:%M:%S")
+        # A8: Update last-refreshed timestamp (local time)
+        now_str = datetime.datetime.now().strftime("%H:%M:%S (local)")
         self._health_last_refresh_var.set(f"Auto-refresh active · Last updated: {now_str}")
 
         # Auto-refresh loop — scheduled in a try/finally so any earlier
@@ -1552,6 +1623,9 @@ class AddTesterDialog:
             "Watcher running (Task Scheduler configured on tester)",
             "Shared folder P:\\temp\\BENTO accessible from tester"
         ]
+        # Update toggle label with item count so users know what to expect
+        checklist_toggle.config(
+            text=f"⚠ Show Preflight Checklist ({len(checklist_items)} items)")
         for text in checklist_items:
             v = tk.BooleanVar(value=False)
             self.check_vars.append(v)
